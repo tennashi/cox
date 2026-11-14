@@ -17,7 +17,7 @@ use gpui::{
 
 use crate::chat::region;
 use crate::stage::pointer::paint_agent;
-use crate::ui::theme::RAISED;
+use coxd::theme::RAISED;
 
 /// How many logical pixels one line of a wheel scroll is.
 pub(super) const LINE_HEIGHT: f32 = 40.;

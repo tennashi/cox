@@ -7,8 +7,8 @@ use serde_json::Value;
 
 use super::chip;
 use super::words::Words;
-use crate::ui::theme::{FAILED, FAINT};
 use crate::vim::hints::Hinted as _;
+use coxd::theme::{FAILED, FAINT};
 
 /// Whether the keys work as in Vim, to change.
 pub struct KeysSection {

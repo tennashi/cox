@@ -17,8 +17,8 @@ use gpui::{
 use crate::stage::heading::{INSET, TEXT_INSET, body, card, heading, note, parted};
 use crate::stage::tab::Shows;
 use crate::ui::button::{Kind, button};
-use crate::ui::theme::{ASKING, DIM, FAILED, FAINT, FOREGROUND};
 use crate::vim::hints::Hinted as _;
+use coxd::theme::{ASKING, DIM, FAILED, FAINT, FOREGROUND};
 
 pub(crate) const KEY_CONTEXT: &str = "Windows";
 

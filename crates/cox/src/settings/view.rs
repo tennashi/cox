@@ -45,18 +45,18 @@ use self::search::SearchSection;
 use self::servers::ServersSection;
 use self::translation::TranslationSection;
 use self::words::Words;
-use crate::home::home;
 use crate::ui::button::{INPUT_HEIGHT, Kind, button};
 use crate::ui::icons::{Icon, icon};
 use crate::ui::input::{Blurred, LineInput, Submitted};
-use crate::ui::paths::shortened;
-use crate::ui::theme::{
-    ACCENT, ACCENT_GROUND, BORDER, BUTTON, BUTTON_HOVER, DIM, FAILED, FAINT, FOREGROUND, HOVER,
-    LINK,
-};
 use crate::ui::{Copy, card};
 use crate::vim::Move;
 use crate::vim::hints::Hinted as _;
+use coxd::home::home;
+use coxd::paths::shortened;
+use coxd::theme::{
+    ACCENT, ACCENT_GROUND, BORDER, BUTTON, BUTTON_HOVER, DIM, FAILED, FAINT, FOREGROUND, HOVER,
+    LINK,
+};
 
 actions!(
     cox,

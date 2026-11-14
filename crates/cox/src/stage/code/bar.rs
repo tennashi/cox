@@ -5,9 +5,9 @@ use gpui::{Context, IntoElement, div, prelude::*, px, rgb};
 use super::Code;
 use crate::stage::tree;
 use crate::ui::ellipsis::ellipsis;
-use crate::ui::paths::shortened;
-use crate::ui::theme::{BORDER, BUTTON_HOVER, DIM, DISABLED, FAILED, FOREGROUND};
 use crate::vim::hints::Hinted as _;
+use coxd::paths::shortened;
+use coxd::theme::{BORDER, BUTTON_HOVER, DIM, DISABLED, FAILED, FOREGROUND};
 
 impl Code {
     /// The bar above the code: the button that shows the project's files

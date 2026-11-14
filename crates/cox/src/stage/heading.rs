@@ -7,7 +7,7 @@
 use gpui::{Div, FontWeight, IntoElement, SharedString, div, prelude::*, px, rgb};
 
 use crate::ui::ellipsis::ellipsis;
-use crate::ui::theme::{BORDER, CODE_FONT, DIM, FAINT, UI_FONT};
+use coxd::theme::{BORDER, CODE_FONT, DIM, FAINT, UI_FONT};
 
 /// How far the cards are from the tab's edges; the heading's text, and
 /// what a tab says outside its cards, are a little further in, in line

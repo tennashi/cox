@@ -30,13 +30,13 @@ pub mod cursor;
 use crate::ui::diagram;
 use crate::ui::markdown::{self, Block, Kind};
 use crate::ui::selection::{Piece, Selection, Spot, TextId};
-use crate::ui::theme::{
-    ACCENT, BORDER, BORDER_STRONG, BUTTON, BUTTON_HOVER, CODE, CODE_FONT, DIM, LINK, RAISED,
-    SELECTION,
-};
 use crate::vim::hints::Hinted as _;
 use crate::vim::keymap::Selects;
 use crate::vim::search::{self, Direction};
+use coxd::theme::{
+    ACCENT, BORDER, BORDER_STRONG, BUTTON, BUTTON_HOVER, CODE, CODE_FONT, DIM, LINK, RAISED,
+    SELECTION,
+};
 
 use self::cursor::{Cursor, Laid, Step};
 

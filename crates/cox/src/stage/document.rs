@@ -22,16 +22,16 @@ use crate::chat::region::{self, Described};
 use crate::stage::follow::{self, Follows};
 use crate::stage::tab::{Shows, ShowsFile, TabContent};
 use crate::stage::tree;
-use crate::storage::Stamp;
 use crate::ui::ellipsis::ellipsis;
 use crate::ui::markdown::{self, Block};
-use crate::ui::paths::shortened;
 use crate::ui::selected::{self, Selected};
 use crate::ui::text::Reading;
-use crate::ui::theme::{BORDER, DIM, FAILED};
 use crate::ui::{Copy, LinkClicked};
 use crate::vim::search::{Direction, Find};
 use crate::vim::{Move, NextEntry, PreviousEntry};
+use coxd::paths::shortened;
+use coxd::storage::Stamp;
+use coxd::theme::{BORDER, DIM, FAILED};
 
 pub(crate) const KEY_CONTEXT: &str = "Document";
 

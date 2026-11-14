@@ -2306,7 +2306,7 @@ mod tests {
 
     use super::*;
     use crate::agent::mcp::{OpenedChat, Waited};
-    use crate::testing::{TempDir, run_git};
+    use coxd::testing::{TempDir, run_git};
 
     /// What the agent gets from calling the tool `name` with `arguments`
     /// in `cwd`, for a call answered right away.

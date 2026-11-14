@@ -55,7 +55,7 @@ pub fn capture(bounds: Bounds<Pixels>, _scale: f32) -> Result<Vec<u8>, String> {
         f32::from(bounds.size.width),
         f32::from(bounds.size.height)
     );
-    let file = crate::scratch::folder()
+    let file = coxd::scratch::folder()
         .map_err(|error| format!("cannot make the folder of this run: {error}"))?
         .join("screenshot.png");
     let ran = std::process::Command::new("screencapture")

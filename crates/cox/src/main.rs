@@ -8,7 +8,7 @@
 //! Each chat has a stage of its own, showing `<url>` first, which its agent
 //! can read and drive too. The chats are kept as they go, to read after Cox
 //! starts again, and to go on with, where this Cox keeps what lasts, or in
-//! the `--data` directory when asked (see [`cox::storage`]).
+//! the `--data` directory when asked (see [`coxd::storage`]).
 //!
 //! On macOS, run it from inside the bundle `cargo xtask bundle` makes, as
 //! `Cox.app/Contents/MacOS/Cox`: that is where CEF and its helpers are.
@@ -35,27 +35,27 @@ fn main() -> ExitCode {
     match Mode::parse(std::env::args().skip(1)) {
         Mode::App(settings) => {
             // First, while Cox has no other thread.
-            let environment = cox::login::take_in();
+            let environment = coxd::login::take_in();
             if let Some(data) = &settings.data {
-                cox::storage::keep_in(data);
+                coxd::storage::keep_in(data);
             }
             // On Linux, CEF runs `cox` again for its helper processes,
             // which end inside `app::run`, and keep no file of their own.
             let helper = std::env::args().any(|arg| arg.starts_with("--type="));
             let logs = (!helper)
-                .then(|| cox::storage::path(cox::storage::Kept::Logs))
+                .then(|| coxd::storage::path(coxd::storage::Kept::Logs))
                 .flatten();
             cox::logs::init(logs.as_deref());
             if !helper {
-                cox::scratch::sweep();
+                coxd::scratch::sweep();
             }
             match environment {
-                cox::login::Taken::NotNeeded => {}
-                cox::login::Taken::From(shell, count) => tracing::info!(
+                coxd::login::Taken::NotNeeded => {}
+                coxd::login::Taken::From(shell, count) => tracing::info!(
                     "took in {count} variables of the environment of {}",
                     shell.display()
                 ),
-                cox::login::Taken::Failed(why) => tracing::warn!(
+                coxd::login::Taken::Failed(why) => tracing::warn!(
                     "the agents get launchd's environment, not the login shell's: {why}"
                 ),
             }
@@ -74,7 +74,7 @@ fn main() -> ExitCode {
         }
         Mode::Inspect { data, args } => {
             if let Some(data) = &data {
-                cox::storage::keep_in(data);
+                coxd::storage::keep_in(data);
             }
             cox::logs::init(None);
             let Some(socket) = cox::inspect::socket() else {
@@ -91,7 +91,7 @@ fn main() -> ExitCode {
         }
         Mode::PhoneLink { data } => {
             if let Some(data) = &data {
-                cox::storage::keep_in(data);
+                coxd::storage::keep_in(data);
             }
             match cox::daemon::phone::link() {
                 Ok(link) => {

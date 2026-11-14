@@ -21,7 +21,7 @@ use gpui::{App, AppContext as _, Context, Entity, Global, Task};
 
 use crate::agents::download;
 use crate::settings::DIRECTORIES;
-use crate::storage::Kept;
+use coxd::storage::Kept;
 
 /// What starts a server in a project's folder, and answers it once it is
 /// ready.
@@ -109,7 +109,7 @@ impl Servers {
     /// project's directories gets one of its own.
     pub fn of(&self, cwd: &Path, path: &Path, cx: &mut App) -> Option<Entity<LanguageServer>> {
         let language = languages::id_of(path)?;
-        let user = crate::storage::path(Kept::Servers);
+        let user = coxd::storage::path(Kept::Servers);
         let (known, left_out) = lsp::Servers::of_project(user.as_deref(), cwd);
         for why in left_out {
             tracing::warn!("{why}");
@@ -305,7 +305,7 @@ mod tests {
     use std::fs;
 
     use super::*;
-    use crate::testing::TempDir;
+    use coxd::testing::TempDir;
 
     #[test]
     fn a_server_works_in_the_directory_of_the_code_it_reads() {

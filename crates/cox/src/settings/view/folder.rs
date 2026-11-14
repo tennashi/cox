@@ -13,13 +13,13 @@ use gpui::{
 use serde_json::Value;
 
 use super::words::Words;
-use crate::home::home;
 use crate::ui::button::{INPUT_HEIGHT, Kind, button};
 use crate::ui::icons::{Icon, icon};
 use crate::ui::input::{Blurred, LineInput, Submitted};
-use crate::ui::paths::shortened;
-use crate::ui::theme::{ACCENT, BORDER, DIM, FAILED, FAINT, FOREGROUND};
 use crate::vim::hints::Hinted as _;
+use coxd::home::home;
+use coxd::paths::shortened;
+use coxd::theme::{ACCENT, BORDER, DIM, FAILED, FAINT, FOREGROUND};
 
 /// A folder of the settings, by its key in `settings.json`.
 pub struct FolderField {

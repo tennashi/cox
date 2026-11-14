@@ -638,7 +638,7 @@ mod tests {
     use cox_editor::lsp::Position;
 
     use super::*;
-    use crate::testing::TempDir;
+    use coxd::testing::TempDir;
 
     #[test]
     fn tells_a_symbol_named_at_its_place() {

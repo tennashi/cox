@@ -30,8 +30,8 @@ use crate::stage::mirror::{Display, Mirrored, Press, Screen, Touched, pass_on, s
 use crate::stage::pointer;
 use crate::stage::tab::Shows;
 use crate::ui::button::{Kind, button};
-use crate::ui::theme::{BORDER, DIM, FAILED, FOREGROUND, RAISED};
 use crate::vim::hints::Hinted as _;
+use coxd::theme::{BORDER, DIM, FAILED, FOREGROUND, RAISED};
 
 pub(crate) const KEY_CONTEXT: &str = "Android";
 

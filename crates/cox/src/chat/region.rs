@@ -19,7 +19,7 @@ use gpui::{
     App, Bounds, IntoElement, KeyBinding, Pixels, Styled, Window, actions, canvas, point, px, size,
 };
 
-use crate::storage::{self, Kept};
+use coxd::storage::{self, Kept};
 
 actions!(
     cox,

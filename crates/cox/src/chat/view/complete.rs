@@ -27,8 +27,8 @@ use super::ChatView;
 use crate::chat::mention;
 use crate::ui::ellipsis::ellipsis;
 use crate::ui::input::LineInput;
-use crate::ui::theme::{BORDER_STRONG, CODE_FONT, DIM, FAINT, FOREGROUND, RAISED, SELECTED};
 use crate::vim::hints::Hinted as _;
+use coxd::theme::{BORDER_STRONG, CODE_FONT, DIM, FAINT, FOREGROUND, RAISED, SELECTED};
 
 /// How wide the tip of a command grows, before what the command does is
 /// cut short.

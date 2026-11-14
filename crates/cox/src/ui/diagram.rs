@@ -8,7 +8,7 @@ pub mod picture;
 
 use mermaid_rs_renderer::{RenderOptions, Theme};
 
-use super::theme::{
+use coxd::theme::{
     BORDER_STRONG, BUTTON, CHAT_COLORS, DIM, FAINT, FOREGROUND, GROUND, HOVER, RAISED, SELECTED,
     SURFACE,
 };

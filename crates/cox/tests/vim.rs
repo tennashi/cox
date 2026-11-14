@@ -979,7 +979,7 @@ fn choose_on_the_settings(
 }
 
 fn kept_vim() -> Option<serde_json::Value> {
-    let file = cox::storage::path(cox::storage::Kept::Settings).unwrap();
+    let file = coxd::storage::path(coxd::storage::Kept::Settings).unwrap();
     let text = std::fs::read_to_string(file).unwrap_or_default();
     serde_json::from_str::<serde_json::Value>(&text)
         .ok()

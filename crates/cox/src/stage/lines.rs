@@ -128,7 +128,7 @@ fn stretches(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::testing::TempDir;
+    use coxd::testing::TempDir;
 
     /// The text of a line told, its stretches joined.
     fn text_of(line: &serde_json::Value) -> String {

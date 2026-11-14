@@ -55,15 +55,15 @@ use crate::stage::code::syntax_style;
 use crate::stage::heading::{CARD_RADIUS, INSET, heading};
 use crate::stage::tab::Shows;
 use crate::ui::ellipsis::ellipsis;
-use crate::ui::paths::shortened;
-use crate::ui::theme::{
+use crate::vim::hints::Hinted as _;
+use crate::vim::keymap::Motion;
+use crate::vim::{Move, NextStretch, Open, PreviousStretch};
+use coxd::paths::shortened;
+use coxd::theme::{
     ACCENT, ADDED_GROUND, ADDED_WORD, ASKING, BORDER, CODE_FONT, DIM, DISABLED, FAILED,
     FAILED_MARK, FAINT, FOREGROUND, HOVER, LINK, RAISED, REMOVED_GROUND, REMOVED_WORD, SELECTED,
     UI_FONT,
 };
-use crate::vim::hints::Hinted as _;
-use crate::vim::keymap::Motion;
-use crate::vim::{Move, NextStretch, Open, PreviousStretch};
 
 pub(crate) const KEY_CONTEXT: &str = "Changes";
 

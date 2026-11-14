@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use gpui::{Context, Task};
 
-use crate::storage::Stamp;
+use coxd::storage::Stamp;
 
 /// How often a tab looks whether its file changed.
 const LOOK_EVERY: Duration = Duration::from_millis(500);

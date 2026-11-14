@@ -13,7 +13,7 @@ use super::wire::FromDaemon;
 use super::{Daemon, working};
 use crate::chat::conversation::{Entry, Proposed, State};
 use crate::chat::sketch::{self, Sketch};
-use crate::storage;
+use coxd::storage;
 
 impl Daemon {
     /// Renames the project kept as `project` `name`, and its folder with
@@ -743,7 +743,7 @@ impl Daemon {
         }
         let folder = self.projects[index].folder.clone();
         if folder.exists()
-            && let Err(why) = crate::trash::put(&folder)
+            && let Err(why) = coxd::trash::put(&folder)
         {
             // The trash can fail after it took the folder, as for a name
             // it was given beside it; the folder gone is what counts.

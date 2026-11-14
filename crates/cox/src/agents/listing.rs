@@ -117,7 +117,7 @@ impl Listing {
 
     fn keep_in(&self, file: &Path) -> anyhow::Result<()> {
         let listed: Vec<Value> = self.agents.iter().cloned().map(Value::Object).collect();
-        crate::storage::write_json(file, &listed)
+        coxd::storage::write_json(file, &listed)
             .with_context(|| format!("writing {}", file.display()))
     }
 
@@ -130,14 +130,13 @@ impl Listing {
 
 /// Where `agents.json` is.
 fn file() -> anyhow::Result<PathBuf> {
-    crate::storage::path(crate::storage::Kept::Agents)
-        .context("there is no place to keep the agents")
+    coxd::storage::path(coxd::storage::Kept::Agents).context("there is no place to keep the agents")
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::testing::TempDir;
+    use coxd::testing::TempDir;
 
     fn words(words: &[&str]) -> Vec<String> {
         words.iter().map(|&word| word.to_owned()).collect()

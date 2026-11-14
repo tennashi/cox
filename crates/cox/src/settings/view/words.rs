@@ -18,8 +18,8 @@ use gpui::{
 use crate::chat::hand::AddToChat;
 use crate::ui::Copy;
 use crate::ui::text::{Reading, Writer};
-use crate::ui::theme::{DIM, FAINT};
 use crate::ui::translation::Translate;
+use coxd::theme::{DIM, FAINT};
 
 /// The words of the whole screen, which the screen and each of its
 /// sections share.

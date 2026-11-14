@@ -30,8 +30,8 @@ use crate::logs::flow::{self, Lane, Step};
 use crate::stage::heading::{INSET, body, card, heading, note};
 use crate::stage::tab::Shows;
 use crate::ui::markdown;
-use crate::ui::theme::{ACCENT, BORDER, CODE, DIM, FAILED, FAINT, FOREGROUND, HOVER, LINK, RAISED};
 use crate::vim::hints::Hinted as _;
+use coxd::theme::{ACCENT, BORDER, CODE, DIM, FAILED, FAINT, FOREGROUND, HOVER, LINK, RAISED};
 
 pub(crate) const KEY_CONTEXT: &str = "Flow";
 

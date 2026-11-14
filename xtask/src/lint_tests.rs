@@ -21,7 +21,7 @@ const SLEEP_HOMES: &[&str] = &[
 /// one.
 const TEMP_HOMES: &[&str] = &[
     "xtask/src/lint_tests.rs",
-    "crates/cox/src/testing.rs",
+    "crates/coxd/src/testing.rs",
     "crates/cox/tests/scratch/mod.rs",
     "crates/cox-android/src/scratch.rs",
     "crates/cox-editor/src/scratch.rs",

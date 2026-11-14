@@ -27,12 +27,12 @@ use crate::settings::window::AppAgents;
 use crate::ui::button::{INPUT_HEIGHT, Kind, button};
 use crate::ui::icons::{Icon, icon};
 use crate::ui::input::{Blurred, LineInput, Submitted};
-use crate::ui::theme::{
+use crate::ui::tip;
+use crate::vim::hints::Hinted as _;
+use coxd::theme::{
     ACCENT, ASKING, BORDER, BORDER_STRONG, DIM, DISABLED, FAILED, FAINT, FOREGROUND, HOVER, LINK,
     RAISED,
 };
-use crate::ui::tip;
-use crate::vim::hints::Hinted as _;
 
 /// The agents `agents.json` lists, as rows to change.
 pub struct AgentsSection {
@@ -321,7 +321,7 @@ impl AgentsSection {
             Ok(_) => return self.tell(key, "Give the program the agent runs.", FAILED, cx),
             Err(why) => return self.tell(key, why, FAILED, cx),
         };
-        let cwd = match crate::scratch::folder().map(|folder| folder.join("agent-test")) {
+        let cwd = match coxd::scratch::folder().map(|folder| folder.join("agent-test")) {
             Ok(cwd) => cwd,
             Err(error) => return self.tell(key, error.to_string(), FAILED, cx),
         };

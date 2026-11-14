@@ -181,7 +181,7 @@ fn run(folder: &Path, args: &[impl AsRef<OsStr>]) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::testing::{TempDir, run_git};
+    use coxd::testing::{TempDir, run_git};
 
     #[test]
     fn a_repository_is_named_as_git_clone_names_its_folder() {

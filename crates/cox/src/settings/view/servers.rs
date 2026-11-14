@@ -25,9 +25,9 @@ use crate::stage::servers::listing::{self, Listing, Named};
 use crate::ui::button::{INPUT_HEIGHT, Kind, button};
 use crate::ui::icons::{Icon, icon};
 use crate::ui::input::{Blurred, LineInput, Submitted};
-use crate::ui::theme::{ACCENT, ASKING, BORDER, DIM, FAILED, FAINT, FOREGROUND, HOVER, LINK};
 use crate::ui::tip;
 use crate::vim::hints::Hinted as _;
+use coxd::theme::{ACCENT, ASKING, BORDER, DIM, FAILED, FAINT, FOREGROUND, HOVER, LINK};
 
 /// The language servers Cox knows, as rows to change.
 pub struct ServersSection {

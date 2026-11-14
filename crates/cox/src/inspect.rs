@@ -8,7 +8,7 @@
 //! the screen or not.
 //!
 //! The agent asks on a Unix socket, `run/inspect.sock` where this Cox keeps
-//! what lasts (see [`crate::storage`]), which Cox opens as its window
+//! what lasts (see [`coxd::storage`]), which Cox opens as its window
 //! does, and speaks MCP on, as the server of each chat's tools does (see
 //! [`crate::agent::mcp`]). So `cox --mcp <socket>` reaches it as an MCP
 //! server too, for an agent set up with one. And `cox --inspect` is a
@@ -99,7 +99,7 @@ pub fn start(
     cef: cox_browser::Cef,
     cx: &mut App,
 ) {
-    let Some(socket) = crate::storage::path(crate::storage::Kept::Inspect) else {
+    let Some(socket) = coxd::storage::path(coxd::storage::Kept::Inspect) else {
         tracing::error!("Cox cannot be asked how it stands: it has no place for the socket");
         return;
     };
@@ -537,7 +537,7 @@ fn tools() -> Value {
 /// Where the socket is, where this Cox keeps what lasts.
 #[must_use]
 pub fn socket() -> Option<PathBuf> {
-    crate::storage::path(crate::storage::Kept::Inspect)
+    coxd::storage::path(coxd::storage::Kept::Inspect)
 }
 
 #[cfg(test)]

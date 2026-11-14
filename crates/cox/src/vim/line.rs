@@ -22,7 +22,7 @@ use super::search::{Direction, Find, Search};
 use super::{Leave, Mode, Status};
 use crate::ui::input::{Blurred, LineInput};
 use crate::ui::menu;
-use crate::ui::theme::{
+use coxd::theme::{
     ACCENT, ASKING, BORDER, BORDER_STRONG, FAILED, FAINT, FOREGROUND, GAP, LINK, SELECTED, SURFACE,
 };
 

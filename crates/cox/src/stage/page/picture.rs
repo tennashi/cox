@@ -19,8 +19,8 @@ use gpui::{
 use super::Page;
 use super::keys::modifiers;
 use crate::stage::pointer::paint_agent;
-use crate::ui::theme::{CARD_INNER_RADIUS, RAISED};
 use cox_browser::{Cursor, Frame, MouseButton};
+use coxd::theme::{CARD_INNER_RADIUS, RAISED};
 
 /// How many logical pixels one line of a wheel scroll moves the page.
 const LINE_HEIGHT: f32 = 40.;

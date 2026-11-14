@@ -10,8 +10,8 @@ use gpui::{
     prelude::*, px, quad, rgb, size, white,
 };
 
-use crate::ui::theme::{ACCENT, GROUND};
 use cox_browser::pointer::{AgentPointer, Look, Rect, Spot};
+use coxd::theme::{ACCENT, GROUND};
 
 /// How `pointer` looks now, with what renders `T` again when that
 /// changes on its own: the paint asks for the next frame while it moves,

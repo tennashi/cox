@@ -21,9 +21,9 @@ use gpui::{
 use crate::stage::heading::{INSET, body, card, heading, note, parted};
 use crate::stage::tab::Shows;
 use crate::ui::button::{self, Kind};
-use crate::ui::paths::shortened;
-use crate::ui::theme::{ACCENT, ASKING, DIM, FAILED, FAINT, FOREGROUND};
 use crate::vim::hints::Hinted as _;
+use coxd::paths::shortened;
+use coxd::theme::{ACCENT, ASKING, DIM, FAILED, FAINT, FOREGROUND};
 
 pub(crate) const KEY_CONTEXT: &str = "Devices";
 

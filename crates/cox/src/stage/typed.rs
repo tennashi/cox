@@ -8,8 +8,8 @@
 use std::path::{Path, PathBuf};
 
 use super::page::address::Address;
-use crate::home::expanded;
 use crate::settings::SearchEngine;
+use coxd::home::expanded;
 
 /// What a line typed in the menu opens.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -86,7 +86,7 @@ pub(super) fn typed(line: &str, cwd: &Path, unmatched: Unmatched) -> Option<Type
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::testing::TempDir;
+    use coxd::testing::TempDir;
 
     fn url(url: &str) -> Typed {
         Typed::Web(Address::Url(url.to_owned()))

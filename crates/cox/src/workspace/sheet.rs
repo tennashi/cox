@@ -7,7 +7,7 @@ use gpui::{
 
 use super::{Chat, Workspace};
 use crate::chat::region::{self, CancelRegion};
-use crate::ui::theme::{ACCENT, BORDER_STRONG, FAINT, RAISED};
+use coxd::theme::{ACCENT, BORDER_STRONG, FAINT, RAISED};
 
 /// The sheet over the window the human drags a region on: where the drag
 /// started, if it has, and where the mouse is.

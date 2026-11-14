@@ -23,9 +23,9 @@ use crate::daemon::phone::relay::on_the_mac;
 use crate::settings::SearchEngine;
 use crate::ui::ellipsis::ellipsis;
 use crate::ui::input::{self, LineInput, Submitted};
-use crate::ui::theme::{BORDER_STRONG, DIM, FAINT, FOREGROUND, RAISED, SELECTED};
 use crate::vim::hints::Hinted as _;
 use crate::vim::{self, Leave, Region};
+use coxd::theme::{BORDER_STRONG, DIM, FAINT, FOREGROUND, RAISED, SELECTED};
 
 actions!(address, [Revert, Next, Previous]);
 

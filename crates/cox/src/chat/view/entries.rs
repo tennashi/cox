@@ -29,13 +29,13 @@ use crate::chat::conversation::{
 use crate::chat::view::ChatView;
 use crate::ui::ellipsis::ellipsis;
 use crate::ui::text::Writer;
-use crate::ui::theme::{
+use crate::vim::hints::Hinted as _;
+use coxd::theme::{
     ACCENT, ACCENT_GROUND, ADDED_GROUND, ASKING, ASKING_BUTTON, ASKING_EDGE, ASKING_GROUND, BORDER,
     BORDER_STRONG, BUTTON, BUTTON_HOVER, CODE_FONT, DIM, DISABLED, FAILED, FAILED_GROUND,
     FAILED_MARK, FAINT, FOREGROUND, GROUND, HOVER, LINK, OFFERING_BUTTON, OFFERING_EDGE,
     OFFERING_GROUND, RAISED, REMOVED_GROUND, SURFACE, chat_color,
 };
-use crate::vim::hints::Hinted as _;
 
 /// How tall a picture shown in the conversation grows.
 const MEDIA_HEIGHT: f32 = 360.;

@@ -12,7 +12,7 @@ use cox_editor::language::{Highlight, Language};
 use cox_editor::line::LINE_LENGTH;
 use cox_editor::syntax::Syntax;
 
-use crate::storage::Stamp;
+use coxd::storage::Stamp;
 
 /// The stretches of a line, each as bytes of it with what it is, in order.
 pub(super) type Spans = Vec<(Range<usize>, Highlight)>;

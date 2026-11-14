@@ -46,11 +46,11 @@ use self::picture::Picture;
 use crate::chat::region::{self, Described};
 use crate::stage::pointer;
 use crate::stage::tab::Shows;
-use crate::ui::theme::{BORDER, BUTTON, DISABLED};
 use crate::vim::hints::Hinted as _;
 use cox_browser::pointer::{AgentPointer, Look};
 use cox_browser::relay::AgentInput;
 use cox_browser::{Browser, Caret, Event, Navigation, TargetId};
+use coxd::theme::{BORDER, BUTTON, DISABLED};
 
 pub(crate) const KEY_CONTEXT: &str = "Page";
 

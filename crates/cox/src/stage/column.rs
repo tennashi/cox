@@ -18,9 +18,9 @@ use super::tab::{Tab, TabContent};
 use super::{Stage, TITLE_LENGTH};
 use crate::ui::ellipsis::ellipsis;
 use crate::ui::icons::{Icon, icon};
-use crate::ui::theme::{BORDER, BUTTON_HOVER, DIM, FAINT, FOREGROUND, HOVER, SELECTED, chat_color};
 use crate::ui::tip;
 use crate::vim::hints::Hinted as _;
+use coxd::theme::{BORDER, BUTTON_HOVER, DIM, FAINT, FOREGROUND, HOVER, SELECTED, chat_color};
 
 /// How wide the column is, unfolded and folded.
 const WIDTH: f32 = 200.;

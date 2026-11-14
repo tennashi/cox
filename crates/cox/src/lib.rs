@@ -40,17 +40,13 @@
 //!   looks.
 //! - [`terminal`] is a program on a pseudoterminal, as a tab of the
 //!   stage shows it, or as coxd runs it with none.
-//! - [`process`] is what Cox does as it starts a program, the agent's or
-//!   a terminal's.
-//! - [`storage`] says where this Cox keeps what lasts across its runs,
-//!   and [`scratch`] what it keeps only while it runs.
-//! - [`login`] takes in the login shell's environment, for a Cox the
-//!   system opened, as from the Finder.
 //! - [`logs`] is what Cox says of itself as it runs.
 //!
-//! Below them all is [`cox_browser`]: CEF, which renders the stages'
-//! pages, and what keeps the agent to its chat's pages. It is a crate of
-//! its own, with no GPUI in it.
+//! Below them all are [`coxd`], what runs the chats apart from the
+//! window, with what the two share: where Cox keeps what lasts, how it
+//! starts programs, and how it looks; and [`cox_browser`]: CEF, which
+//! renders the stages' pages, and what keeps the agent to its chat's
+//! pages. Each is a crate of its own, with no GPUI in it.
 
 pub mod agent;
 pub mod agents;
@@ -58,26 +54,18 @@ pub mod app;
 pub mod busy;
 pub mod chat;
 pub mod daemon;
-pub mod home;
 pub mod inspect;
-pub mod login;
 pub mod logs;
 pub mod media;
 pub mod notices;
-pub mod process;
 pub mod project_icon;
 pub mod raw;
 pub mod repositories;
 pub mod schedule;
-pub mod scratch;
 pub mod settings;
 pub mod stage;
-pub mod storage;
 pub mod terminal;
-#[cfg(test)]
-mod testing;
 pub mod translate;
-pub mod trash;
 pub mod trigger;
 pub mod ui;
 pub mod vim;

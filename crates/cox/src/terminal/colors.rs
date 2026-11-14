@@ -6,7 +6,7 @@
 use alacritty_terminal::term::color::Colors;
 use alacritty_terminal::vte::ansi::{Color, NamedColor, Rgb};
 
-use crate::ui::theme::SURFACE;
+use coxd::theme::SURFACE;
 
 /// Brighter than the window's, as a terminal's text is.
 pub(crate) const FOREGROUND: u32 = 0xe0_e0e0;

@@ -4,7 +4,7 @@
 //! socket is taken away.
 //!
 //! A window reaches it on a Unix socket, `run/coxd.sock` in Cox's data
-//! folder (see [`crate::storage`]), one message a line, each a JSON
+//! folder (see [`coxd::storage`]), one message a line, each a JSON
 //! object: the window says its [`Hello`] first, and the daemon answers
 //! [`FromDaemon::Joined`], after which each line the window writes is a
 //! [`ToDaemon`] and each the daemon writes a [`FromDaemon`] (see

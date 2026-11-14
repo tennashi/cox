@@ -20,7 +20,7 @@ use super::Terminal;
 use crate::terminal::colors::{CURSOR, FOREGROUND, dim, resolve};
 use crate::terminal::pty::Size;
 use crate::terminal::{FONT_SIZE, LINE_HEIGHT};
-use crate::ui::theme::{CODE_FONT, SELECTION, SURFACE};
+use coxd::theme::{CODE_FONT, SELECTION, SURFACE};
 
 /// Room between the grid and the tab's edges.
 const PADDING: f32 = 6.;
