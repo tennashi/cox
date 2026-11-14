@@ -50,7 +50,7 @@ use agent_client_protocol::schema::v1::{
 use agent_client_protocol::{
     Agent, Channel, Client, ConnectionTo, Error, Responder, Result, UntypedMessage,
 };
-use cox::agent::instructions;
+use coxd::agent::instructions;
 use tokio::sync::{Semaphore, oneshot};
 
 /// How the agent goes on with a session it opened before.

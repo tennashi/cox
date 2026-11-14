@@ -233,7 +233,7 @@ fn file(path: &Path) -> Option<(PathBuf, String)> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use coxd::testing::TempDir;
+    use crate::testing::TempDir;
 
     #[test]
     fn the_human_s_instructions_go_ahead_of_the_project_s() {

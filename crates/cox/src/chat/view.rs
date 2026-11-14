@@ -54,7 +54,6 @@ use gpui::{
 
 use crate::chat::conversation::{Answer, Conversation, GOAL_TURNS, Goal, Patch, Proposed, State};
 use crate::chat::region::{self, AddRegionToChat, Described};
-use crate::chat::sketch::Sketch;
 use crate::daemon::Link;
 use crate::daemon::wire::ToDaemon;
 use crate::stage::Stage;
@@ -66,6 +65,7 @@ use crate::ui::text::Reading;
 use crate::ui::text::cursor::Step;
 use crate::ui::{Copy, Panel, tip};
 use coxd::agents::Agents;
+use coxd::chat::sketch::Sketch;
 use coxd::theme::{
     ACCENT, ACCENT_GROUND, BORDER, BUTTON, BUTTON_HOVER, CODE_FONT, DIM, FAINT, FOREGROUND,
     OFFERING_EDGE, RAISED, UI_FONT,
@@ -172,7 +172,7 @@ pub struct Row {
     /// How its agent is set up, if the chat that opened it said: whether
     /// it merges what it made when the human asks, as one that works in
     /// the project does, and a sketch's, which ends its own ways, does not.
-    pub setup: Option<crate::agent::setup::Setup>,
+    pub setup: Option<coxd::agent::setup::Setup>,
 }
 
 /// Where the frame after the next puts the cursor of Vim's keys in the

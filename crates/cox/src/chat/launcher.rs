@@ -12,8 +12,8 @@
 //! runtime, and so is the agent's connection; the stage is a GPUI entity
 //! on the window's thread. The agent is a process, which starts the two
 //! MCP servers as processes of its own: `cox --mcp` (see
-//! [`crate::agent::mcp`]) and the Chrome `DevTools` MCP server (see
-//! [`crate::agent::tools`]).
+//! [`coxd::agent::mcp`]) and the Chrome `DevTools` MCP server (see
+//! [`coxd::agent::tools`]).
 
 use std::path::PathBuf;
 use std::rc::Rc;

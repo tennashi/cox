@@ -820,7 +820,7 @@ fn follow(cx: &mut Context<Tree>) -> Task<()> {
                             (folder, listed)
                         })
                         .collect();
-                    (listed, crate::repositories::hows(&root))
+                    (listed, coxd::repositories::hows(&root))
                 })
                 .await;
             if this

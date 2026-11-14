@@ -1,6 +1,6 @@
 //! A tab of the stage that shows a file as it is written, such as code,
 //! for the human to read beside the conversation. The agent shows it with
-//! Cox's tool for that (see [`crate::agent::mcp`]), at the lines it talks about,
+//! Cox's tool for that (see [`coxd::agent::mcp`]), at the lines it talks about,
 //! which the tab marks and scrolls to; a click on a link to a file opens
 //! it too.
 //!

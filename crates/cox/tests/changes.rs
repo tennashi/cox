@@ -10,11 +10,11 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::Duration;
 
-use cox::repositories::Repository;
 use cox::stage::changes::{Changes, Chosen, Pick, ShowTurn};
 use cox::stage::tab::Shows as _;
 use cox_git::changes::{Diff, Since};
 use cox_git::commits::{self, Turn};
+use coxd::repositories::Repository;
 use git::git;
 use gpui::{Entity, Modifiers, TestAppContext, VisualTestContext};
 
@@ -170,7 +170,7 @@ fn shows_what_changed_in_each_repository_among_a_projects_directories(cx: &mut T
     );
     // The first that changed anything is shown, with each to choose.
     assert_eq!(shown(&changes, cx), [("app/a.txt".to_owned(), 1, 0)]);
-    assert_eq!(cox::repositories::count(&project), Ok(1));
+    assert_eq!(coxd::repositories::count(&project), Ok(1));
     assert!(cx.debug_bounds("changed-repository-0").is_some());
     assert!(cx.debug_bounds("changed-repository-1").is_some());
 
@@ -184,7 +184,7 @@ fn shows_what_changed_in_each_repository_among_a_projects_directories(cx: &mut T
     cx.executor().advance_clock(Duration::from_secs(3));
     cx.run_until_parked();
     assert_eq!(shown(&changes, cx), [("app/a.txt".to_owned(), 1, 0)]);
-    assert_eq!(cox::repositories::count(&project), Ok(2));
+    assert_eq!(coxd::repositories::count(&project), Ok(2));
     click("changed-repository-1", cx);
     assert_eq!(shown(&changes, cx), [("lib/b.txt".to_owned(), 1, 0)]);
     click("changed-file-0", cx);
@@ -308,7 +308,7 @@ fn lists_the_commits_and_shows_what_one_changed_and_the_turn_it_was_made_in(
 fn a_folder_with_no_repository_counts_none() {
     let folder = scratch::folder("changes-none");
     std::fs::create_dir_all(folder.join("directories/notes")).unwrap();
-    assert!(cox::repositories::count(&folder).is_err());
+    assert!(coxd::repositories::count(&folder).is_err());
 }
 
 #[gpui::test]

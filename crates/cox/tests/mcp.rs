@@ -9,7 +9,7 @@ use std::io::{BufRead as _, BufReader, Lines, Write as _};
 use std::path::PathBuf;
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 
-use cox::agent::mcp::{ChatRequest, Ended, Ran, ToolRequest, ToolServer, Whereabouts};
+use coxd::agent::mcp::{ChatRequest, Ended, Ran, ToolRequest, ToolServer, Whereabouts};
 use serde_json::{Value, json};
 
 fn scratch(name: &str) -> PathBuf {
@@ -28,7 +28,7 @@ impl Agent {
     /// session.
     fn start(server: &ToolServer) -> Self {
         let mut bridge = Command::new(env!("CARGO_BIN_EXE_cox"))
-            .args([cox::agent::mcp::OPTION, server.socket.to_str().unwrap()])
+            .args([coxd::agent::mcp::OPTION, server.socket.to_str().unwrap()])
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .spawn()
@@ -76,7 +76,7 @@ impl Agent {
 fn the_agent_shows_a_file_on_its_chats_stage() {
     let cwd = scratch("show");
     std::fs::write(cwd.join("plan.md"), "# Plan\n").unwrap();
-    let server = cox::agent::mcp::start(cwd.clone(), None, true).unwrap();
+    let server = coxd::agent::mcp::start(cwd.clone(), None, true).unwrap();
     let mut agent = Agent::start(&server);
     let ToolServer {
         socket,
@@ -106,7 +106,7 @@ fn the_agent_shows_a_file_on_its_chats_stage() {
 #[test]
 fn the_agent_runs_a_command_on_its_chats_stage_and_can_cancel_it() {
     let cwd = scratch("run");
-    let server = cox::agent::mcp::start(cwd.clone(), None, true).unwrap();
+    let server = coxd::agent::mcp::start(cwd.clone(), None, true).unwrap();
     let mut agent = Agent::start(&server);
     let mut requests = server.requests;
 
@@ -157,7 +157,7 @@ fn the_agent_gets_only_the_tools_its_setup_names() {
     let cwd = scratch("only");
     std::fs::write(cwd.join("plan.md"), "# Plan\n").unwrap();
     let only = Some(vec!["show_markdown".to_owned()]);
-    let server = cox::agent::mcp::start(cwd.clone(), only.as_deref(), true).unwrap();
+    let server = coxd::agent::mcp::start(cwd.clone(), only.as_deref(), true).unwrap();
     let mut agent = Agent::start(&server);
     let mut requests = server.requests;
 
@@ -188,7 +188,7 @@ fn the_agent_gets_only_the_tools_its_setup_names() {
 #[test]
 fn a_chat_in_a_project_gets_no_tool_to_make_one_of_it() {
     let cwd = scratch("in-project");
-    let server = cox::agent::mcp::start(cwd.clone(), None, true).unwrap();
+    let server = coxd::agent::mcp::start(cwd.clone(), None, true).unwrap();
     let mut agent = Agent::start(&server);
 
     let listed = agent.ask(&json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list" }));
@@ -209,7 +209,7 @@ fn a_chat_in_a_project_gets_no_tool_to_make_one_of_it() {
 #[test]
 fn a_chat_in_no_project_gets_no_tool_to_name_its_project() {
     let cwd = scratch("no-project");
-    let server = cox::agent::mcp::start(cwd.clone(), None, false).unwrap();
+    let server = coxd::agent::mcp::start(cwd.clone(), None, false).unwrap();
     let mut agent = Agent::start(&server);
 
     let listed = agent.ask(&json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list" }));
@@ -234,7 +234,7 @@ fn a_chat_in_no_project_gets_no_tool_to_name_its_project() {
 /// agent's end of the bridge to it.
 fn chat_in(cwd: &std::path::Path, project: &str, chat: &str) -> (Agent, ToolServer) {
     let folder = cwd.to_owned();
-    let mut server = cox::agent::mcp::start(cwd.to_owned(), None, true).unwrap();
+    let mut server = coxd::agent::mcp::start(cwd.to_owned(), None, true).unwrap();
     let agent = Agent::start(&server);
     let mut chat_requests = std::mem::replace(
         &mut server.chat_requests,
@@ -273,7 +273,7 @@ impl Wikis {
     fn open(name: &str) -> Self {
         let data = scratch::data();
         // A page is read by the `cox` built, as the tools' server runs it.
-        cox::raw::page::read_with(PathBuf::from(env!("CARGO_BIN_EXE_cox")));
+        coxd::raw::page::read_with(PathBuf::from(env!("CARGO_BIN_EXE_cox")));
         let home = std::fs::canonicalize(&data).unwrap().join("home");
         std::fs::write(
             data.join("settings.json"),

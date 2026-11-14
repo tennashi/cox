@@ -23,7 +23,7 @@ impl KeysSection {
     /// `words`.
     pub fn new(words: Words) -> Self {
         Self {
-            on: crate::settings::vim(),
+            on: coxd::settings::vim(),
             failed: None,
             words,
         }
@@ -31,7 +31,7 @@ impl KeysSection {
 
     /// Shows what `settings.json` says now.
     pub fn reread(&mut self, cx: &mut Context<Self>) {
-        self.on = crate::settings::vim();
+        self.on = coxd::settings::vim();
         cx.notify();
     }
 
@@ -43,7 +43,7 @@ impl KeysSection {
 
     /// Keeps `on`, and turns Vim's keys on or off with it.
     fn choose(&mut self, on: bool, window: &mut Window, cx: &mut Context<Self>) {
-        if let Err(error) = crate::settings::keep("vim", on.then_some(Value::Bool(true))) {
+        if let Err(error) = coxd::settings::keep("vim", on.then_some(Value::Bool(true))) {
             tracing::error!("Vim's keys are not kept: {error:#}");
             self.failed = Some(format!("Cox cannot keep it: {error:#}"));
             cx.notify();

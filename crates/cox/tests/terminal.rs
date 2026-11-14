@@ -9,10 +9,10 @@ mod waits;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use cox::agent::mcp::{Ended, Ran};
 use cox::stage::tab::Shows as _;
 use cox::stage::terminal::Terminal;
 use cox::terminal::{Program, Running};
+use coxd::agent::mcp::{Ended, Ran};
 use gpui::{
     Entity, Focusable as _, Modifiers, MouseButton, MouseDownEvent, MouseUpEvent, TestAppContext,
     VisualTestContext, point, px,

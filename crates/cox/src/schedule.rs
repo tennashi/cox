@@ -257,7 +257,7 @@ pub fn line(text: &str, name: &str, now: &Zoned, last: Option<Timestamp>) -> Str
         || "never".to_owned(),
         |last| at(&last.to_zoned(now.time_zone().clone())),
     );
-    crate::workflow::fill(text, &[("name", name), ("now", &at(now)), ("last", &last)])
+    coxd::workflow::fill(text, &[("name", name), ("now", &at(now)), ("last", &last)])
 }
 
 /// What the chat of the schedule `name` is named, as it runs `now`.

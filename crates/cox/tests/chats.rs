@@ -17,22 +17,22 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
 
-use cox::agent::instructions::Instructions;
-use cox::agent::mcp::{ChatRequest, Waited};
-use cox::agent::setup::{Policy, Setup};
 use cox::chat::conversation::{Check, CheckState, Conversation, Entry, Goal, State, WENT_ON};
-use cox::chat::sketch::Sketch;
 use cox::chat::view::ChatView;
 use cox::notices::{AppNotices, Notices};
 use cox::ui::input::LineInput;
-use cox::workflow;
 use cox::workspace::{Chat, Workspace};
 use cox_core::entry::{Answer, Proposal, Proposed};
 use cox_core::goal::Goal as KeptGoal;
 use cox_core::settings::{Choice, Setting};
 use cox_core::store::Named;
 use cox_core::store::Store;
+use coxd::agent::instructions::Instructions;
+use coxd::agent::mcp::{ChatRequest, Waited};
+use coxd::agent::setup::{Policy, Setup};
 use coxd::agents::Agents as Choices;
+use coxd::chat::sketch::Sketch;
+use coxd::workflow;
 use fake_agent::{
     BACKGROUND_FINISHED, BACKGROUND_STARTED, Event, FakeAgent, LogsIn, Resumes, TITLE,
 };
@@ -475,7 +475,7 @@ fn enter_sets_the_home_for_the_runs_after(cx: &mut TestAppContext) {
     cx.simulate_input(&other.display().to_string());
     cx.simulate_keystrokes("enter");
     assert_eq!(
-        cox::settings::Saved::read().home.as_deref(),
+        coxd::settings::Saved::read().home.as_deref(),
         Some(other.as_path()),
         "the settings the next run reads name it"
     );
@@ -496,7 +496,7 @@ fn escape_closes_the_settings_keeping_the_home_typed(cx: &mut TestAppContext) {
         "escape closes the settings"
     );
     assert_eq!(
-        cox::settings::Saved::read().home.as_deref(),
+        coxd::settings::Saved::read().home.as_deref(),
         Some(other.as_path()),
         "the settings the next run reads name it"
     );
@@ -552,7 +552,7 @@ fn editing_settings_json_turns_vim_s_keys_on_in_the_open_window(cx: &mut TestApp
         "Vim's keys are off"
     );
 
-    cox::settings::keep("vim", Some(true.into())).unwrap();
+    coxd::settings::keep("vim", Some(true.into())).unwrap();
     after_a_look(cx);
     assert!(
         cx.debug_bounds("vim-status").is_some(),
@@ -568,7 +568,7 @@ async fn editing_settings_json_moves_where_the_next_chat_of_coxs_own_works(
     let (agents, workspace, cx) = open_window(cx, scratch::folder("follow-home"));
     follow_settings(cx, &Choices::new(Vec::new(), Vec::new(), Vec::new()));
 
-    cox::settings::keep("home", Some(other.display().to_string().into())).unwrap();
+    coxd::settings::keep("home", Some(other.display().to_string().into())).unwrap();
     after_a_look(cx);
     assert_eq!(
         new_chat_works_in(cx, &workspace, &agents).await,
@@ -589,7 +589,7 @@ fn editing_agents_json_lists_its_agents_with_the_one_settings_json_names_first(
         r#"[{"name": "Parrot", "command": ["parrot"]}, {"name": "Echo", "command": ["echo"]}]"#,
     )
     .unwrap();
-    cox::settings::keep("agent", Some("Echo".into())).unwrap();
+    coxd::settings::keep("agent", Some("Echo".into())).unwrap();
     after_a_look(cx);
     let names: Vec<String> = agents.all().into_iter().map(|agent| agent.name).collect();
     assert_eq!(names, ["Echo", "Parrot"]);
@@ -599,7 +599,7 @@ fn editing_agents_json_lists_its_agents_with_the_one_settings_json_names_first(
 fn the_settings_name_the_search_engine(cx: &mut TestAppContext) {
     let home = scratch::folder("settings-search");
     let (_agents, workspace, cx) = open_window(cx, home.clone());
-    let _ = cox::settings::keep("search", None);
+    let _ = coxd::settings::keep("search", None);
 
     click(cx, "open-settings");
     let settings = workspace.read_with(cx, |workspace, _| {
@@ -609,7 +609,7 @@ fn the_settings_name_the_search_engine(cx: &mut TestAppContext) {
         settings.read_with(cx, |settings, cx| settings.described(cx).join("\n"))
     };
     assert_eq!(
-        cox::settings::search().url("a b"),
+        coxd::settings::search().url("a b"),
         "https://www.google.com/search?q=a+b",
         "Google, when the settings name none"
     );
@@ -630,7 +630,7 @@ fn the_settings_name_the_search_engine(cx: &mut TestAppContext) {
         described(cx)
     );
     assert_eq!(
-        cox::settings::kept("search"),
+        coxd::settings::kept("search"),
         None,
         "a wrong one is not kept"
     );
@@ -644,11 +644,11 @@ fn the_settings_name_the_search_engine(cx: &mut TestAppContext) {
         described(cx)
     );
     assert_eq!(
-        cox::settings::search().url("rust & gpui"),
+        coxd::settings::search().url("rust & gpui"),
         "https://duckduckgo.com/?q=rust+%26+gpui"
     );
 
-    cox::settings::keep("search", Some("ftp://example.com/%s".into())).unwrap();
+    coxd::settings::keep("search", Some("ftp://example.com/%s".into())).unwrap();
     settings.update(cx, cox::settings::view::SettingsView::reread);
     assert!(
         described(cx).contains("Google is searched until it is."),
@@ -656,14 +656,14 @@ fn the_settings_name_the_search_engine(cx: &mut TestAppContext) {
         described(cx)
     );
     assert_eq!(
-        cox::settings::search(),
-        cox::settings::SearchEngine::default(),
+        coxd::settings::search(),
+        coxd::settings::SearchEngine::default(),
         "a wrong one in the file is not used"
     );
 
     cx.simulate_keystrokes("secondary-a backspace enter");
     assert_eq!(
-        cox::settings::kept("search"),
+        coxd::settings::kept("search"),
         None,
         "emptied, none is named"
     );
@@ -1998,7 +1998,7 @@ async fn an_agent_proposes_an_icon_which_the_project_has_once_the_human_sets_it(
     show_the_kept_chat(cx);
     say(cx, &workspace, "hello").await;
     let id = store.projects().unwrap()[0].id;
-    let icon = cox::project_icon::path(id).unwrap();
+    let icon = coxd::project_icon::path(id).unwrap();
     let _ = std::fs::remove_file(&icon);
     // Two icons, of two colors, as an agent's tool keeps them.
     let picture = |color: &str| {
@@ -2010,7 +2010,7 @@ async fn an_agent_proposes_an_icon_which_the_project_has_once_the_human_sets_it(
             ),
         )
         .unwrap();
-        cox::project_icon::propose(&svg).unwrap()
+        coxd::project_icon::propose(&svg).unwrap()
     };
     let propose = |file: String| {
         let (answer, now) = tokio::sync::oneshot::channel();
@@ -3720,7 +3720,7 @@ struct OpenedByAnAgent {
     /// The key of the chat whose agent opened it.
     parent: u64,
     /// What its agent was told of the chat it opened.
-    opened: cox::agent::mcp::OpenedChat,
+    opened: coxd::agent::mcp::OpenedChat,
 }
 
 async fn opened_by_an_agent<'a>(
@@ -3738,7 +3738,7 @@ async fn opened_by_an_agent<'a>(
     let (parent, _) = keys(cx, &workspace, 0);
     let setup = Setup {
         context: Some("Change nothing.".to_owned()),
-        policy: cox::agent::setup::Policy {
+        policy: coxd::agent::setup::Policy {
             allow: Vec::new(),
             reject: vec!["Edit *".to_owned()],
             within: None,
@@ -4333,7 +4333,7 @@ async fn end_as_the_human_s_own<'a>(
     // The workflow is one of the test's own, where this Cox keeps what
     // lasts, rather than the human's in their home.
     let workflow = scratch::data().join("workflow");
-    cox::settings::keep(
+    coxd::settings::keep(
         "workflow",
         Some(serde_json::Value::String(workflow.display().to_string())),
     )

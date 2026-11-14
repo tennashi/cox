@@ -96,7 +96,7 @@ impl FolderField {
     /// Shows what `settings.json` names now, when it changed since the
     /// field read it.
     pub fn reread(&mut self, cx: &mut Context<Self>) {
-        let kept = crate::settings::kept(self.key);
+        let kept = coxd::settings::kept(self.key);
         if kept != self.kept {
             let text = kept
                 .as_ref()
@@ -128,7 +128,7 @@ impl FolderField {
         if text.trim().is_empty() {
             return self.keep(None, cx);
         }
-        match crate::settings::folder_of(&text, home().as_deref()) {
+        match coxd::settings::folder_of(&text, home().as_deref()) {
             Ok(folder) => self.keep(Some(&folder), cx),
             Err(why) => self.tell(why, FAILED, cx),
         }
@@ -138,7 +138,7 @@ impl FolderField {
     /// names none.
     fn keep(&mut self, folder: Option<&std::path::Path>, cx: &mut Context<Self>) {
         let value = folder.map(|folder| Value::String(shortened(folder)));
-        if let Err(error) = crate::settings::keep(self.key, value.clone()) {
+        if let Err(error) = coxd::settings::keep(self.key, value.clone()) {
             tracing::error!("the {} is not kept: {error:#}", self.key);
             return self.tell(format!("Cox cannot keep it: {error:#}"), FAILED, cx);
         }

@@ -21,13 +21,13 @@ use tokio::sync::oneshot;
 
 use super::card::Draft;
 use super::{By, Scope};
-use crate::agent::mcp::Ended;
-use crate::agent::setup::{Policy, Setup, StageUse};
-use crate::agent::{Agent, AgentEvent, Command, Start};
-use crate::chat::judge::{ALLOWED, Verdict};
 use crate::daemon::chat::GATHER_FOR;
 use crate::terminal::run_unseen;
+use coxd::agent::mcp::Ended;
+use coxd::agent::setup::{Policy, Setup, StageUse};
+use coxd::agent::{Agent, AgentEvent, Command, Start};
 use coxd::agents::Agents;
+use coxd::chat::judge::{ALLOWED, Verdict};
 
 /// The agents Cox knows, once the window has read them.
 static AGENTS: OnceLock<Agents> = OnceLock::new();
@@ -286,7 +286,7 @@ fn talk(card: &Card, context: &str, lines: &Receiver<String>, told: &Mutex<Told>
         instructions: None,
         setup: Some(setup),
     };
-    let mut agent = crate::agent::spawn_known(known, card.folder.clone(), Vec::new(), start);
+    let mut agent = coxd::agent::spawn_known(known, card.folder.clone(), Vec::new(), start);
     while let Ok(prompt) = lines.recv() {
         told.lock()
             .unwrap_or_else(PoisonError::into_inner)
@@ -521,7 +521,7 @@ fn tried_on(tried: &Try, last: Option<&Path>) -> Tried {
                 setup: Some(setup),
             };
             let mut agent =
-                crate::agent::spawn_known(agents.of(None), tried.folder.clone(), Vec::new(), start);
+                coxd::agent::spawn_known(agents.of(None), tried.folder.clone(), Vec::new(), start);
             match ask(&mut agent, super::question(said.as_deref()), |_| {}) {
                 Ok(reply) => Tried {
                     state: match Verdict::of(&reply) {

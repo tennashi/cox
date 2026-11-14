@@ -479,7 +479,7 @@ fn open_terminal<'a>(
     command: &str,
 ) -> (
     Entity<Terminal>,
-    tokio::sync::oneshot::Receiver<Result<cox::agent::mcp::Ran, String>>,
+    tokio::sync::oneshot::Receiver<Result<coxd::agent::mcp::Ran, String>>,
     &'a mut VisualTestContext,
 ) {
     cx.update(|cx| cox::vim::turn(true, cx));
@@ -501,7 +501,7 @@ fn open_terminal<'a>(
 /// What the command printed, once it ended.
 fn ran(
     cx: &mut VisualTestContext,
-    waiting: &mut tokio::sync::oneshot::Receiver<Result<cox::agent::mcp::Ran, String>>,
+    waiting: &mut tokio::sync::oneshot::Receiver<Result<coxd::agent::mcp::Ran, String>>,
 ) -> String {
     let mut ran = None;
     waits::until("the command's end", || {

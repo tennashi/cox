@@ -163,7 +163,7 @@ fn told_of(told: &Told, root: &Path, wiki: &Path, raw: &Path, triggers: &Value) 
     }
     let written =
         |root: &Path, shelf: &str, of: &dyn Fn(&str) -> bool, happened: &mut Vec<Value>| {
-            let told = crate::wiki::told::told(root);
+            let told = coxd::wiki::told::told(root);
             for page in told["pages"].as_array().into_iter().flatten() {
                 let name = page["name"].as_str().unwrap_or_default();
                 for used in page["used"].as_array().into_iter().flatten() {
@@ -193,7 +193,7 @@ fn told_of(told: &Told, root: &Path, wiki: &Path, raw: &Path, triggers: &Value) 
     }
     if !home {
         written(
-            &root.join(crate::wiki::PROJECT_WIKI),
+            &root.join(coxd::wiki::PROJECT_WIKI),
             "project:",
             &|_: &str| true,
             &mut happened,
@@ -224,7 +224,7 @@ fn kept_sources(
     name: Option<&str>,
     happened: &mut Vec<Value>,
 ) {
-    let mut sources: Vec<(Value, &str)> = crate::raw::told(raw)["sources"]
+    let mut sources: Vec<(Value, &str)> = coxd::raw::told(raw)["sources"]
         .as_array()
         .into_iter()
         .flatten()
@@ -232,7 +232,7 @@ fn kept_sources(
         .collect();
     if !home {
         sources.extend(
-            crate::raw::told(&root.join(crate::raw::PROJECT_RAW))["sources"]
+            coxd::raw::told(&root.join(coxd::raw::PROJECT_RAW))["sources"]
                 .as_array()
                 .into_iter()
                 .flatten()
@@ -349,19 +349,19 @@ mod tests {
         .unwrap();
         // The human's sources, apart from the project's own, in `root`.
         let raw = root.join("human/raw");
-        let source = crate::raw::Source {
+        let source = coxd::raw::Source {
             from: "https://example.com/",
             title: "News",
             text: "What changed.",
         };
-        let kept = |project| crate::raw::Kept {
+        let kept = |project| coxd::raw::Kept {
             day: "2026-11-07",
             chat: "news",
             chat_id: None,
             project,
         };
-        crate::raw::keep(&raw, "news", source, kept(Some("app"))).unwrap();
-        crate::raw::keep(&raw, "elsewhere", source, kept(Some("other"))).unwrap();
+        coxd::raw::keep(&raw, "news", source, kept(Some("app"))).unwrap();
+        coxd::raw::keep(&raw, "elsewhere", source, kept(Some("other"))).unwrap();
         let schedules = json!({
             "folders": [{"folder": root.path(), "name": null, "triggers": [
                 {"name": "triage", "schedule": {"every": "Every 6 hours", "last": "2026-11-07 09:00"}},

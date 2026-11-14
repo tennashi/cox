@@ -75,7 +75,7 @@ pub struct SetAbout(pub String);
 pub struct Dismissed;
 
 /// What the human asks of the project's icon (see
-/// [`crate::project_icon`]).
+/// [`coxd::project_icon`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ToIcon {
     /// A picture they choose, as its icon.

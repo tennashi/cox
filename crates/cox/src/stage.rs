@@ -13,7 +13,7 @@
 //! and closes tabs, and each agent opens and closes pages
 //! too, through its chat's relay. A page that asks for a window of its own
 //! gets a tab instead, and a link in a page to a file opens the file on a
-//! tab, as a link from the conversation does. With Cox's own tools (see [`crate::agent::mcp`]), the
+//! tab, as a link from the conversation does. With Cox's own tools (see [`coxd::agent::mcp`]), the
 //! agent shows the human Markdown files and code, a tab for each file, and
 //! runs commands in terminals: a command gets the tab of the agent's last
 //! one that ended, or a new one. A link to a file opens it on a tab too:
@@ -111,9 +111,9 @@ use gpui::{
 };
 use tokio::sync::mpsc::UnboundedReceiver;
 
-use crate::agent::mcp::ToolRequest;
 use cox_browser::relay::{Pages, Relay, Serving};
 use cox_browser::{Cef, TargetId};
+use coxd::agent::mcp::ToolRequest;
 
 use cox_android::device::Boot;
 

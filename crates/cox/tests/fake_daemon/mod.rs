@@ -8,11 +8,7 @@ use std::rc::Rc;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
-use cox::agent::Start;
-use cox::agent::mcp::{ChatRequest, Ended, Ran, ToolRequest};
-use cox::agent::setup::Setup;
 use cox::chat::Stages;
-use cox::chat::judge::Starts;
 use cox::chat::view::{ChatView, OpenLink, StageView};
 use cox::daemon::{Running, Spawned, Spawns};
 use cox::stage::Tabs;
@@ -22,7 +18,11 @@ use cox_acp::McpServer;
 use cox_browser::relay::Relay;
 use cox_core::store::Store;
 use cox_core::tabs::KeptTabs;
+use coxd::agent::Start;
+use coxd::agent::mcp::{ChatRequest, Ended, Ran, ToolRequest};
+use coxd::agent::setup::Setup;
 use coxd::agents::{Agents as Choices, Known};
+use coxd::chat::judge::Starts;
 use gpui::{
     App, AppContext as _, Context, Entity, Focusable, IntoElement, ParentElement as _, Render,
     Styled as _, TestAppContext, VisualTestContext, Window, div,
@@ -159,7 +159,7 @@ impl Spawns for FakeSpawns {
             },
             again @ Start::Again { .. } => again,
         };
-        let mut spawned = cox::agent::spawn(
+        let mut spawned = coxd::agent::spawn(
             move |_| Ok(agent.connect()),
             cwd,
             fakes.mcp_servers.clone(),
@@ -193,7 +193,7 @@ impl Spawns for FakeSpawns {
         Rc::new(move |cwd, start| {
             let agent = Arc::new(FakeAgent::default());
             agents.borrow_mut().push(Arc::clone(&agent));
-            cox::agent::spawn(move |_| Ok(agent.connect()), cwd, Vec::new(), start)
+            coxd::agent::spawn(move |_| Ok(agent.connect()), cwd, Vec::new(), start)
         })
     }
 }

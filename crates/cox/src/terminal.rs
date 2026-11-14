@@ -23,7 +23,7 @@ use alacritty_terminal::term::Term;
 use self::pty::Listener;
 pub use self::pty::{Program, Running};
 pub use self::unseen::run_unseen;
-use crate::agent::mcp::Ended;
+use coxd::agent::mcp::Ended;
 
 /// The size of the terminal's font, which a tab draws its cells in.
 pub const FONT_SIZE: f32 = 13.;

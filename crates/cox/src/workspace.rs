@@ -3,7 +3,7 @@
 //! right, which a list at its head switches among the chats of the
 //! project chosen. A project is a folder the human opened: each chat in
 //! it works there, and its agent gets the human's instructions, then
-//! those in the folder's `COX.md` (see [`crate::agent::instructions`]).
+//! those in the folder's `COX.md` (see [`coxd::agent::instructions`]).
 //! Cox's own chats, of no project, work in Cox's home, with the
 //! instructions there.
 //!
@@ -26,7 +26,7 @@
 //! The panel folds to the window's right edge, where a dot for each chat
 //! stays, which shows it. The menu of the right button on a chat renames
 //! it, as a double click on the head does, sets or clears its goal, ends
-//! a sketch (see [`crate::chat::sketch`]), or archives it: an archived
+//! a sketch (see [`coxd::chat::sketch`]), or archives it: an archived
 //! chat leaves the list for "Archived" at its foot, from where a click
 //! brings it back.
 //!
@@ -54,17 +54,17 @@ use gpui::{
 };
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 
-use crate::agent::mcp::ToolRequest;
-use crate::agent::setup::Setup;
 use crate::chat::Stages;
 use crate::chat::conversation::State;
-use crate::chat::sketch::{self, Sketch};
 use crate::chat::view::{ChatView, OpenLink, Row, StageView};
 use crate::daemon::Link;
 use crate::daemon::wire::{ChatRow, FromDaemon, Listing, ProjectRow, ToDaemon};
 use crate::notices::AppNotices;
 use crate::settings::view::{Dismissed, HomeChanged, OpenSettings, SettingsView, UnpairPhones};
+use coxd::agent::mcp::ToolRequest;
+use coxd::agent::setup::Setup;
 use coxd::agents::Agents;
+use coxd::chat::sketch::{self, Sketch};
 
 pub(crate) mod project_card;
 mod render;
@@ -78,7 +78,7 @@ use sheet::Sheet;
 
 use crate::stage::{NewPage, NewTerminal, OpenFile};
 use crate::ui::input::{LineInput, Submitted};
-use crate::workflow;
+use coxd::workflow;
 pub use project_card::Gives;
 use project_card::{Drawing, ProjectCard, Rename, SetAbout, Standing, ToIcon};
 
@@ -141,9 +141,9 @@ const NO_TERMINAL: &str = "its terminal went away";
 const NO_TAB: &str = "the stage went away before it answered";
 
 /// The icon of the project kept as `id`, for GPUI to draw, if it has one
-/// (see [`crate::project_icon`]).
+/// (see [`coxd::project_icon`]).
 fn icon_of(id: ProjectId) -> Option<Arc<Image>> {
-    let bytes = std::fs::read(crate::project_icon::path(id)?).ok()?;
+    let bytes = std::fs::read(coxd::project_icon::path(id)?).ok()?;
     Some(Arc::new(Image::from_bytes(ImageFormat::Png, bytes)))
 }
 
@@ -179,7 +179,7 @@ pub struct Project {
     /// shows again.
     last: Option<u64>,
     /// The icon the human gave it, which the rail draws in place of a
-    /// folder (see [`crate::project_icon`]).
+    /// folder (see [`coxd::project_icon`]).
     icon: Option<Arc<Image>>,
     /// Whether its folder is not there, as when the human moved it.
     missing: bool,
@@ -988,7 +988,7 @@ impl Workspace {
     }
 
     /// Asks the human for a picture, and makes it the icon of the project
-    /// at `index` (see [`crate::project_icon`]).
+    /// at `index` (see [`coxd::project_icon`]).
     pub fn choose_icon(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
         self.project_menu = None;
         cx.notify();
@@ -1011,7 +1011,7 @@ impl Workspace {
                 _ => return,
             };
             let set = cx
-                .background_spawn(async move { crate::project_icon::set(id, &from) })
+                .background_spawn(async move { coxd::project_icon::set(id, &from) })
                 .await;
             if let Err(error) = set {
                 tracing::error!("the project's icon was not set: {error:#}");
@@ -1024,7 +1024,7 @@ impl Workspace {
 
     /// Has the agent a new chat talks to read the project at `index` and
     /// draw it an icon, in the background, its square marked meanwhile
-    /// (see [`crate::project_icon::generate`]).
+    /// (see [`coxd::project_icon::generate`]).
     fn generate_icon(&mut self, index: usize, cx: &mut Context<Self>) {
         self.project_menu = None;
         cx.notify();
@@ -1047,7 +1047,7 @@ impl Workspace {
         std::thread::Builder::new()
             .name("project-icon".to_owned())
             .spawn(move || {
-                let _ = drawn.send(crate::project_icon::generate(&agents, id, &name, &folder));
+                let _ = drawn.send(coxd::project_icon::generate(&agents, id, &name, &folder));
             })
             .expect("a thread starts");
         cx.spawn(async move |this, cx| {
@@ -1074,7 +1074,7 @@ impl Workspace {
         let Some(id) = self.projects.get(index).and_then(|project| project.id) else {
             return;
         };
-        if let Err(error) = crate::project_icon::remove(id) {
+        if let Err(error) = coxd::project_icon::remove(id) {
             tracing::error!("the project's icon was not removed: {error:#}");
         }
         self.read_icon(id, cx);

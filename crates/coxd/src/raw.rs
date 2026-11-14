@@ -444,7 +444,7 @@ fn slug(title: &str) -> String {
 mod tests {
 
     use super::*;
-    use coxd::testing::TempDir;
+    use crate::testing::TempDir;
 
     fn by(day: &str) -> Kept<'_> {
         Kept {

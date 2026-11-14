@@ -11,10 +11,10 @@ use base64::Engine as _;
 use gpui::{AsyncWindowContext, Context, Entity, WeakEntity, Window};
 use tokio::sync::oneshot;
 
-use crate::agent::mcp::{MacAct, Seen};
 use crate::stage::Stage;
 use crate::stage::mac_window::MacWindow;
 use crate::stage::tab::{Shows, TabContent};
+use coxd::agent::mcp::{MacAct, Seen};
 
 /// How long the app has to answer what the agent did, before the agent
 /// sees its window again.

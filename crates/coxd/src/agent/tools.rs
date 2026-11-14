@@ -95,7 +95,7 @@ mod tests {
     use std::fs;
 
     use super::*;
-    use coxd::testing::TempDir;
+    use crate::testing::TempDir;
 
     #[test]
     fn the_stage_is_the_devtools_server_through_the_relay() {

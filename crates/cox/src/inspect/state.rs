@@ -42,7 +42,7 @@ pub fn describe(
     if let Some(data) = coxd::storage::root() {
         let _ = writeln!(told, "It keeps what lasts in {}", data.display());
     }
-    match crate::logs::file() {
+    match coxd::logs::file() {
         Some(file) => {
             let _ = writeln!(told, "This run is kept in {}", file.display());
         }

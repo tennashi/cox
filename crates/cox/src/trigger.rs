@@ -18,7 +18,7 @@
 //! ```
 //!
 //! The human's triggers are in `triggers` in their workflow's folder (see
-//! [`crate::settings::workflow`]), and run in every project; a project's
+//! [`coxd::settings::workflow`]), and run in every project; a project's
 //! own are in `triggers` in its folder, beside its directories.
 //!
 //! As a chat's turn ends, as its agent ends it, its goal is checked first,
@@ -42,8 +42,8 @@ use std::path::{Path, PathBuf};
 use cox_core::entry::CheckState;
 use sha2::{Digest as _, Sha256};
 
-use crate::agent::setup::{Policy, Setup, StageUse};
 use crate::schedule::Cron;
+use coxd::agent::setup::{Policy, Setup, StageUse};
 
 pub mod card;
 pub mod discuss;
@@ -333,7 +333,7 @@ impl Trigger {
     /// The trigger `name`, of `file`, whose text is `text`.
     fn parse(name: &str, file: &Path, scope: Scope, text: &str) -> Result<Self, String> {
         let sum = format!("{:x}", Sha256::digest(text));
-        let (lines, rest) = crate::wiki::front(text);
+        let (lines, rest) = coxd::wiki::front(text);
         let mut properties = properties(&lines)?;
         let key = |properties: &mut BTreeMap<String, Value>, key: &str| properties.remove(key);
         let on = match key(&mut properties, "on") {
@@ -486,7 +486,7 @@ impl Trigger {
             By::New {
                 project: Some(project),
                 ..
-            } => home.join(crate::settings::PROJECTS).join(project),
+            } => home.join(coxd::settings::PROJECTS).join(project),
             _ => home.to_owned(),
         }
     }
@@ -778,7 +778,7 @@ const GATHERS: &str = "You run as a trigger, as another chat's agent asks the hu
 /// refused what `reject` names.
 fn set_up(stance: &str, text: &str, allow: &[String], reject: &[String]) -> Setup {
     let allow = if allow.is_empty() {
-        crate::chat::judge::ALLOWED
+        coxd::chat::judge::ALLOWED
             .iter()
             .map(|&title| title.to_owned())
             .collect()
@@ -1456,7 +1456,7 @@ mod tests {
     /// home, the project, that project's folder and the workflow.
     fn schedules_in(root: &Path) -> (PathBuf, PathBuf, PathBuf, PathBuf) {
         let home = root.join("home");
-        let projects = home.join(crate::settings::PROJECTS);
+        let projects = home.join(coxd::settings::PROJECTS);
         let (project, elsewhere) = (projects.join("app"), projects.join("notes"));
         let workflow = root.join("workflow");
         for folder in [workflow.join(TRIGGERS), project.join(PROJECT_TRIGGERS)] {

@@ -20,11 +20,11 @@ use gpui::{
 use super::ADDRESS;
 use super::history::{self, Visited};
 use crate::daemon::phone::relay::on_the_mac;
-use crate::settings::SearchEngine;
 use crate::ui::ellipsis::ellipsis;
 use crate::ui::input::{self, LineInput, Submitted};
 use crate::vim::hints::Hinted as _;
 use crate::vim::{self, Leave, Region};
+use coxd::settings::SearchEngine;
 use coxd::theme::{BORDER_STRONG, DIM, FAINT, FOREGROUND, RAISED, SELECTED};
 
 actions!(address, [Revert, Next, Previous]);
@@ -304,7 +304,7 @@ impl AddressLine {
         Self {
             input,
             url: url.to_owned(),
-            engine: crate::settings::search(),
+            engine: coxd::settings::search(),
             clicked_from_elsewhere: false,
             offer: Offer {
                 seen: url.to_owned(),
@@ -318,7 +318,7 @@ impl AddressLine {
     /// Gives the line the keyboard, with its whole text selected, so that
     /// typing replaces it.
     pub fn focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.engine = crate::settings::search();
+        self.engine = coxd::settings::search();
         window.focus(&self.input.focus_handle(cx));
         self.input.update(cx, LineInput::select_whole);
         vim::typing(Region::Address, window, cx);
@@ -722,7 +722,7 @@ mod tests {
 
     #[test]
     fn enter_goes_to_the_url_or_searches_the_words() {
-        let engine = crate::settings::SearchEngine::default();
+        let engine = coxd::settings::SearchEngine::default();
         let rust_gpui = Address::Search("rust gpui".to_owned());
         assert_eq!(rust_gpui.said(&engine), "Search google.com for rust gpui");
         assert!(rust_gpui.url(&engine).contains("q=rust+gpui"));

@@ -72,7 +72,7 @@ pub(crate) const MENU_CONTEXT: &str = "StageMenu";
 pub(super) struct Menu {
     input: Entity<LineInput>,
     unmatched: Unmatched,
-    engine: crate::settings::SearchEngine,
+    engine: coxd::settings::SearchEngine,
     _typed: Subscription,
 }
 
@@ -288,7 +288,7 @@ impl Stage {
         cx: &mut Context<Self>,
     ) {
         let input = cx.new(LineInput::new);
-        let engine = crate::settings::search();
+        let engine = coxd::settings::search();
         let searched = engine.clone();
         let typed = cx.subscribe_in(
             &input,
@@ -325,7 +325,7 @@ impl Stage {
         cx: &mut Context<Self>,
     ) {
         let typed = typed(line, &self.cwd, Unmatched::Search);
-        self.open_typed(typed, &crate::settings::search(), follow, window, cx);
+        self.open_typed(typed, &coxd::settings::search(), follow, window, cx);
     }
 
     /// Opens `typed`: a page, or the results of a search with `engine`, in the page shown when `follow` says here and a
@@ -334,7 +334,7 @@ impl Stage {
     fn open_typed(
         &mut self,
         typed: Option<Typed>,
-        engine: &crate::settings::SearchEngine,
+        engine: &coxd::settings::SearchEngine,
         follow: Follow,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -536,7 +536,7 @@ impl Stage {
 /// whether it has a map, and counts the chats of the folder that wait for
 /// the human, now and then, while the stage is open, for the bar to show
 /// "Changes" only in a Git repository, or a project with one among its
-/// directories (see [`crate::repositories::of`]), with the count of
+/// directories (see [`coxd::repositories::of`]), with the count of
 /// the files of all of them, "Map" only for a project with a map, and the
 /// count on "Activity".
 pub(super) fn count_changes(cx: &mut Context<Stage>) -> Task<()> {
@@ -553,7 +553,7 @@ pub(super) fn count_changes(cx: &mut Context<Stage>) -> Task<()> {
                     .spawn(async move {
                         let mapped = !cox_editor::map::list(&cwd).is_empty();
                         let waiting = super::activity::waiting(&cwd);
-                        (crate::repositories::count(&cwd).ok(), mapped, waiting)
+                        (coxd::repositories::count(&cwd).ok(), mapped, waiting)
                     })
                     .await;
                 let counted = this.update(cx, |stage, cx| {

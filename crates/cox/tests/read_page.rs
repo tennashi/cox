@@ -75,7 +75,7 @@ fn head(reader: &mut impl BufRead) -> String {
 /// the code it exits with.
 fn read(web: &str, url: &str) -> (Value, Option<i32>) {
     let output = Command::new(env!("CARGO_BIN_EXE_cox"))
-        .args([cox::raw::page::OPTION, url])
+        .args([coxd::raw::page::OPTION, url])
         .env_clear()
         .env("HTTP_PROXY", web)
         .output()

@@ -14,13 +14,13 @@ use tokio::sync::mpsc::UnboundedReceiver;
 use cox_browser::relay::FromAgent;
 use gpui::{Context, Task, Window, prelude::*};
 
-use crate::agent::mcp::{ASKED, Ran, ToolRequest};
 use crate::stage::Stage;
 use crate::stage::code::Code;
 use crate::stage::document::Document;
 use crate::stage::tab::{Tab, TabContent};
 use crate::stage::terminal::Terminal;
 use crate::terminal::{Program, Running};
+use coxd::agent::mcp::{ASKED, Ran, ToolRequest};
 
 impl Stage {
     /// Carries out what the relay of the chat `chat` tells the stage for

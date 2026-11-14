@@ -9,13 +9,13 @@ use cox_core::goal::Goal;
 use cox_core::store::Named;
 
 use super::{Daemon, Ends, NAME_LENGTH, Sketching, make_sketch, working};
-use crate::agent;
-use crate::agent::mcp::{OpenedChat, Waited};
-use crate::agent::setup::{Policy, Setup, keeps_in_wiki};
 use crate::chat::conversation::{Entry, State};
-use crate::chat::sketch::{self, Sketch};
-use crate::workflow;
+use coxd::agent;
+use coxd::agent::mcp::{OpenedChat, Waited};
+use coxd::agent::setup::{Policy, Setup, keeps_in_wiki};
+use coxd::chat::sketch::{self, Sketch};
 use coxd::storage;
+use coxd::workflow;
 
 impl Daemon {
     /// Opens a sketch beside the chat `key`, under it in the list, that
@@ -405,14 +405,14 @@ impl Daemon {
     fn sources_of(&self, index: usize) -> (PathBuf, Option<String>) {
         let project = &self.projects[index];
         if project.id.is_none() {
-            let saved = crate::settings::Saved::read().raw;
+            let saved = coxd::settings::Saved::read().raw;
             (
-                saved.unwrap_or_else(|| project.folder.join(crate::raw::RAW)),
+                saved.unwrap_or_else(|| project.folder.join(coxd::raw::RAW)),
                 None,
             )
         } else {
             (
-                project.folder.join(crate::raw::PROJECT_RAW),
+                project.folder.join(coxd::raw::PROJECT_RAW),
                 Some(project.name.clone()),
             )
         }
@@ -483,16 +483,16 @@ impl Daemon {
             "## How it ended\n\n{ended}\n\n{showed}## What was said in it\n\nAs Cox kept it, \
              where [you] stands for the sketch's agent.\n\n{said}\n"
         );
-        let day = crate::wiki::today();
-        crate::raw::keep(
+        let day = coxd::wiki::today();
+        coxd::raw::keep(
             root,
             sketch::SOURCES,
-            crate::raw::Source {
+            coxd::raw::Source {
                 from: &from,
                 title: &slot.name,
                 text: &text,
             },
-            crate::raw::Kept {
+            coxd::raw::Kept {
                 day: &day,
                 chat: &slot.name,
                 chat_id: number.as_deref(),
@@ -526,7 +526,7 @@ impl Daemon {
             );
             self.with_sketch_kept(
                 key,
-                &project.join(crate::raw::PROJECT_RAW),
+                &project.join(coxd::raw::PROJECT_RAW),
                 Some(&name),
                 &note,
             )

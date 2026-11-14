@@ -45,10 +45,10 @@ use tokio::sync::mpsc;
 
 use crate::agent::setup::{Policy, Setup, StageUse};
 use crate::agent::{Agent, AgentEvent, Command, Start};
+use crate::agents::Agents;
+use crate::process::run_with_deadline;
 use crate::settings::Translation;
 use crate::wiki::told::options;
-use coxd::agents::Agents;
-use coxd::process::run_with_deadline;
 
 /// The language the agents write in, and that text not in it goes into.
 pub const ENGLISH: &str = "English";
@@ -136,7 +136,7 @@ pub enum Arriving {
 /// Starts the translator, which works on a thread of its own, its agent,
 /// when it needs one, being one of `agents`.
 pub fn start(agents: Agents) {
-    let Some(folder) = coxd::storage::path(coxd::storage::Kept::Translations) else {
+    let Some(folder) = crate::storage::path(crate::storage::Kept::Translations) else {
         tracing::error!("nothing is translated: there is no place to keep translations");
         return;
     };
@@ -349,7 +349,7 @@ impl Worker {
                 ),
             }
             .and_then(|translated| {
-                coxd::storage::write_whole(&job.file, &translated)
+                crate::storage::write_whole(&job.file, &translated)
                     .map_err(|error| format!("cannot keep the translation: {error}"))?;
                 Ok(translated)
             });
@@ -711,7 +711,7 @@ fn rebuilt(body: &str, mut translated: impl FnMut(&str) -> Option<String>) -> St
 #[cfg(test)]
 mod tests {
     use super::*;
-    use coxd::testing::TempDir;
+    use crate::testing::TempDir;
 
     const PAGE: &str = "# GPUI layout\n\nHow [[taffy]] lays out `div`s.\n\n\
         Underlined\n----------\n\n- one\n- two\n\n```rust\nlet x = 1;\n```\n\n\

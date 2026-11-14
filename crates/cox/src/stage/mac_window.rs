@@ -22,13 +22,13 @@ use gpui::{
 };
 use tokio::sync::mpsc::UnboundedReceiver;
 
-use crate::agent::mcp::MacAct;
 use crate::chat::region::{self, Described};
 use crate::stage::mirror::{Display, Mirrored, Screen, scaled};
 use crate::stage::pointer;
 use crate::stage::tab::Shows;
 use crate::ui::button::{Kind, button};
 use crate::vim::hints::Hinted as _;
+use coxd::agent::mcp::MacAct;
 use coxd::theme::{BORDER, DIM, FAILED, FOREGROUND, RAISED};
 
 pub(crate) const KEY_CONTEXT: &str = "MacWindow";

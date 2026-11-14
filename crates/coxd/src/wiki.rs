@@ -346,7 +346,7 @@ pub fn write(root: &Path, name: &str, text: &str, used: &Used) -> Result<PathBuf
         page.push_str(line);
         page.push('\n');
     }
-    coxd::storage::write_whole(&file, page)
+    crate::storage::write_whole(&file, page)
         .map_err(|error| format!("cannot write {}: {error}", file.display()))?;
     if let Err(error) = keep_index(root) {
         tracing::warn!("the wiki's index is not kept: {error}");
@@ -398,7 +398,7 @@ fn keep_index(root: &Path) -> io::Result<()> {
         }
         text.push('\n');
     }
-    coxd::storage::write_whole(&index, text)
+    crate::storage::write_whole(&index, text)
 }
 
 /// The text of the first heading of `page`, if it has one.
@@ -432,7 +432,7 @@ fn cut(text: &str, length: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use coxd::testing::TempDir;
+    use crate::testing::TempDir;
 
     fn used(project: &str, chat: &str, day: &str) -> Used {
         Used {

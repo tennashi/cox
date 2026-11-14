@@ -67,7 +67,7 @@ const COMMAND: &str = "COMMAND:";
 /// [`crate::agent::setup::RUNS_OR_WRITES`], and one that runs the
 /// project's tests is given only what picks them, as
 /// [`crate::agent::setup::PICKS`] says, or nothing.
-pub(crate) const ALLOWED: &[&str] = &[
+pub const ALLOWED: &[&str] = &[
     "read:*",
     "search:*",
     "execute:ls",
@@ -365,7 +365,7 @@ mod tests {
 
     use super::*;
     use crate::agent::setup::{Asked, Decision};
-    use coxd::testing::TempDir;
+    use crate::testing::TempDir;
 
     #[test]
     fn the_verdict_is_the_replys_last_line() {

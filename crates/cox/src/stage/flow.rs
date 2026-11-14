@@ -1,5 +1,5 @@
 //! A tab of the stage that shows the flow of one tool call through Cox,
-//! read from what Cox kept of the run (see [`crate::logs::flow`]), for the
+//! read from what Cox kept of the run (see [`coxd::logs::flow`]), for the
 //! human to see how the parts of Cox pass the call on before they read
 //! the code. The parts are lanes across the tab: the agent's process,
 //! Cox's thread for the agent, the chat's tool server, and the window.
@@ -26,11 +26,11 @@ use gpui::{
     ScrollHandle, StyledText, Task, Window, div, prelude::*, px, rgb,
 };
 
-use crate::logs::flow::{self, Lane, Step};
 use crate::stage::heading::{INSET, body, card, heading, note};
 use crate::stage::tab::Shows;
 use crate::ui::markdown;
 use crate::vim::hints::Hinted as _;
+use coxd::logs::flow::{self, Lane, Step};
 use coxd::theme::{ACCENT, BORDER, CODE, DIM, FAILED, FAINT, FOREGROUND, HOVER, LINK, RAISED};
 
 pub(crate) const KEY_CONTEXT: &str = "Flow";
