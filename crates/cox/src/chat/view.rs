@@ -53,7 +53,7 @@ use gpui::{
 };
 
 use crate::agents::Agents;
-use crate::chat::conversation::{Answer, Conversation, GOAL_TURNS, Goal, Patch, State};
+use crate::chat::conversation::{Answer, Conversation, GOAL_TURNS, Goal, Patch, Proposed, State};
 use crate::chat::region::{self, AddRegionToChat, Described};
 use crate::chat::sketch::Sketch;
 use crate::daemon::Link;
@@ -569,50 +569,10 @@ impl ChatView {
         }
     }
 
-    /// The human answered the goal proposed at `index`: set it as it is,
-    /// or let it be.
+    /// The human answered what was proposed at `index`: carry it out, or
+    /// let it be.
     fn answer_proposal(&mut self, index: usize, answer: Answer, _: &mut Context<Self>) {
         self.tell(ToDaemon::AnswerProposal {
-            key: self.key,
-            index,
-            answer,
-        });
-    }
-
-    /// The human answered the project proposed at `index`: make it, the
-    /// chat moving into it, or let it be.
-    fn answer_project_proposal(&mut self, index: usize, answer: Answer, _: &mut Context<Self>) {
-        self.tell(ToDaemon::AnswerProjectProposal {
-            key: self.key,
-            index,
-            answer,
-        });
-    }
-
-    /// The human answered the name proposed at `index` for the project:
-    /// rename it so, or let it be.
-    fn answer_name_proposal(&mut self, index: usize, answer: Answer, _: &mut Context<Self>) {
-        self.tell(ToDaemon::AnswerNameProposal {
-            key: self.key,
-            index,
-            answer,
-        });
-    }
-
-    /// The human answered what the project is as proposed at `index`:
-    /// set it, or let it be.
-    fn answer_about_proposal(&mut self, index: usize, answer: Answer, _: &mut Context<Self>) {
-        self.tell(ToDaemon::AnswerAboutProposal {
-            key: self.key,
-            index,
-            answer,
-        });
-    }
-
-    /// The human answered the icon proposed at `index` for the project:
-    /// set it, or let it be.
-    fn answer_icon_proposal(&mut self, index: usize, answer: Answer, _: &mut Context<Self>) {
-        self.tell(ToDaemon::AnswerIconProposal {
             key: self.key,
             index,
             answer,
@@ -638,7 +598,7 @@ impl ChatView {
     /// Opens the input that sets the goal on the goal proposed at `index`,
     /// for the human to change it before they set it.
     fn change_proposal(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(goal) = self.conversation.proposed(index) {
+        if let Some(goal) = self.conversation.proposed(index).and_then(Proposed::goal) {
             self.open_goal_input(&goal.input(), Some(index), window, cx);
         }
     }

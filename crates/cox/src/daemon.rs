@@ -1319,26 +1319,12 @@ impl Daemon {
                 }
             }
             ToDaemon::AnswerProposal { key, index, answer } => {
-                if let Some(chat) = self.chat(key) {
-                    chat.answer_proposal(index, answer);
-                }
+                self.answer_proposal(key, index, answer);
             }
             ToDaemon::ChangeProposal { key, index, goal } => {
                 if let Some(chat) = self.chat(key) {
                     chat.change_proposal(index, goal);
                 }
-            }
-            ToDaemon::AnswerNameProposal { key, index, answer } => {
-                self.answer_name_proposal(key, index, answer);
-            }
-            ToDaemon::AnswerAboutProposal { key, index, answer } => {
-                self.answer_about_proposal(key, index, answer);
-            }
-            ToDaemon::AnswerIconProposal { key, index, answer } => {
-                self.answer_icon_proposal(key, index, answer);
-            }
-            ToDaemon::AnswerProjectProposal { key, index, answer } => {
-                self.answer_project_proposal(key, index, answer);
             }
             ToDaemon::AnswerKeep { key, index, keep } => {
                 let keeps = self

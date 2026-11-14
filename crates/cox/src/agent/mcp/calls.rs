@@ -1518,6 +1518,15 @@ async fn show_media(
     ))
 }
 
+/// Why the agent proposes what `arguments` propose, if it said.
+fn why(arguments: &Value) -> Result<Option<String>, String> {
+    match arguments.get("why") {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(why)) => Ok(Some(why.clone())),
+        Some(_) => Err("`why` is not a string".to_owned()),
+    }
+}
+
 /// Asks the window to show the human the goal `arguments` propose, and
 /// tells the agent the goal the chat has now.
 async fn propose_goal(
@@ -1529,11 +1538,7 @@ async fn propose_goal(
         .and_then(Value::as_str)
         .and_then(Goal::parse)
         .ok_or("no goal: give the goal to propose as `goal`")?;
-    let why = match arguments.get("why") {
-        None | Some(Value::Null) => None,
-        Some(Value::String(why)) => Some(why.clone()),
-        Some(_) => return Err("`why` is not a string".to_owned()),
-    };
+    let why = why(arguments)?;
     let (answer, now) = oneshot::channel();
     chats
         .send(ChatRequest::ProposeGoal { goal, why, answer })
@@ -1567,11 +1572,7 @@ async fn propose_name(
         .filter(|name| !name.is_empty())
         .ok_or("no name: give the name to propose as `name`")?
         .to_owned();
-    let why = match arguments.get("why") {
-        None | Some(Value::Null) => None,
-        Some(Value::String(why)) => Some(why.clone()),
-        Some(_) => return Err("`why` is not a string".to_owned()),
-    };
+    let why = why(arguments)?;
     let (answer, now) = oneshot::channel();
     chats
         .send(ChatRequest::ProposeName { name, why, answer })
@@ -1600,11 +1601,7 @@ async fn propose_icon(
         .filter(|path| !path.is_empty())
         .ok_or("no path: give the picture to make the icon of as `path`")?
         .to_owned();
-    let why = match arguments.get("why") {
-        None | Some(Value::Null) => None,
-        Some(Value::String(why)) => Some(why.clone()),
-        Some(_) => return Err("`why` is not a string".to_owned()),
-    };
+    let why = why(arguments)?;
     let from = cwd.join(&path);
     // Drawing an SVG loads the system's fonts, which takes a while.
     let file = tokio::task::spawn_blocking(move || crate::project_icon::propose(&from))
@@ -1664,11 +1661,7 @@ async fn propose_about(
         .filter(|about| !about.is_empty())
         .ok_or("nothing to propose: give what the project is as `about`")?
         .to_owned();
-    let why = match arguments.get("why") {
-        None | Some(Value::Null) => None,
-        Some(Value::String(why)) => Some(why.clone()),
-        Some(_) => return Err("`why` is not a string".to_owned()),
-    };
+    let why = why(arguments)?;
     let (answer, now) = oneshot::channel();
     chats
         .send(ChatRequest::ProposeAbout { about, why, answer })
@@ -1702,11 +1695,7 @@ async fn propose_project(
         .filter(|name| !name.is_empty())
         .ok_or("no name: give the project's name as `name`")?
         .to_owned();
-    let why = match arguments.get("why") {
-        None | Some(Value::Null) => None,
-        Some(Value::String(why)) => Some(why.clone()),
-        Some(_) => return Err("`why` is not a string".to_owned()),
-    };
+    let why = why(arguments)?;
     // The sketch by its name, or by its chat's number, as Cox says it.
     let sketch = match arguments.get("sketch") {
         None | Some(Value::Null) => None,

@@ -1207,10 +1207,6 @@ fn done_on_the_page(message: &mut ToDaemon) -> Option<Done<'_>> {
         | ToDaemon::SetGoal { key, .. }
         | ToDaemon::AnswerProposal { key, .. }
         | ToDaemon::ChangeProposal { key, .. }
-        | ToDaemon::AnswerNameProposal { key, .. }
-        | ToDaemon::AnswerAboutProposal { key, .. }
-        | ToDaemon::AnswerIconProposal { key, .. }
-        | ToDaemon::AnswerProjectProposal { key, .. }
         | ToDaemon::AnswerKeep { key, .. }
         | ToDaemon::Merge { key }
         | ToDaemon::Set { key, .. }

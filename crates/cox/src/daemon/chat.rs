@@ -24,8 +24,8 @@ use crate::agent::setup::Setup;
 use crate::agent::{Agent, AgentEvent, AgentThread, Command};
 use crate::agents::Agents;
 use crate::chat::conversation::{
-    self, Answer, Came, Conversation, Does, Due, Entry, Gathered, Goal, LoginOption, Patch, State,
-    TerminalLogin,
+    self, Answer, Came, Conversation, Does, Due, Entry, Gathered, Goal, LoginOption, Patch,
+    Proposed, State, TerminalLogin,
 };
 use crate::chat::judge::{Heard, Judge, Starts};
 use crate::daemon::Internal;
@@ -1302,25 +1302,32 @@ impl Chat {
     /// Shows `goal`, which the agent proposes, on a card in the
     /// conversation, with `why`, and answers the goal the chat has now.
     pub fn propose_goal(&mut self, goal: &goal::Goal, why: Option<String>) -> Option<goal::Goal> {
-        self.conversation.propose(goal, why);
+        self.propose(Proposed::Goal(goal.input()), why);
         self.conversation.goal().map(|goal| goal.what().clone())
     }
 
-    /// The human answered the goal proposed at `index`: set it as it is,
-    /// or let it be.
+    /// Shows what the agent proposes, `proposed`, on a card in the
+    /// conversation, with `why`.
+    pub fn propose(&mut self, proposed: Proposed, why: Option<String>) {
+        self.conversation.propose(proposed, why);
+    }
+
+    /// What was proposed at `index`, while the human has not answered it.
+    #[must_use]
+    pub fn proposed(&self, index: usize) -> Option<Proposed> {
+        self.conversation.proposed(index).cloned()
+    }
+
+    /// The human answered what was proposed at `index`, as `answer` says
+    /// they did; carrying it out is the caller's.
     pub fn answer_proposal(&mut self, index: usize, answer: Answer) {
-        let Some(goal) = self.conversation.answer_proposal(index, answer) else {
-            return;
-        };
-        if answer == Answer::Set {
-            self.set_goal(Some(goal));
-        }
+        self.conversation.answer_proposal(index, answer);
     }
 
     /// The human changed the goal proposed at `index` into `goal`, and set
     /// it.
     pub fn change_proposal(&mut self, index: usize, goal: goal::Goal) {
-        let Some(proposed) = self.conversation.proposed(index) else {
+        let Some(proposed) = self.proposed(index).as_ref().and_then(Proposed::goal) else {
             return;
         };
         let answer = if proposed == goal {
@@ -1330,91 +1337,6 @@ impl Chat {
         };
         self.conversation.answer_proposal(index, answer);
         self.set_goal(Some(goal));
-    }
-
-    /// Shows `name`, which the agent proposes for the chat's project, on
-    /// a card in the conversation, with `why`.
-    pub fn propose_name(&mut self, name: &str, why: Option<String>) {
-        self.conversation.propose_name(name, why);
-    }
-
-    /// The name proposed at `index`, while the human has not answered it.
-    #[must_use]
-    pub fn proposed_name(&self, index: usize) -> Option<String> {
-        self.conversation.proposed_name(index).map(str::to_owned)
-    }
-
-    /// The human answered the name proposed at `index`: renamed the
-    /// project so, or let it be.
-    pub fn answer_name_proposal(&mut self, index: usize, answer: Answer) {
-        self.conversation.answer_name_proposal(index, answer);
-    }
-
-    /// Shows the project named `name`, which the agent proposes to make of
-    /// the chat, on a card in the conversation, with `why`, and the sketch
-    /// that goes into it, `sketch`, its name and folder, if any.
-    pub fn propose_project(
-        &mut self,
-        name: &str,
-        why: Option<String>,
-        sketch: Option<(String, PathBuf)>,
-    ) {
-        self.conversation.propose_project(name, why, sketch);
-    }
-
-    /// The project proposed at `index`, its name and the folder of the
-    /// sketch that goes into it, if any, while the human has not answered
-    /// it.
-    #[must_use]
-    pub fn proposed_project(&self, index: usize) -> Option<(String, Option<PathBuf>)> {
-        self.conversation
-            .proposed_project(index)
-            .map(|(name, sketch)| (name.to_owned(), sketch.map(Path::to_path_buf)))
-    }
-
-    /// The human answered the project proposed at `index`: made it, or let
-    /// it be.
-    pub fn answer_project_proposal(&mut self, index: usize, answer: Answer) {
-        self.conversation.answer_project_proposal(index, answer);
-    }
-
-    /// Shows `about`, what the agent proposes the chat's project is, on a
-    /// card in the conversation, with `why`.
-    pub fn propose_about(&mut self, about: &str, why: Option<String>) {
-        self.conversation.propose_about(about, why);
-    }
-
-    /// What the project is as proposed at `index`, while the human has
-    /// not answered it.
-    #[must_use]
-    pub fn proposed_about(&self, index: usize) -> Option<String> {
-        self.conversation.proposed_about(index).map(str::to_owned)
-    }
-
-    /// The human answered what the project is as proposed at `index`: set
-    /// it, or let it be.
-    pub fn answer_about_proposal(&mut self, index: usize, answer: Answer) {
-        self.conversation.answer_about_proposal(index, answer);
-    }
-
-    /// Shows the icon kept as `file`, which the agent proposes for the
-    /// chat's project, made from the picture at `from`, on a card in the
-    /// conversation, with `why`.
-    pub fn propose_icon(&mut self, file: &str, from: &str, why: Option<String>) {
-        self.conversation.propose_icon(file, from, why);
-    }
-
-    /// The icon proposed at `index`, by the name of the copy Cox keeps of
-    /// it, while the human has not answered it.
-    #[must_use]
-    pub fn proposed_icon(&self, index: usize) -> Option<String> {
-        self.conversation.proposed_icon(index).map(str::to_owned)
-    }
-
-    /// The human answered the icon proposed at `index`: set it, or let it
-    /// be.
-    pub fn answer_icon_proposal(&mut self, index: usize, answer: Answer) {
-        self.conversation.answer_icon_proposal(index, answer);
     }
 
     /// The human chose, on the card at `index`, whether to keep what a

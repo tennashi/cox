@@ -11,7 +11,7 @@ use cox_core::store::ProjectId;
 
 use super::wire::FromDaemon;
 use super::{Daemon, working};
-use crate::chat::conversation::{Entry, State};
+use crate::chat::conversation::{Entry, Proposed, State};
 use crate::chat::sketch::{self, Sketch};
 use crate::storage;
 
@@ -149,7 +149,7 @@ impl Daemon {
             .map_or_else(String::new, |name| name.to_string_lossy().into_owned());
         self.chat(key)
             .ok_or("the chat has closed")?
-            .propose_name(name, why);
+            .propose(Proposed::Name(name.to_owned()), why);
         Ok(now)
     }
 
@@ -191,7 +191,7 @@ impl Daemon {
         let now = self.projects[project].about.clone();
         self.chat(key)
             .ok_or("the chat has closed")?
-            .propose_about(about.trim(), why);
+            .propose(Proposed::About(about.trim().to_owned()), why);
         Ok(now)
     }
 
@@ -211,88 +211,91 @@ impl Daemon {
             .id
             .ok_or("This chat is in no project: Cox's own chats have no icon to propose.")?;
         let has = crate::project_icon::path(id).is_some_and(|path| path.is_file());
+        let proposed = Proposed::Icon {
+            file: file.to_owned(),
+            from: from.to_owned(),
+        };
         self.chat(key)
             .ok_or("the chat has closed")?
-            .propose_icon(file, from, why);
+            .propose(proposed, why);
         Ok(has)
     }
 
-    /// The human answered the icon proposed at `index` for the project of
-    /// the chat `key`: gives the project it, in place of the one it had,
-    /// and has the window draw it, or lets it be.
-    pub(super) fn answer_icon_proposal(&mut self, key: u64, index: usize, answer: Answer) {
-        let Some(project) = self.slot(key).map(|slot| slot.project) else {
+    /// The human answered what was proposed at `index` in the chat `key`:
+    /// lets it be, or carries it out, as its kind says.
+    pub(super) fn answer_proposal(&mut self, key: u64, index: usize, answer: Answer) {
+        let Some(chat) = self.chat(key) else {
             return;
         };
-        let Some(file) = self.chat(key).and_then(|chat| chat.proposed_icon(index)) else {
-            return;
-        };
-        let answer = match answer {
-            Answer::Dismissed => Answer::Dismissed,
-            Answer::Set | Answer::Changed => Answer::Set,
-        };
-        if answer == Answer::Set {
-            let Some(id) = self.projects[project].id else {
-                return;
-            };
-            if let Err(error) = crate::project_icon::set_proposed(id, &file) {
-                tracing::error!("the project's icon is not set: {error:#}");
-                return;
-            }
-            self.tell(FromDaemon::Icon { project: id });
-        }
-        if let Some(chat) = self.chat(key) {
-            chat.answer_icon_proposal(index, answer);
-        }
-    }
-
-    /// The human answered what the project of the chat `key` is, as
-    /// proposed at `index`: sets it, or lets it be.
-    pub(super) fn answer_about_proposal(&mut self, key: u64, index: usize, answer: Answer) {
-        let Some(project) = self.slot(key).map(|slot| slot.project) else {
-            return;
-        };
-        let Some(about) = self.chat(key).and_then(|chat| chat.proposed_about(index)) else {
-            return;
-        };
-        let answer = match answer {
-            Answer::Dismissed => Answer::Dismissed,
-            Answer::Set | Answer::Changed => Answer::Set,
-        };
-        if let Some(chat) = self.chat(key) {
-            chat.answer_about_proposal(index, answer);
-        }
-        if answer == Answer::Set && project != 0 {
-            self.set_about(project, &about);
-        }
-    }
-
-    /// The human answered the name proposed at `index` in the chat `key`
-    /// for its project: renames it so, or lets it be; or, when it cannot
-    /// be renamed so, notes why, the card staying for them to answer.
-    pub(super) fn answer_name_proposal(&mut self, key: u64, index: usize, answer: Answer) {
-        let Some(project) = self.slot(key).map(|slot| slot.project) else {
-            return;
-        };
-        let Some(name) = self.chat(key).and_then(|chat| chat.proposed_name(index)) else {
+        let Some(proposed) = chat.proposed(index) else {
             return;
         };
         if answer == Answer::Dismissed {
-            if let Some(chat) = self.chat(key) {
-                chat.answer_name_proposal(index, answer);
-            }
+            chat.answer_proposal(index, answer);
             return;
         }
-        if let Err(why) = self.renamed(project, &name) {
+        match proposed {
+            Proposed::Goal(_) => {
+                let Some(goal) = proposed.goal() else {
+                    return;
+                };
+                chat.answer_proposal(index, answer);
+                if answer == Answer::Set {
+                    chat.set_goal(Some(goal));
+                }
+            }
+            Proposed::Name(name) => self.rename_as_proposed(key, index, &name),
+            Proposed::About(about) => {
+                chat.answer_proposal(index, Answer::Set);
+                let project = self.slot(key).map_or(0, |slot| slot.project);
+                if project != 0 {
+                    self.set_about(project, &about);
+                }
+            }
+            Proposed::Icon { file, .. } => self.set_icon_as_proposed(key, index, &file),
+            Proposed::Project { name, sketch, .. } => {
+                self.make_project_as_proposed(key, index, &name, sketch);
+            }
+        }
+    }
+
+    /// Gives the project of the chat `key` the icon proposed at `index`,
+    /// kept as `file`, in place of the one it had, and has the window draw
+    /// it; the card stays when it cannot.
+    fn set_icon_as_proposed(&mut self, key: u64, index: usize, file: &str) {
+        let Some(project) = self.slot(key).map(|slot| slot.project) else {
+            return;
+        };
+        let Some(id) = self.projects[project].id else {
+            return;
+        };
+        if let Err(error) = crate::project_icon::set_proposed(id, file) {
+            tracing::error!("the project's icon is not set: {error:#}");
+            return;
+        }
+        self.tell(FromDaemon::Icon { project: id });
+        if let Some(chat) = self.chat(key) {
+            chat.answer_proposal(index, Answer::Set);
+        }
+    }
+
+    /// Renames the project of the chat `key` `name`, as proposed at
+    /// `index`; or, when it cannot be renamed so, notes why, the card
+    /// staying for the human to answer.
+    fn rename_as_proposed(&mut self, key: u64, index: usize, name: &str) {
+        let Some(project) = self.slot(key).map(|slot| slot.project) else {
+            return;
+        };
+        if let Err(why) = self.renamed(project, name) {
             if let Some(chat) = self.chat(key) {
                 chat.note(format!("The project is not renamed {name}: {why}"));
             }
             return;
         }
         if let Some(chat) = self.chat(key) {
-            chat.answer_name_proposal(index, Answer::Set);
+            chat.answer_proposal(index, Answer::Set);
         }
-        if let Err(why) = self.rename(project, &name)
+        if let Err(why) = self.rename(project, name)
             && let Some(chat) = self.chat(key)
         {
             chat.note(format!("The project is not renamed {name}: {why}"));
@@ -321,9 +324,15 @@ impl Daemon {
                 .zip(self.slot(key))
                 .map(|(folder, slot)| (slot.name.clone(), folder)),
         };
+        let (sketch_name, sketch) = sketch.unzip();
+        let proposed = Proposed::Project {
+            name: name.to_owned(),
+            sketch,
+            sketch_name,
+        };
         self.chat(key)
             .ok_or("the chat has closed")?
-            .propose_project(name, why, sketch);
+            .propose(proposed, why);
         Ok(folder)
     }
 
@@ -441,23 +450,18 @@ impl Daemon {
             })
     }
 
-    /// The human answered the project proposed at `index` in the chat
-    /// `key`: makes it, the chats it takes moving into it (see
-    /// [`Self::family`]), or
-    /// lets it be; or, when it cannot be made, notes why, the card staying
-    /// for them to answer.
-    pub(super) fn answer_project_proposal(&mut self, key: u64, index: usize, answer: Answer) {
-        let Some((name, sketch)) = self.chat(key).and_then(|chat| chat.proposed_project(index))
-        else {
-            return;
-        };
-        if answer == Answer::Dismissed {
-            if let Some(chat) = self.chat(key) {
-                chat.answer_project_proposal(index, answer);
-            }
-            return;
-        }
-        let made = self.made_project(key, &name).and_then(|folder| {
+    /// Makes the project named `name` proposed at `index` in the chat
+    /// `key`, for the sketch in `sketch`, if any, the chats it takes moving
+    /// into it (see [`Self::family`]); or, when it cannot be made, notes
+    /// why, the card staying for the human to answer.
+    fn make_project_as_proposed(
+        &mut self,
+        key: u64,
+        index: usize,
+        name: &str,
+        sketch: Option<PathBuf>,
+    ) {
+        let made = self.made_project(key, name).and_then(|folder| {
             let sketch = match sketch {
                 None => None,
                 Some(folder) => Some(
@@ -498,9 +502,9 @@ impl Daemon {
             }
         };
         if let Some(chat) = self.chat(key) {
-            chat.answer_project_proposal(index, Answer::Set);
+            chat.answer_proposal(index, Answer::Set);
         }
-        if let Err(why) = self.make_project_of(key, &name, &folder, sketch)
+        if let Err(why) = self.make_project_of(key, name, &folder, sketch)
             && let Some(chat) = self.chat(key)
         {
             chat.note(format!("The project {name} is not made: {why}"));

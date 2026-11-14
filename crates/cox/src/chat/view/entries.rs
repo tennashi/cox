@@ -23,8 +23,8 @@ use cox_core::entry::MediaKind;
 use cox_core::goal::Goal;
 
 use crate::chat::conversation::{
-    self, Answer, Attachment, Check, CheckState, Content, Entry, LoginOption, State, Step,
-    StepState, ToolCallResult,
+    self, Answer, Attachment, Check, CheckState, Content, Entry, LoginOption, Proposal, Proposed,
+    State, Step, StepState, ToolCallResult,
 };
 use crate::chat::view::ChatView;
 use crate::ui::ellipsis::ellipsis;
@@ -858,43 +858,7 @@ impl ChatView {
             Entry::PlanChanged { added, removed } => {
                 render_drift(index, added, removed, &mut writer)
             }
-            Entry::Proposal { goal, why, answer } => {
-                render_proposal(index, goal, why.as_deref(), *answer, &mut writer, cx)
-            }
-            Entry::NameProposal { name, why, answer } => {
-                render_name_proposal(index, name, why.as_deref(), *answer, &mut writer, cx)
-            }
-            Entry::AboutProposal { about, why, answer } => {
-                render_about_proposal(index, about, why.as_deref(), *answer, &mut writer, cx)
-            }
-            Entry::IconProposal {
-                file,
-                from,
-                why,
-                answer,
-            } => render_icon_proposal(
-                index,
-                (file, from),
-                why.as_deref(),
-                *answer,
-                &mut writer,
-                cx,
-            ),
-            Entry::ProjectProposal {
-                name,
-                why,
-                sketch_name,
-                answer,
-                ..
-            } => render_project_proposal(
-                index,
-                name,
-                why.as_deref(),
-                sketch_name.as_deref(),
-                *answer,
-                &mut writer,
-                cx,
-            ),
+            Entry::Proposal(proposal) => render_proposal(index, proposal, &mut writer, cx),
             Entry::Keep { why, kept, .. } => render_keep(index, why, *kept, &mut writer, cx),
             Entry::Media {
                 file,
@@ -1366,149 +1330,6 @@ fn card_head(mark: &'static str, tone: Tone, what: impl IntoElement) -> gpui::Di
         .child(div().flex_1().min_w_0().child(what))
 }
 
-/// A goal the agent proposed: while the human has not answered it, a
-/// card with why the agent proposes it, and buttons to set it, to
-/// change it first, or to let it be; then a line that says what they
-/// did.
-fn render_proposal(
-    index: usize,
-    goal: &str,
-    why: Option<&str>,
-    answer: Option<Answer>,
-    writer: &mut Writer,
-    cx: &mut Context<ChatView>,
-) -> AnyElement {
-    let read = Goal::parse(goal).map_or_else(|| goal.to_owned(), |goal| conversation::line(&goal));
-    let title = format!("Proposed goal: {read}");
-    if let Some(answer) = answer {
-        let answer = match answer {
-            Answer::Set => "set",
-            Answer::Changed => "changed, and set",
-            Answer::Dismissed => "let be",
-        };
-        return line_of(index, None, ("◎", LINK), &title, writer)
-            .debug_selector(move || format!("proposal-{index}"))
-            .child(div().flex_shrink_0().text_color(rgb(DIM)).child(answer))
-            .into_any_element();
-    }
-    let button = |name: &'static str, label: &'static str, first: bool| {
-        let id = format!("{name}-{index}");
-        answer_button(
-            SharedString::from(id.clone()),
-            id,
-            label,
-            first,
-            OFFERING_TONE,
-        )
-    };
-    let buttons = [
-        button("set-goal", "Set goal", true).on_hint_click(cx.listener(move |view, _, _, cx| {
-            view.answer_proposal(index, Answer::Set, cx);
-        })),
-        button("change-goal", "Change…", false).on_hint_click(cx.listener(
-            move |view, _, window, cx| {
-                view.change_proposal(index, window, cx);
-            },
-        )),
-        button("dismiss-goal", "Dismiss", false).on_hint_click(cx.listener(
-            move |view, _, _, cx| {
-                view.answer_proposal(index, Answer::Dismissed, cx);
-            },
-        )),
-    ];
-    let shows = [
-        Some(writer.markdown(&read).into_any_element()),
-        why.map(|why| {
-            div()
-                .text_size(px(12.))
-                .text_color(rgb(DIM))
-                .child(writer.markdown(why))
-                .into_any_element()
-        }),
-    ];
-    answer_card(
-        OFFERING_TONE,
-        card_head("◎", OFFERING_TONE, "Proposed goal"),
-        "for you to set",
-        shows.into_iter().flatten(),
-        buttons,
-    )
-    .debug_selector(move || format!("proposal-{index}"))
-    .into_any_element()
-}
-
-/// A name the agent proposed for the project: while the human has not
-/// answered it, a card with why the agent proposes it, and buttons to
-/// rename the project so, or to let it be; then a line that says what
-/// they did.
-fn render_name_proposal(
-    index: usize,
-    name: &str,
-    why: Option<&str>,
-    answer: Option<Answer>,
-    writer: &mut Writer,
-    cx: &mut Context<ChatView>,
-) -> AnyElement {
-    let title = format!("Proposed name: {name}");
-    if let Some(answer) = answer {
-        let answer = match answer {
-            Answer::Set | Answer::Changed => "renamed",
-            Answer::Dismissed => "let be",
-        };
-        return line_of(index, None, ("✎", LINK), &title, writer)
-            .debug_selector(move || format!("name-proposal-{index}"))
-            .child(div().flex_shrink_0().text_color(rgb(DIM)).child(answer))
-            .into_any_element();
-    }
-    let button = |name: &'static str, label: &'static str, first: bool| {
-        let id = format!("{name}-{index}");
-        answer_button(
-            SharedString::from(id.clone()),
-            id,
-            label,
-            first,
-            OFFERING_TONE,
-        )
-    };
-    let buttons = [
-        button("rename-project", "Rename", true).on_hint_click(cx.listener(
-            move |view, _, _, cx| {
-                view.answer_name_proposal(index, Answer::Set, cx);
-            },
-        )),
-        button("dismiss-name", "Dismiss", false).on_hint_click(cx.listener(
-            move |view, _, _, cx| {
-                view.answer_name_proposal(index, Answer::Dismissed, cx);
-            },
-        )),
-    ];
-    let shows = [
-        Some(
-            div()
-                .text_size(px(14.))
-                .font_weight(FontWeight::SEMIBOLD)
-                .child(SharedString::from(name.to_owned()))
-                .into_any_element(),
-        ),
-        why.map(|why| {
-            div()
-                .text_size(px(12.))
-                .text_color(rgb(DIM))
-                .child(writer.markdown(why))
-                .into_any_element()
-        }),
-    ];
-    answer_card(
-        OFFERING_TONE,
-        card_head("✎", OFFERING_TONE, "Proposed name"),
-        "for the project, and its folder",
-        shows.into_iter().flatten(),
-        buttons,
-    )
-    .debug_selector(move || format!("name-proposal-{index}"))
-    .into_any_element()
-}
-
 /// How big the icon an agent proposes for its project is drawn on the
 /// card that proposes it, square.
 const PROPOSED_ICON: f32 = 64.;
@@ -1530,31 +1351,63 @@ fn icon_of(file: &str, size: f32) -> Option<AnyElement> {
     )
 }
 
-/// The icon an agent proposed for the project, kept as `file`, made from
-/// the picture at `from`: while the human has not answered it, a card
-/// that shows it as the rail would draw it, with why the agent proposes
-/// it, and buttons to set it, or to let it be; then a line that says what
-/// they did.
-fn render_icon_proposal(
+/// What the agent proposed: while the human has not answered it, a card
+/// that shows it as its kind does, with why the agent proposes it, and
+/// buttons to carry it out, to change it first, for a goal, or to let it
+/// be; then a line that says what they did.
+fn render_proposal(
     index: usize,
-    (file, from): (&str, &str),
-    why: Option<&str>,
-    answer: Option<Answer>,
+    Proposal {
+        proposed,
+        why,
+        answer,
+    }: &Proposal,
     writer: &mut Writer,
     cx: &mut Context<ChatView>,
 ) -> AnyElement {
+    let goal = match proposed {
+        Proposed::Goal(goal) => {
+            Goal::parse(goal).map_or_else(|| goal.clone(), |goal| conversation::line(&goal))
+        }
+        _ => String::new(),
+    };
+    let (mark, selector, title) = match proposed {
+        Proposed::Goal(_) => ("◎", "proposal", format!("Proposed goal: {goal}")),
+        Proposed::Name(name) => ("✎", "name-proposal", format!("Proposed name: {name}")),
+        Proposed::About(about) => (
+            "✎",
+            "about-proposal",
+            format!("What the project is: {about}"),
+        ),
+        Proposed::Icon { from, .. } => (
+            "✎",
+            "icon-proposal",
+            format!("Proposed icon, from `{from}`"),
+        ),
+        Proposed::Project { name, .. } => {
+            ("✦", "project-proposal", format!("Proposed project: {name}"))
+        }
+    };
+    let selector = move || format!("{selector}-{index}");
     if let Some(answer) = answer {
-        let title = format!("Proposed icon, from `{from}`");
-        let answer = match answer {
-            Answer::Set | Answer::Changed => "set",
-            Answer::Dismissed => "let be",
+        let done = match (proposed, answer) {
+            (_, Answer::Dismissed) => "let be",
+            (Proposed::Goal(_), Answer::Changed) => "changed, and set",
+            (Proposed::Name(_), _) => "renamed",
+            (Proposed::Project { .. }, _) => "made",
+            (Proposed::Goal(_) | Proposed::About(_) | Proposed::Icon { .. }, _) => "set",
         };
-        return line_of(index, None, ("✎", LINK), &title, writer)
-            .debug_selector(move || format!("icon-proposal-{index}"))
-            .children(icon_of(file, ANSWERED_ICON))
-            .child(div().flex_shrink_0().text_color(rgb(DIM)).child(answer))
+        let icon = match proposed {
+            Proposed::Icon { file, .. } => icon_of(file, ANSWERED_ICON),
+            _ => None,
+        };
+        return line_of(index, None, (mark, LINK), &title, writer)
+            .debug_selector(selector)
+            .children(icon)
+            .child(div().flex_shrink_0().text_color(rgb(DIM)).child(done))
             .into_any_element();
     }
+    let (head, tag, (set, set_label), dismiss) = card_words(proposed);
     let button = |name: &'static str, label: &'static str, first: bool| {
         let id = format!("{name}-{index}");
         answer_button(
@@ -1565,181 +1418,132 @@ fn render_icon_proposal(
             OFFERING_TONE,
         )
     };
-    let buttons = [
-        button("set-icon", "Set", true).on_hint_click(cx.listener(move |view, _, _, cx| {
-            view.answer_icon_proposal(index, Answer::Set, cx);
-        })),
-        button("dismiss-icon", "Dismiss", false).on_hint_click(cx.listener(
-            move |view, _, _, cx| {
-                view.answer_icon_proposal(index, Answer::Dismissed, cx);
+    let change = matches!(proposed, Proposed::Goal(_)).then(|| {
+        button("change-goal", "Change…", false).on_hint_click(cx.listener(
+            move |view, _, window, cx| {
+                view.change_proposal(index, window, cx);
             },
-        )),
-    ];
-    let shows = [
+        ))
+    });
+    let buttons = [
         Some(
-            div()
-                .flex()
-                .items_center()
-                .gap_3()
-                .children(icon_of(file, PROPOSED_ICON))
-                .child(
-                    div()
-                        .min_w_0()
-                        .text_size(px(12.))
-                        .text_color(rgb(DIM))
-                        .child(ellipsis(SharedString::from(from.to_owned()))),
-                )
-                .into_any_element(),
+            button(set, set_label, true).on_hint_click(cx.listener(move |view, _, _, cx| {
+                view.answer_proposal(index, Answer::Set, cx);
+            })),
         ),
-        why.map(|why| {
-            div()
-                .text_size(px(12.))
-                .text_color(rgb(DIM))
-                .child(writer.markdown(why))
-                .into_any_element()
-        }),
+        change,
+        Some(button(dismiss, "Dismiss", false).on_hint_click(cx.listener(
+            move |view, _, _, cx| {
+                view.answer_proposal(index, Answer::Dismissed, cx);
+            },
+        ))),
     ];
     answer_card(
         OFFERING_TONE,
-        card_head("✎", OFFERING_TONE, "Proposed icon"),
-        "for the project, on the rail",
-        shows.into_iter().flatten(),
-        buttons,
+        card_head(mark, OFFERING_TONE, head),
+        tag,
+        render_proposed(proposed, &goal, why.as_deref(), writer),
+        buttons.into_iter().flatten(),
     )
-    .debug_selector(move || format!("icon-proposal-{index}"))
+    .debug_selector(selector)
     .into_any_element()
 }
 
-/// What the agent proposed the project is: while the human has not
-/// answered it, a card with why the agent proposes it, and buttons to set
-/// it, or to let it be; then a line that says what they did.
-fn render_about_proposal(
-    index: usize,
-    about: &str,
-    why: Option<&str>,
-    answer: Option<Answer>,
-    writer: &mut Writer,
-    cx: &mut Context<ChatView>,
-) -> AnyElement {
-    if let Some(answer) = answer {
-        let title = format!("What the project is: {about}");
-        let answer = match answer {
-            Answer::Set | Answer::Changed => "set",
-            Answer::Dismissed => "let be",
-        };
-        return line_of(index, None, ("✎", LINK), &title, writer)
-            .debug_selector(move || format!("about-proposal-{index}"))
-            .child(div().flex_shrink_0().text_color(rgb(DIM)).child(answer))
-            .into_any_element();
-    }
-    let button = |name: &'static str, label: &'static str, first: bool| {
-        let id = format!("{name}-{index}");
-        answer_button(
-            SharedString::from(id.clone()),
-            id,
-            label,
-            first,
-            OFFERING_TONE,
-        )
-    };
-    let buttons = [
-        button("set-about", "Set", true).on_hint_click(cx.listener(move |view, _, _, cx| {
-            view.answer_about_proposal(index, Answer::Set, cx);
-        })),
-        button("dismiss-about", "Dismiss", false).on_hint_click(cx.listener(
-            move |view, _, _, cx| {
-                view.answer_about_proposal(index, Answer::Dismissed, cx);
-            },
-        )),
-    ];
-    let shows = [
-        Some(
-            div()
-                .text_size(px(14.))
-                .child(writer.markdown(about))
-                .into_any_element(),
+/// What the card of what was proposed says, as its kind does: its head,
+/// the tag at its right, the button that carries it out, by its name and
+/// label, and the name of the one that lets it be.
+fn card_words(
+    proposed: &Proposed,
+) -> (
+    &'static str,
+    &'static str,
+    (&'static str, &'static str),
+    &'static str,
+) {
+    match proposed {
+        Proposed::Goal(_) => (
+            "Proposed goal",
+            "for you to set",
+            ("set-goal", "Set goal"),
+            "dismiss-goal",
         ),
-        why.map(|why| {
-            div()
-                .text_size(px(12.))
-                .text_color(rgb(DIM))
-                .child(writer.markdown(why))
-                .into_any_element()
-        }),
-    ];
-    answer_card(
-        OFFERING_TONE,
-        card_head("✎", OFFERING_TONE, "About the project"),
-        "each chat is told it first",
-        shows.into_iter().flatten(),
-        buttons,
-    )
-    .debug_selector(move || format!("about-proposal-{index}"))
-    .into_any_element()
+        Proposed::Name(_) => (
+            "Proposed name",
+            "for the project, and its folder",
+            ("rename-project", "Rename"),
+            "dismiss-name",
+        ),
+        Proposed::About(_) => (
+            "About the project",
+            "each chat is told it first",
+            ("set-about", "Set"),
+            "dismiss-about",
+        ),
+        Proposed::Icon { .. } => (
+            "Proposed icon",
+            "for the project, on the rail",
+            ("set-icon", "Set"),
+            "dismiss-icon",
+        ),
+        Proposed::Project { .. } => (
+            "Proposed project",
+            "this chat moves into it",
+            ("make-project", "Make project"),
+            "dismiss-project",
+        ),
+    }
 }
 
-/// A project the agent proposed to make of the chat: while the human has
-/// not answered it, a card with why the agent proposes it, and the sketch
-/// whose files go into it, by its name, if any, and buttons to make it, the chat moving
-/// into it, or to let it be; then a line that says what they did.
-fn render_project_proposal(
-    index: usize,
-    name: &str,
+/// What the card of what was proposed shows: the goal as `goal` reads
+/// it, a name, what the project is, or the icon; then `why` the agent
+/// proposes it, if it said, and, of a project, the sketch whose files go
+/// into it, if any.
+fn render_proposed(
+    proposed: &Proposed,
+    goal: &str,
     why: Option<&str>,
-    sketch: Option<&str>,
-    answer: Option<Answer>,
     writer: &mut Writer,
-    cx: &mut Context<ChatView>,
-) -> AnyElement {
-    let title = format!("Proposed project: {name}");
-    if let Some(answer) = answer {
-        let answer = match answer {
-            Answer::Set | Answer::Changed => "made",
-            Answer::Dismissed => "let be",
-        };
-        return line_of(index, None, ("✦", LINK), &title, writer)
-            .debug_selector(move || format!("project-proposal-{index}"))
-            .child(div().flex_shrink_0().text_color(rgb(DIM)).child(answer))
-            .into_any_element();
-    }
-    let button = |name: &'static str, label: &'static str, first: bool| {
-        let id = format!("{name}-{index}");
-        answer_button(
-            SharedString::from(id.clone()),
-            id,
-            label,
-            first,
-            OFFERING_TONE,
-        )
+) -> impl Iterator<Item = AnyElement> {
+    let named = |name: &str| {
+        div()
+            .text_size(px(14.))
+            .font_weight(FontWeight::SEMIBOLD)
+            .child(SharedString::from(name.to_owned()))
+            .into_any_element()
     };
-    let buttons = [
-        button("make-project", "Make project", true).on_hint_click(cx.listener(
-            move |view, _, _, cx| {
-                view.answer_project_proposal(index, Answer::Set, cx);
-            },
-        )),
-        button("dismiss-project", "Dismiss", false).on_hint_click(cx.listener(
-            move |view, _, _, cx| {
-                view.answer_project_proposal(index, Answer::Dismissed, cx);
-            },
-        )),
-    ];
-    let shows = [
-        Some(
-            div()
-                .text_size(px(14.))
-                .font_weight(FontWeight::SEMIBOLD)
-                .child(SharedString::from(name.to_owned()))
-                .into_any_element(),
-        ),
-        why.map(|why| {
-            div()
-                .text_size(px(12.))
-                .text_color(rgb(DIM))
-                .child(writer.markdown(why))
-                .into_any_element()
-        }),
-        sketch.map(|sketch| {
+    let shown = match proposed {
+        Proposed::Goal(_) => writer.markdown(goal).into_any_element(),
+        Proposed::Name(name) | Proposed::Project { name, .. } => named(name),
+        Proposed::About(about) => div()
+            .text_size(px(14.))
+            .child(writer.markdown(about))
+            .into_any_element(),
+        Proposed::Icon { file, from } => div()
+            .flex()
+            .items_center()
+            .gap_3()
+            .children(icon_of(file, PROPOSED_ICON))
+            .child(
+                div()
+                    .min_w_0()
+                    .text_size(px(12.))
+                    .text_color(rgb(DIM))
+                    .child(ellipsis(SharedString::from(from.clone()))),
+            )
+            .into_any_element(),
+    };
+    let why = why.map(|why| {
+        div()
+            .text_size(px(12.))
+            .text_color(rgb(DIM))
+            .child(writer.markdown(why))
+            .into_any_element()
+    });
+    let sketch = match proposed {
+        Proposed::Project {
+            sketch_name: Some(sketch),
+            ..
+        } => Some(
             div()
                 .text_size(px(12.))
                 .text_color(rgb(DIM))
@@ -1747,18 +1551,11 @@ fn render_project_proposal(
                     "The files of the sketch \u{201c}{sketch}\u{201d} go into it, as its \
                      directory."
                 )))
-                .into_any_element()
-        }),
-    ];
-    answer_card(
-        OFFERING_TONE,
-        card_head("✦", OFFERING_TONE, "Proposed project"),
-        "this chat moves into it",
-        shows.into_iter().flatten(),
-        buttons,
-    )
-    .debug_selector(move || format!("project-proposal-{index}"))
-    .into_any_element()
+                .into_any_element(),
+        ),
+        _ => None,
+    };
+    [Some(shown), why, sketch].into_iter().flatten()
 }
 
 /// Cox's card asking the human whether to keep what a chat learned in

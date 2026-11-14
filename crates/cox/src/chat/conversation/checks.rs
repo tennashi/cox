@@ -27,7 +27,10 @@ use std::path::PathBuf;
 
 use cox_core::goal;
 
-use super::{Check, CheckState, Conversation, Entry, GOAL_TURNS, OUTPUT_TAIL, State, tail};
+use super::{
+    Check, CheckState, Conversation, Entry, GOAL_TURNS, OUTPUT_TAIL, Proposal, Proposed, State,
+    tail,
+};
 use crate::agent::Command;
 use crate::agent::mcp::{Ended, Ran};
 use crate::chat::judge::{self, Verdict};
@@ -603,14 +606,13 @@ impl Conversation {
         let Some(command) = judge::command_of(said) else {
             return;
         };
-        let goal = goal::Goal::Command(command);
-        let input = goal.input();
+        let goal = Proposed::Goal(goal::Goal::Command(command).input());
         let offered = self.entries.iter().any(
-            |entry| matches!(entry, Entry::Proposal { goal: proposed, .. } if *proposed == input),
+            |entry| matches!(entry, Entry::Proposal(Proposal { proposed, .. }) if *proposed == goal),
         );
         if !offered {
             self.propose(
-                &goal,
+                goal,
                 Some(
                     "The judge says this command passes just when the goal is met, so it \
                      can decide the goal in the judge's place."
@@ -1492,13 +1494,13 @@ mod tests {
         let offered = conversation
             .entries()
             .iter()
-            .position(|entry| matches!(entry, Entry::Proposal { .. }))
+            .position(|entry| matches!(entry, Entry::Proposal(_)))
             .expect("the command is offered");
         // Offered ahead of the next turn it gives.
         assert!(matches!(conversation.entries()[offered + 1], Entry::Cox(_)));
         assert_eq!(
             conversation.proposed(offered),
-            Some(goal::Goal::Command("cargo test greeting".to_owned()))
+            Some(&Proposed::Goal("$ cargo test greeting".to_owned()))
         );
 
         take_turn(&mut conversation, true);
@@ -1506,13 +1508,14 @@ mod tests {
         let offers = conversation
             .entries()
             .iter()
-            .filter(|entry| matches!(entry, Entry::Proposal { .. }))
+            .filter(|entry| matches!(entry, Entry::Proposal(_)))
             .count();
         assert_eq!(offers, 1);
 
         // Set, it is the goal, which a command checks from then on.
-        let command = conversation.answer_proposal(offered, Answer::Set).unwrap();
-        conversation.set_goal(Some(command));
+        conversation.answer_proposal(offered, Answer::Set);
+        assert_eq!(conversation.proposed(offered), None);
+        conversation.set_goal(goal::Goal::parse("$ cargo test greeting"));
         assert_eq!(
             conversation.goal().and_then(Goal::command),
             Some("cargo test greeting")

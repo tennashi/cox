@@ -28,7 +28,7 @@ use cox::notices::{AppNotices, Notices};
 use cox::ui::input::LineInput;
 use cox::workflow;
 use cox::workspace::{Chat, Workspace};
-use cox_core::entry::Answer;
+use cox_core::entry::{Answer, Proposal, Proposed};
 use cox_core::goal::Goal as KeptGoal;
 use cox_core::settings::{Choice, Setting};
 use cox_core::store::Named;
@@ -1759,7 +1759,11 @@ async fn an_agent_proposes_the_projects_name_which_the_human_renames_it_to(
             .into_iter()
             .enumerate()
             .filter_map(|(index, entry)| match entry {
-                Entry::NameProposal { name, answer, .. } => Some((index, name, answer)),
+                Entry::Proposal(Proposal {
+                    proposed: Proposed::Name(name),
+                    answer,
+                    ..
+                }) => Some((index, name, answer)),
                 _ => None,
             })
             .collect::<Vec<_>>()
@@ -1817,7 +1821,7 @@ async fn a_chat_in_no_project_has_no_name_to_propose(cx: &mut TestAppContext) {
     assert!(
         !shown_entries(cx, &workspace)
             .iter()
-            .any(|entry| matches!(entry, Entry::NameProposal { .. }))
+            .any(|entry| matches!(entry, Entry::Proposal(_)))
     );
 }
 
@@ -1931,7 +1935,11 @@ async fn an_agent_proposes_what_the_project_is_which_the_next_chats_are_told(
             .into_iter()
             .enumerate()
             .filter_map(|(index, entry)| match entry {
-                Entry::AboutProposal { about, answer, .. } => Some((index, about, answer)),
+                Entry::Proposal(Proposal {
+                    proposed: Proposed::About(about),
+                    answer,
+                    ..
+                }) => Some((index, about, answer)),
                 _ => None,
             })
             .collect::<Vec<_>>()
@@ -2021,7 +2029,11 @@ async fn an_agent_proposes_an_icon_which_the_project_has_once_the_human_sets_it(
             .into_iter()
             .enumerate()
             .filter_map(|(index, entry)| match entry {
-                Entry::IconProposal { answer, .. } => Some((index, answer)),
+                Entry::Proposal(Proposal {
+                    proposed: Proposed::Icon { .. },
+                    answer,
+                    ..
+                }) => Some((index, answer)),
                 _ => None,
             })
             .collect::<Vec<_>>()
@@ -2119,7 +2131,15 @@ impl Sketched {
         shown_entries(cx, &self.workspace)
             .iter()
             .enumerate()
-            .filter(|(_, entry)| matches!(entry, Entry::ProjectProposal { .. }))
+            .filter(|(_, entry)| {
+                matches!(
+                    entry,
+                    Entry::Proposal(Proposal {
+                        proposed: Proposed::Project { .. },
+                        ..
+                    })
+                )
+            })
             .nth(nth)
             .expect("the card is shown")
             .0
@@ -2187,11 +2207,15 @@ async fn a_proposed_project_shows_on_a_card_and_the_agent_hears_where_it_is_to_b
     let cards: Vec<(Option<PathBuf>, Option<String>)> = shown_entries(cx, &sketched.workspace)
         .into_iter()
         .filter_map(|entry| match entry {
-            Entry::ProjectProposal {
-                sketch,
-                sketch_name,
+            Entry::Proposal(Proposal {
+                proposed:
+                    Proposed::Project {
+                        sketch,
+                        sketch_name,
+                        ..
+                    },
                 ..
-            } => Some((sketch, sketch_name)),
+            }) => Some((sketch, sketch_name)),
             _ => None,
         })
         .collect();
@@ -2222,10 +2246,11 @@ async fn dismissing_a_proposed_project_makes_nothing(cx: &mut TestAppContext) {
     assert!(
         matches!(
             &entries[card],
-            Entry::ProjectProposal {
+            Entry::Proposal(Proposal {
+                proposed: Proposed::Project { .. },
                 answer: Some(Answer::Dismissed),
                 ..
-            }
+            })
         ),
         "{entries:?}"
     );
@@ -2262,10 +2287,11 @@ async fn making_a_proposed_project_moves_the_chat_and_its_sketch_into_it(cx: &mu
     assert!(
         matches!(
             &entries[card],
-            Entry::ProjectProposal {
+            Entry::Proposal(Proposal {
+                proposed: Proposed::Project { .. },
                 answer: Some(Answer::Set),
                 ..
-            }
+            })
         ),
         "{entries:?}"
     );
@@ -2330,8 +2356,10 @@ async fn a_sketch_proposes_a_project_of_what_it_made_with_the_chat_it_was_opened
     let at = shown_entries(cx, &workspace)
         .iter()
         .position(|entry| {
-            matches!(entry, Entry::ProjectProposal { sketch_name: Some(name), .. }
-                if *name == sketch)
+            matches!(entry, Entry::Proposal(Proposal {
+                proposed: Proposed::Project { sketch_name: Some(name), .. },
+                ..
+            }) if *name == sketch)
         })
         .expect("the card names the sketch");
     click(cx, Box::leak(format!("make-project-{at}").into_boxed_str()));
