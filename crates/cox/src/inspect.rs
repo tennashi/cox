@@ -175,7 +175,7 @@ fn answer(inquiry: Inquiry, known: &Known, root: &AnyView, window: &mut Window, 
         }
         Inquiry::Window { answer } => {
             let _ = answer.send(Placed {
-                bounds: window.bounds(),
+                bounds: crate::ui::screen::window_bounds(window, cx),
                 scale: window.scale_factor(),
             });
         }

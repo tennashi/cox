@@ -142,7 +142,7 @@ pub fn between(from: gpui::Point<Pixels>, to: gpui::Point<Pixels>) -> Option<Bou
 /// sheet to be gone from the screen first.
 pub fn take(region: Bounds<Pixels>, described: Vec<Described>, window: &Window, cx: &mut App) {
     let on_screen = Bounds {
-        origin: window.bounds().origin + region.origin,
+        origin: crate::ui::screen::window_bounds(window, cx).origin + region.origin,
         size: region.size,
     };
     let scale = window.scale_factor();

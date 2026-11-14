@@ -7,7 +7,37 @@ use std::fs;
 #[cfg(not(target_os = "macos"))]
 use std::thread;
 
-use gpui::{Bounds, Pixels};
+use gpui::{App, Bounds, Pixels, Window};
+
+/// Where `window` is on the screen, in points, as [`capture`] takes it:
+/// from the top left of the main display. gpui places a window from the
+/// top left of the display it is on, which on a display other than the
+/// main one is elsewhere.
+#[must_use]
+#[cfg(target_os = "macos")]
+pub fn window_bounds(window: &Window, cx: &App) -> Bounds<Pixels> {
+    let mut bounds = window.bounds();
+    if let Some(display) = window.display(cx) {
+        let placed = objc2_core_graphics::CGDisplayBounds(u32::from(display.id()));
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "a display is placed far within what f32 keeps"
+        )]
+        let offset = gpui::point(
+            gpui::px(placed.origin.x as f32),
+            gpui::px(placed.origin.y as f32),
+        );
+        bounds.origin += offset;
+    }
+    bounds
+}
+
+/// Where `window` is on the screen, in points, as [`capture`] takes it.
+#[must_use]
+#[cfg(not(target_os = "macos"))]
+pub fn window_bounds(window: &Window, _cx: &App) -> Bounds<Pixels> {
+    window.bounds()
+}
 
 /// The screen as it shows `bounds`, in its coordinates, in points, as a
 /// PNG: on macOS, through `screencapture`, which has to be allowed to

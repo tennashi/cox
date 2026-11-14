@@ -106,6 +106,8 @@ zip = { version = "9.3.0", default-features = false, features = ["deflate-flate2
 objc2 = "0.6.5"
 objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSApplication", "NSDockTile", "NSEvent", "NSResponder", "NSTextInputContext", "NSView", "NSWindow"] }
 objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSString", "NSUserNotification"] }
+# Where a display is, for a picture of the window: see `src/ui/screen.rs`.
+objc2-core-graphics = "0.3.2"
 
 [dev-dependencies]
 agent-client-protocol.workspace = true

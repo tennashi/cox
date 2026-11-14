@@ -54,7 +54,7 @@ pub fn describe(
         }
         None => told.push_str("The stages' pages: no DevTools\n"),
     }
-    let bounds = window.bounds();
+    let bounds = crate::ui::screen::window_bounds(window, cx);
     let _ = writeln!(
         told,
         "The window: {}×{} points at {}, {} on the screen, {} pixels a point; the keyboard is in {}",
