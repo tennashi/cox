@@ -27,6 +27,9 @@ const INSTALLED: &str = if cfg!(target_os = "macos") {
     ".local/bin/cox"
 };
 
+/// Where Homebrew puts Cox, for everyone on the Mac.
+const INSTALLED_BY_HOMEBREW: &str = "/Applications/Cox.app/Contents/MacOS/Cox";
+
 /// The folder a Cox other than the installed one keeps what lasts in,
 /// beside it.
 const BESIDE: &str = "cox-data";
@@ -336,13 +339,18 @@ fn write_whole_as(path: &Path, contents: &[u8], mode: u32) -> std::io::Result<()
     written
 }
 
-/// Where the Cox at `exe` keeps what lasts. The installed one keeps it in
+/// Where the Cox at `exe` keeps what lasts. The installed one, whether
+/// `cargo xtask install` or Homebrew put it there, keeps it in
 /// `~/Library/Application Support/Cox` on macOS, and in
 /// `$XDG_DATA_HOME/cox`, by default `~/.local/share/cox`, elsewhere. Any
 /// other keeps it in `cox-data` beside it, or beside its app on macOS,
 /// which `cargo xtask bundle` makes anew each time.
 fn root_at(exe: &Path, home: Option<&Path>, xdg_data_home: Option<OsString>) -> Option<PathBuf> {
-    let Some(home) = home.filter(|home| exe == home.join(INSTALLED)) else {
+    let installed = |home: &&Path| {
+        exe == home.join(INSTALLED)
+            || (cfg!(target_os = "macos") && exe == Path::new(INSTALLED_BY_HOMEBREW))
+    };
+    let Some(home) = home.filter(installed) else {
         return Some(outside_app(exe)?.join(BESIDE));
     };
     Some(if cfg!(target_os = "macos") {
@@ -461,6 +469,30 @@ mod tests {
         assert_eq!(
             now(root(), Kept::Stage),
             PathBuf::from("/Users/h/Library/Application Support/Cox/state/stage")
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn the_cox_homebrew_installed_keeps_the_same_as_the_one_built_and_installed() {
+        let home = Some(Path::new("/Users/h"));
+        assert_eq!(
+            now(
+                root_at(
+                    Path::new("/Applications/Cox.app/Contents/MacOS/Cox"),
+                    home,
+                    None
+                ),
+                Kept::Stage
+            ),
+            now(
+                root_at(
+                    Path::new("/Users/h/Applications/Cox.app/Contents/MacOS/Cox"),
+                    home,
+                    None
+                ),
+                Kept::Stage
+            ),
         );
     }
 
