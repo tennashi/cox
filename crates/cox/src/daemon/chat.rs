@@ -15,7 +15,7 @@ use std::path::{Path, PathBuf};
 use cox_core::entry::{Attachment, Committed};
 use cox_core::goal;
 use cox_core::store::{ChatId, Record};
-use cox_editor::commits::{self, Turn};
+use cox_git::commits::{self, Turn};
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::oneshot;
 
@@ -658,7 +658,7 @@ impl Chat {
     /// Shows the commits the agent made in the turn that ends, in the
     /// repositories of the folder it worked in, marking each in Git with
     /// the turn, when the chat is kept, for the human to find the turn from
-    /// the commit (see [`cox_editor::commits`]).
+    /// the commit (see [`cox_git::commits`]).
     fn show_commits(&mut self) {
         let Some((cwd, heads)) = self.turn_heads.take() else {
             return;

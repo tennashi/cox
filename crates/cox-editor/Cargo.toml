@@ -8,11 +8,9 @@ repository.workspace = true
 [lints]
 workspace = true
 
-[features]
-# Git run as under tests, reading no one's settings: see `src/git.rs`.
-test-support = []
-
 [dependencies]
+# The kinds of line a change has, which `src/words.rs` reads.
+cox-git.workspace = true
 # Listing a project's files as Git sees them: see
 # `src/files.rs`.
 ignore = "0.4.33"

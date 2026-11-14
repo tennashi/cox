@@ -30,6 +30,7 @@ cox-android = { path = "crates/cox-android", version = "0.0.0" }
 cox-browser = { path = "crates/cox-browser", version = "0.0.0" }
 cox-core = { path = "crates/cox-core", version = "0.0.0" }
 cox-editor = { path = "crates/cox-editor", version = "0.0.0" }
+cox-git = { path = "crates/cox-git", version = "0.0.0" }
 cox-mac = { path = "crates/cox-mac", version = "0.0.0" }
 # Exactly this release: gpui's xattr 0.2 does not build with later ones on
 # Linux. Update it once gpui moves off that xattr.

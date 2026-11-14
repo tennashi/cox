@@ -11,7 +11,7 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use cox::stage::tree::{Chosen, Tree, Wrote};
-use cox_editor::changes::How;
+use cox_git::changes::How;
 use git::git;
 use gpui::{Entity, Modifiers, TestAppContext, VisualTestContext};
 

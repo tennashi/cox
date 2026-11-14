@@ -802,7 +802,7 @@ impl Page {
         let Ok(Some(folder)) = folder.await else {
             return answer(StatusCode::NOT_FOUND, TEXT, "No such chat");
         };
-        match tokio::task::spawn_blocking(move || cox_editor::changes::read(&folder)).await {
+        match tokio::task::spawn_blocking(move || cox_git::changes::read(&folder)).await {
             Ok(Ok(diff)) => answer(
                 StatusCode::OK,
                 "application/json",
@@ -1090,8 +1090,8 @@ const MOST_LINES: usize = 4000;
 /// files changed since, and each file, with how it changed, the lines it
 /// gained and lost, and its lines, but past [`MOST_LINES`], where a file
 /// is `cut` instead.
-fn told_changes(diff: &cox_editor::changes::Diff) -> serde_json::Value {
-    use cox_editor::changes::Kind;
+fn told_changes(diff: &cox_git::changes::Diff) -> serde_json::Value {
+    use cox_git::changes::Kind;
     let mut left = MOST_LINES;
     let files: Vec<_> = diff
         .files
@@ -2135,7 +2135,7 @@ mod tests {
 
     #[test]
     fn tells_what_changed_up_to_as_many_lines_as_it_shows() {
-        use cox_editor::changes::{Diff, File, How, Kind, Line, Since};
+        use cox_git::changes::{Diff, File, How, Kind, Line, Since};
         let line = |kind, text: &str| Line {
             kind,
             old: None,

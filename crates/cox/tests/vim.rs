@@ -1529,7 +1529,7 @@ fn open_stretches<'a>(
             for file in &diff.files {
                 row += 1;
                 for line in &file.lines {
-                    if line.kind == cox_editor::changes::Kind::Stretch {
+                    if line.kind == cox_git::changes::Kind::Stretch {
                         stretches.push(row);
                     }
                     row += 1;

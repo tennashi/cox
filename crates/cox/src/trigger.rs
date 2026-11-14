@@ -1190,7 +1190,7 @@ pub fn tree(folder: &Path) -> Option<String> {
         std::fs::copy(&index, &scratch).ok()?;
     }
     let with = |args: &[&str]| {
-        let output = cox_editor::git::command()
+        let output = cox_git::git::command()
             .args(args)
             .current_dir(folder)
             .env("GIT_INDEX_FILE", &scratch)
@@ -1231,7 +1231,7 @@ pub fn changed_between(folder: &Path, from: &str, to: &str) -> Option<Vec<String
 
 /// What `git args` printed in `folder`, if it ran and passed.
 fn git(folder: &Path, args: &[&str]) -> Option<String> {
-    cox_editor::git::raw(folder, args).ok()
+    cox_git::git::raw(folder, args).ok()
 }
 
 /// A path for an index of Git's own, among the system's temporary files.

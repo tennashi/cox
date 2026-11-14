@@ -8,8 +8,8 @@ use std::path::{Path, PathBuf};
 
 use cox_core::goal::Goal;
 use cox_core::tabs::Lines;
-use cox_editor::changes::{self, Diff};
 use cox_editor::map::{self, Facts, Map, Tier};
+use cox_git::changes::{self, Diff};
 use serde_json::{Value, json};
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::oneshot;

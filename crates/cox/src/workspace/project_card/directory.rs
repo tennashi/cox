@@ -169,7 +169,7 @@ pub fn link(folder: &Path, url: &str) -> Result<Linked, String> {
 /// printed, or why it failed, as Git says it last: the line the human
 /// reads.
 fn run(folder: &Path, args: &[impl AsRef<OsStr>]) -> Result<String, String> {
-    cox_editor::git::run(folder, args).map_err(|said| {
+    cox_git::git::run(folder, args).map_err(|said| {
         said.lines()
             .map(str::trim)
             .rfind(|line| !line.is_empty())

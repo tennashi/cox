@@ -12,7 +12,7 @@
 
 use std::ops::Range;
 
-use crate::changes::Kind;
+use cox_git::changes::Kind;
 
 /// The most of a pair of lines that can have changed, in hundredths of
 /// what they hold but spaces, for the words that changed to be told.

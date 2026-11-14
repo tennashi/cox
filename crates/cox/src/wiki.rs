@@ -124,7 +124,7 @@ pub fn today() -> String {
 /// one with a commit.
 #[must_use]
 pub fn commit_of(folder: &Path) -> Option<String> {
-    cox_editor::git::run(folder, &["rev-parse", "--short", "HEAD"])
+    cox_git::git::run(folder, &["rev-parse", "--short", "HEAD"])
         .ok()
         .filter(|commit| !commit.is_empty())
 }

@@ -8,11 +8,8 @@
 //! - [`history`] is where a tab has been, to go back and forward.
 //! - [`files`] lists what is in a project's folders.
 //! - [`fuzzy`] finds a path by a few of its letters.
-//! - [`git`] runs Git on a folder's repository, asking nothing.
-//! - [`changes`] is what changed in them, as Git tells it, and
-//!   [`words`] what changed within the lines a change replaced.
-//! - [`commits`] is the commits that made the changes, each with the turn
-//!   of a chat it was made in.
+//! - [`words`] is what changed within the lines a change replaced, of
+//!   those [`cox_git::changes`] reads.
 //! - [`map`] is the project's map, in tiers, as an agent wrote it, with
 //!   what changed laid over it.
 //! - [`language`] is the languages the editor knows, and what in their
@@ -22,11 +19,8 @@
 //!   means: what a name is, and where it is defined and used.
 
 pub mod buffer;
-pub mod changes;
-pub mod commits;
 pub mod files;
 pub mod fuzzy;
-pub mod git;
 pub mod history;
 pub mod language;
 pub mod line;

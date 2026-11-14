@@ -1,6 +1,6 @@
 //! A tab of the stage that shows what changed in the files of the chat's
 //! project, or of another folder, such as a sketch the chat opened, as Git
-//! tells it (see [`cox_editor::changes`]): in a sketch, all it changed
+//! tells it (see [`cox_git::changes`]): in a sketch, all it changed
 //! since it started, and elsewhere what changed since the last commit.
 //! Each file that changed is a card that heads the lines that changed in
 //! it, with some around them, drawn in the colors of their syntax as a
@@ -15,7 +15,7 @@
 //! [`repositories`]).
 //!
 //! Beside the files, a column lists the commits of the repository shown,
-//! newest first, as [`cox_editor::commits`] reads them: under what is not
+//! newest first, as [`cox_git::commits`] reads them: under what is not
 //! committed yet, down to where they start, with everything since then
 //! as one above them. The human picks one to see what it changed, which
 //! the tab shows in place of what it shows at first: in a sketch,
@@ -39,11 +39,11 @@ use std::time::{Duration, SystemTime};
 
 use cox_core::tabs::KeptTab;
 use cox_editor::buffer::Buffer;
-use cox_editor::changes::{self, Diff, File, How, Kind, Line};
-use cox_editor::commits::{self, Base, Commit, History};
 use cox_editor::language::{Highlight, Language};
 use cox_editor::syntax::Syntax;
 use cox_editor::words;
+use cox_git::changes::{self, Diff, File, How, Kind, Line};
+use cox_git::commits::{self, Base, Commit, History};
 use gpui::{
     AnyElement, App, Context, EventEmitter, FocusHandle, Focusable, FontWeight, HighlightStyle,
     Hsla, ListAlignment, ListOffset, ListState, Pixels, ScrollWheelEvent, SharedString, StyledText,

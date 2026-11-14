@@ -16,7 +16,8 @@ use std::ops::Range;
 use std::path::Path;
 
 use cox_acp::SlashCommand;
-use cox_editor::{changes, files, fuzzy};
+use cox_editor::{files, fuzzy};
+use cox_git::changes;
 use gpui::{
     AnyElement, App, Context, Corner, Entity, Focusable, FontWeight, ScrollHandle, Subscription,
     Task, Window, anchored, deferred, div, point, prelude::*, px, rgb,
