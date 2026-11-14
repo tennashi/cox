@@ -6,7 +6,7 @@
 //!    passes on to the window.
 //! 2. The agent, working in the chat's directory, told of the two MCP
 //!    servers it starts to reach the stage's relay and the server
-//!    ([`crate::agent::spawn_known`], [`Launcher::tools`]).
+//!    ([`coxd::agent::spawn_known`], [`Launcher::tools`]).
 //!
 //! The window starts the chat's stage, and the relay to it (see
 //! [`crate::chat::launcher`]).
@@ -18,10 +18,10 @@ use std::rc::Rc;
 use cox_acp::McpServer;
 
 use super::{Spawned, Spawns};
-use crate::agent::mcp::ToolServer;
-use crate::agent::{Agent, Start};
-use crate::chat::judge::Starts;
+use coxd::agent::mcp::ToolServer;
+use coxd::agent::{Agent, Start};
 use coxd::agents::Agents;
+use coxd::chat::judge::Starts;
 
 /// Starts the agents of the chats, each with the agent it talks to: the
 /// daemon's [`Spawns`] when Cox runs.
@@ -103,7 +103,7 @@ impl Launcher {
         in_project: bool,
     ) -> Option<(PathBuf, ToolServer)> {
         let exe = self.exe.clone()?;
-        match crate::agent::mcp::start(cwd.to_owned(), only, in_project) {
+        match coxd::agent::mcp::start(cwd.to_owned(), only, in_project) {
             Ok(server) => Some((exe, server)),
             Err(error) => {
                 tracing::error!("the agent gets no tools of Cox's own: {error:#}");
@@ -122,17 +122,15 @@ impl Launcher {
         server: Option<&(PathBuf, ToolServer)>,
     ) -> Vec<McpServer> {
         relay
-            .and_then(|port| crate::agent::tools::stage(port, cwd, &self.path))
+            .and_then(|port| coxd::agent::tools::stage(port, cwd, &self.path))
             .into_iter()
-            .chain(
-                server.map(|(exe, server)| crate::agent::tools::cox(exe.clone(), &server.socket)),
-            )
+            .chain(server.map(|(exe, server)| coxd::agent::tools::cox(exe.clone(), &server.socket)))
             .collect()
     }
 
     /// Starts the agent kept as `agent` working in `cwd` with `tools`, as
     /// `start` says.
     fn spawn(&self, cwd: PathBuf, tools: Vec<McpServer>, start: Start, agent: &str) -> Agent {
-        crate::agent::spawn_known(self.agents.of(Some(agent)), cwd, tools, start)
+        coxd::agent::spawn_known(self.agents.of(Some(agent)), cwd, tools, start)
     }
 }

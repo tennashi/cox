@@ -842,7 +842,7 @@ impl Page {
         // Whether the project is in a Git repository asks Git, and the
         // workflow's endings are read from its folder.
         let told = tokio::task::spawn_blocking(move || {
-            told_sketching(sketching.as_ref(), &crate::workflow::sketch().endings)
+            told_sketching(sketching.as_ref(), &coxd::workflow::sketch().endings)
         });
         match told.await {
             Ok(told) => answer(StatusCode::OK, "application/json", told.to_string()),
@@ -964,7 +964,7 @@ impl Page {
         // A sketch ends only in a way the human's workflow says, as the
         // window's menu offers it.
         if let ToDaemon::EndSketch { ending, .. } = &message
-            && !crate::workflow::sketch().endings.contains(ending)
+            && !coxd::workflow::sketch().endings.contains(ending)
         {
             return answer(
                 StatusCode::FORBIDDEN,
@@ -1250,11 +1250,11 @@ fn place_asked(request: &Request<Incoming>) -> Option<usize> {
 /// window's menu offers them; or `{}`, neither.
 fn told_sketching(
     sketching: Option<&Sketching>,
-    endings: &[crate::workflow::Ending],
+    endings: &[coxd::workflow::Ending],
 ) -> serde_json::Value {
     match sketching {
         Some(Sketching::Starts { project }) => {
-            serde_json::json!({ "start": crate::chat::sketch::from_at_first(project) })
+            serde_json::json!({ "start": coxd::chat::sketch::from_at_first(project) })
         }
         Some(Sketching::Ends { from }) => serde_json::json!({
             "endings": endings.iter().filter(|ending| ending.ends(*from)).collect::<Vec<_>>(),
@@ -1284,7 +1284,7 @@ fn same(a: &[u8], b: &[u8]) -> bool {
 /// The icon the human gave the project kept by the number `project`, as
 /// the rail draws it, if it has one.
 fn project_icon(project: &str) -> Response<Body> {
-    match crate::project_icon::named(project).and_then(|path| std::fs::read(path).ok()) {
+    match coxd::project_icon::named(project).and_then(|path| std::fs::read(path).ok()) {
         Some(bytes) => answer(StatusCode::OK, "image/png", bytes),
         None => answer(StatusCode::NOT_FOUND, TEXT, "Not found"),
     }
@@ -2178,8 +2178,8 @@ mod tests {
 
     #[test]
     fn tells_how_a_sketch_starts_or_the_ways_it_ends() {
-        use crate::chat::sketch::Sketch;
-        let ending = |name: &str, from: Option<Sketch>, open: bool| crate::workflow::Ending {
+        use coxd::chat::sketch::Sketch;
+        let ending = |name: &str, from: Option<Sketch>, open: bool| coxd::workflow::Ending {
             name: name.to_owned(),
             from,
             sum_up: None,
@@ -2260,7 +2260,7 @@ mod tests {
         assert_eq!(
             done(ToDaemon::StartSketch {
                 key: 1,
-                sketch: crate::chat::sketch::Sketch::Empty,
+                sketch: coxd::chat::sketch::Sketch::Empty,
                 what: "a mock".to_owned(),
             }),
             May::InChat(1)

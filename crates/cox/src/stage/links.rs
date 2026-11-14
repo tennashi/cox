@@ -251,7 +251,7 @@ impl Stage {
     }
 
     /// Shows what changed in the files of the repositories of `folder`, an
-    /// absolute path (see [`crate::repositories::of`]): on its tab,
+    /// absolute path (see [`coxd::repositories::of`]): on its tab,
     /// or a new one, with the keyboard in it.
     pub(super) fn show_changes(
         &mut self,
@@ -272,7 +272,7 @@ impl Stage {
     }
 
     /// Shows what the commit `id` changed, of the repository `name` of
-    /// `folder` (see [`crate::repositories::of`]), on the tab of what
+    /// `folder` (see [`coxd::repositories::of`]), on the tab of what
     /// changed in `folder`, or a new one.
     pub fn show_commit(
         &mut self,
@@ -435,7 +435,7 @@ impl Stage {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let logs = crate::logs::directory().map(Path::to_owned);
+        let logs = coxd::logs::directory().map(Path::to_owned);
         let shown = cx.new(|cx| Flow::new(self.cwd.clone(), logs, call, cx));
         let changes = cx.observe(&shown, |stage, _, cx| stage.changed(cx));
         let opens = cx.subscribe_in(

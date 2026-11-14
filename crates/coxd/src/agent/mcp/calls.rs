@@ -1500,7 +1500,7 @@ async fn show_media(
         Some(_) => return Err("`caption` is not a string".to_owned()),
     };
     let from = cwd.join(path);
-    let shown = coxd::media::keep(&from, None)?;
+    let shown = crate::media::keep(&from, None)?;
     let (answer, done) = oneshot::channel();
     chats
         .send(ChatRequest::ShowMedia {
@@ -2306,7 +2306,7 @@ mod tests {
 
     use super::*;
     use crate::agent::mcp::{OpenedChat, Waited};
-    use coxd::testing::{TempDir, run_git};
+    use crate::testing::{TempDir, run_git};
 
     /// What the agent gets from calling the tool `name` with `arguments`
     /// in `cwd`, for a call answered right away.
@@ -3152,7 +3152,7 @@ mod tests {
         assert_eq!(why.as_deref(), Some("The teal of the shop."));
         // The card shows the icon as the rail would draw it: square, in
         // the logo's teal.
-        let (kept, _) = coxd::media::kept(&file).expect("the icon is kept");
+        let (kept, _) = crate::media::kept(&file).expect("the icon is kept");
         let icon = image::open(kept).unwrap().to_rgba8();
         assert_eq!(
             icon.dimensions(),

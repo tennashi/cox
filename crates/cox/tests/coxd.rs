@@ -11,15 +11,15 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use cox::agent::Start;
-use cox::chat::judge::Starts;
 use cox::daemon::client::{self, Connected};
 use cox::daemon::wire::{FromDaemon, Hello, ToDaemon};
 use cox::daemon::{Spawned, Spawns};
 use cox_core::entry::Attachment;
 use cox_core::store::Store;
 use cox_core::tabs::{KeptTab, KeptTabs};
+use coxd::agent::Start;
 use coxd::agents::Agents;
+use coxd::chat::judge::Starts;
 
 /// Spawns no agent: the tests start no chat's agent, and judge no goal,
 /// though a chat read from what is kept is given what would judge it.

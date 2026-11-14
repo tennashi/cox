@@ -24,7 +24,7 @@ pub fn run(data: Option<&Path>) -> ExitCode {
     if let Some(data) = data {
         coxd::storage::keep_in(data);
     }
-    crate::logs::init(coxd::storage::path(coxd::storage::Kept::Logs).as_deref());
+    coxd::logs::init(coxd::storage::path(coxd::storage::Kept::Logs).as_deref());
     coxd::scratch::sweep();
     if let coxd::login::Taken::Failed(why) = environment {
         tracing::warn!("the agents get launchd's environment, not the login shell's: {why}");
@@ -33,8 +33,8 @@ pub fn run(data: Option<&Path>) -> ExitCode {
         eprintln!("cox: there is no place for coxd's socket");
         return ExitCode::from(1);
     };
-    let saved = crate::settings::Saved::read();
-    let home = crate::settings::home_for_chats(saved.home);
+    let saved = coxd::settings::Saved::read();
+    let home = coxd::settings::home_for_chats(saved.home);
     let agents = Agents::read(Vec::new(), saved.agent.as_deref());
     agents.fetch();
     follow_agents(agents.clone());
@@ -90,7 +90,7 @@ fn follow_agents(agents: Agents) {
                 let now = stamps();
                 if now != seen {
                     seen = now;
-                    agents.reload(crate::settings::agent().as_deref());
+                    agents.reload(coxd::settings::agent().as_deref());
                 }
             }
         });

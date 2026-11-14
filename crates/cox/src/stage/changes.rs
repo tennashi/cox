@@ -9,7 +9,7 @@
 //! there, as a link to it would (see [`crate::stage`]).
 //!
 //! A project's folder is not a repository itself: its repositories are
-//! its directories (see [`crate::repositories`]). The tab of such a
+//! its directories (see [`coxd::repositories`]). The tab of such a
 //! folder shows what changed in one of them at a time, which the human
 //! chooses by its name under the heading, beside how many files changed
 //! in each.
@@ -50,7 +50,6 @@ use gpui::{
     Task, TextRun, Window, div, font, list, prelude::*, px, rgb,
 };
 
-use crate::repositories::{self, Repository};
 use crate::stage::code::syntax_style;
 use crate::stage::heading::{CARD_RADIUS, INSET, heading};
 use crate::stage::tab::Shows;
@@ -59,6 +58,7 @@ use crate::vim::hints::Hinted as _;
 use crate::vim::keymap::Motion;
 use crate::vim::{Move, NextStretch, Open, PreviousStretch};
 use coxd::paths::shortened;
+use coxd::repositories::{self, Repository};
 use coxd::theme::{
     ACCENT, ADDED_GROUND, ADDED_WORD, ASKING, BORDER, CODE_FONT, DIM, DISABLED, FAILED,
     FAILED_MARK, FAINT, FOREGROUND, HOVER, LINK, RAISED, REMOVED_GROUND, REMOVED_WORD, SELECTED,

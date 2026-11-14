@@ -17,10 +17,8 @@
 
 pub mod conversation;
 pub mod hand;
-pub mod judge;
 pub mod launcher;
 pub mod region;
-pub mod sketch;
 pub mod view;
 
 use std::path::PathBuf;
@@ -28,11 +26,11 @@ use std::path::PathBuf;
 use cox_core::tabs::KeptTabs;
 use gpui::{App, Window};
 
-use crate::agent::mcp::ToolRequest;
 use crate::chat::view::{OpenLink, StageView};
 #[cfg(doc)]
 use crate::stage::Stage;
 use cox_browser::relay::Relay;
+use coxd::agent::mcp::ToolRequest;
 
 /// What makes the chats' stages for the window: the
 /// [`CefStages`](launcher::CefStages) of the browser, or none in tests.

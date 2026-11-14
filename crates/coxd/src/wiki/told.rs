@@ -295,7 +295,7 @@ fn html_of(name: &str, body: &str, all: &[&str]) -> String {
 mod tests {
 
     use super::*;
-    use coxd::testing::TempDir;
+    use crate::testing::TempDir;
 
     /// A wiki of a test's own, with a folder of pages in it.
     fn wiki() -> TempDir {

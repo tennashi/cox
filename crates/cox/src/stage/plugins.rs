@@ -33,12 +33,12 @@
 //!   with it; and `cox://api/wiki/<page>`, a page, with its text as HTML,
 //!   and, when the human reads the wiki in a language of their own, as
 //!   HTML in that language too, as far as it is translated (see
-//!   [`crate::wiki::told`] and [`crate::translate`]).
+//!   [`coxd::wiki::told`] and [`coxd::translate`]).
 //! - `cox://api/project-wiki`: the project's own wiki, in `wiki` in
 //!   its folder, as the human's is told, and whether the folder is the
 //!   home, which has none; and `cox://api/project-wiki/<page>`, a page.
 //! - `cox://api/raw`: the sources the agents kept of what they read (see
-//!   [`crate::raw::told`]), the last kept first; and
+//!   [`coxd::raw::told`]), the last kept first; and
 //!   `cox://api/raw/<name>`, a source, as a page of the wiki is told,
 //!   with where it was read.
 //! - `cox://api/project-raw`: the project's own sources, in `raw` in
@@ -86,8 +86,8 @@ use crate::stage::calls::Calls;
 use crate::stage::lines;
 use crate::stage::map;
 use crate::stage::outline::Outlines;
-use crate::translate;
-use crate::wiki::told as wiki;
+use coxd::translate;
+use coxd::wiki::told as wiki;
 
 /// Where a project keeps its plugins, under its folder.
 const PROJECT_PLUGINS: &str = "plugins";
@@ -280,7 +280,7 @@ impl Plugins {
             "map" if rest.is_empty() => map::told(&self.root, None),
             "map" if !rest.contains('/') => map::told(&self.root, Some(&percent_decoded(rest))),
             "wiki" => {
-                let root = crate::settings::wiki();
+                let root = coxd::settings::wiki();
                 if rest.is_empty() {
                     wiki::told(&root)
                 } else {
@@ -315,12 +315,12 @@ impl Plugins {
             }
             "activity" if rest.is_empty() => crate::stage::activity::told(
                 &self.root,
-                &crate::settings::wiki(),
-                &crate::settings::raw(),
+                &coxd::settings::wiki(),
+                &coxd::settings::raw(),
                 &self.triggers(),
             ),
             "project-wiki" => {
-                let root = self.root.join(crate::wiki::PROJECT_WIKI);
+                let root = self.root.join(coxd::wiki::PROJECT_WIKI);
                 if rest.is_empty() {
                     let mut told = wiki::told(&root);
                     told["home"] = (self.root == home()).into();
@@ -331,16 +331,16 @@ impl Plugins {
             }
             "raw" | "project-raw" => {
                 let root = if what == "raw" {
-                    crate::settings::raw()
+                    coxd::settings::raw()
                 } else {
-                    self.root.join(crate::raw::PROJECT_RAW)
+                    self.root.join(coxd::raw::PROJECT_RAW)
                 };
                 if rest.is_empty() {
-                    let mut told = crate::raw::told(&root);
+                    let mut told = coxd::raw::told(&root);
                     told["home"] = (self.root == home()).into();
                     told
                 } else {
-                    crate::raw::told_source(&root, &percent_decoded(rest), translate::page)?
+                    coxd::raw::told_source(&root, &percent_decoded(rest), translate::page)?
                 }
             }
             "file" if !rest.is_empty() => {
@@ -385,7 +385,7 @@ impl Plugins {
                     return None;
                 }
                 let made = save.make(
-                    &crate::settings::workflow(),
+                    &coxd::settings::workflow(),
                     coxd::storage::path(coxd::storage::Kept::Triggers).as_deref(),
                 );
                 let mut told = self.triggers();
@@ -427,7 +427,7 @@ impl Plugins {
         crate::trigger::told(
             &self.trigger_folders(),
             &crate::trigger::Kept {
-                workflow: &crate::settings::workflow(),
+                workflow: &coxd::settings::workflow(),
                 home: &home(),
                 arranged: arranged.as_deref(),
                 runs: runs.as_deref(),
@@ -480,7 +480,7 @@ impl Plugins {
 /// as the settings set it.
 fn home() -> PathBuf {
     crate::stage::activity::home()
-        .unwrap_or_else(|| crate::settings::home_for_chats(crate::settings::Saved::read().home))
+        .unwrap_or_else(|| coxd::settings::home_for_chats(coxd::settings::Saved::read().home))
 }
 
 /// A plugin `name`, titled as its manifest says, when it has one that

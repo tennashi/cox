@@ -10,7 +10,7 @@
 //! The agent asks on a Unix socket, `run/inspect.sock` where this Cox keeps
 //! what lasts (see [`coxd::storage`]), which Cox opens as its window
 //! does, and speaks MCP on, as the server of each chat's tools does (see
-//! [`crate::agent::mcp`]). So `cox --mcp <socket>` reaches it as an MCP
+//! [`coxd::agent::mcp`]). So `cox --mcp <socket>` reaches it as an MCP
 //! server too, for an agent set up with one. And `cox --inspect` is a
 //! client of it, for an agent that has a shell: [`client`] asks the tools
 //! of the Cox that keeps what lasts where this `cox` does, or where
@@ -34,8 +34,8 @@ use serde_json::{Value, json};
 use tokio::sync::mpsc::{UnboundedSender, unbounded_channel};
 use tokio::sync::oneshot;
 
-use crate::agent::mcp::{self, Answered, INVALID_PARAMS, Serves, answered};
 use crate::workspace::Workspace;
+use coxd::agent::mcp::{self, Answered, INVALID_PARAMS, Serves, answered};
 
 pub mod client;
 mod frames;

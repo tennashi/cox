@@ -1,7 +1,7 @@
 //! The translation on the settings screen: the language the human reads
 //! the wiki, and what they select, in, and what translates it, an agent
 //! Cox knows or a command, as `settings.json` keeps it under
-//! `translation` (see [`crate::settings::Translation`]). Enter, or the
+//! `translation` (see [`coxd::settings::Translation`]). Enter, or the
 //! keyboard leaving it, keeps the language, or the command, and a click
 //! keeps the choice of what translates; emptied, the language takes the translation out, so that
 //! Cox translates nothing. What else the file holds of it stays.
@@ -80,7 +80,7 @@ impl TranslationSection {
     /// Shows what `settings.json` holds now, when it changed since the
     /// section read it.
     pub fn reread(&mut self, cx: &mut Context<Self>) {
-        let kept = crate::settings::kept("translation");
+        let kept = coxd::settings::kept("translation");
         if kept == self.kept {
             return;
         }
@@ -192,7 +192,7 @@ impl TranslationSection {
     fn save(&mut self, cx: &mut Context<Self>) {
         let language = self.language.read(cx).text().trim().to_owned();
         if language.is_empty() {
-            if let Err(error) = crate::settings::keep("translation", None) {
+            if let Err(error) = coxd::settings::keep("translation", None) {
                 return self.tell(format!("Cox cannot keep it: {error:#}"), FAILED, cx);
             }
             self.kept = None;
@@ -229,7 +229,7 @@ impl TranslationSection {
             }
         }
         let translation = Value::Object(translation);
-        if let Err(error) = crate::settings::keep("translation", Some(translation.clone())) {
+        if let Err(error) = coxd::settings::keep("translation", Some(translation.clone())) {
             return self.tell(format!("Cox cannot keep it: {error:#}"), FAILED, cx);
         }
         self.kept = Some(translation);

@@ -19,18 +19,18 @@ use cox_git::commits::{self, Turn};
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::oneshot;
 
-use crate::agent::mcp::{Ended, Ran, ToolRequest};
-use crate::agent::setup::Setup;
-use crate::agent::{Agent, AgentEvent, AgentThread, Command};
 use crate::chat::conversation::{
     self, Answer, Came, Conversation, Does, Due, Entry, Gathered, Goal, LoginOption, Patch,
     Proposed, State, TerminalLogin,
 };
-use crate::chat::judge::{Heard, Judge, Starts};
 use crate::daemon::Internal;
 use crate::trigger::{self, Arranged, By, On, Trigger};
 use cox_acp::{Login, StopReason};
+use coxd::agent::mcp::{Ended, Ran, ToolRequest};
+use coxd::agent::setup::Setup;
+use coxd::agent::{Agent, AgentEvent, AgentThread, Command};
 use coxd::agents::Agents;
+use coxd::chat::judge::{Heard, Judge, Starts};
 
 /// How long the name of the chat that opened a chat grows, in
 /// characters, in the note that says so.
@@ -63,7 +63,7 @@ impl Drop for Task {
 /// The repositories of `cwd`, where a chat works, each with its last
 /// commit now.
 fn heads(cwd: &Path) -> Vec<Head> {
-    crate::repositories::of(cwd)
+    coxd::repositories::of(cwd)
         .into_iter()
         .map(|(name, folder)| Head {
             commit: commits::head(&folder),
@@ -100,7 +100,7 @@ impl Places {
     /// The folder of the human's workflow, with its triggers.
     fn workflow(&self) -> PathBuf {
         match self {
-            Self::Cox => crate::settings::workflow(),
+            Self::Cox => coxd::settings::workflow(),
             #[cfg(test)]
             Self::In(root) => root.join("workflow"),
         }
@@ -207,7 +207,7 @@ pub struct Chat {
 /// A repository of the folder a chat works in, as a turn started.
 struct Head {
     /// The project's directory it is, by name, or none for the repository
-    /// the folder is in (see [`crate::repositories::of`]).
+    /// the folder is in (see [`coxd::repositories::of`]).
     name: Option<String>,
     folder: PathBuf,
     /// Its last commit then, by its full name, if it had one.
@@ -288,7 +288,7 @@ impl Chat {
                     .filter_map(|setup| setup.context.as_deref())
                     .map(conversation::context_note),
             );
-        Conversation::noting_each(notes).with_keeping(crate::agent::setup::keeps_in_wiki(setup))
+        Conversation::noting_each(notes).with_keeping(coxd::agent::setup::keeps_in_wiki(setup))
     }
 
     #[must_use]
@@ -1578,8 +1578,8 @@ impl Chat {
 
     /// What the agent that waits for this chat is told of how it stands.
     #[must_use]
-    pub fn stands(&self) -> crate::agent::mcp::Waited {
-        crate::agent::mcp::Waited {
+    pub fn stands(&self) -> coxd::agent::mcp::Waited {
+        coxd::agent::mcp::Waited {
             asking: self.conversation.asking_for().map(str::to_owned),
             said: self.conversation.last_told().map(str::to_owned),
         }
@@ -1669,8 +1669,8 @@ mod tests {
     use tokio::sync::mpsc::{UnboundedReceiver, unbounded_channel};
 
     use super::*;
-    use crate::agent::AgentThread;
     use crate::chat::conversation::CheckState;
+    use coxd::agent::AgentThread;
     use coxd::testing::TempDir;
 
     fn words(words: &[&str]) -> Vec<String> {
@@ -2021,7 +2021,7 @@ mod tests {
             let mut talk = Talk::new(Some(again(&cwd)));
             talk.hear(AgentEvent::Opened {
                 id: "session-1".to_owned(),
-                how: crate::agent::Opened::New,
+                how: coxd::agent::Opened::New,
                 steers: false,
             });
             talk.hear(AgentEvent::Closed(None));

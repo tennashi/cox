@@ -1,6 +1,6 @@
 //! The search engine on the settings screen: the address of its results,
 //! with `%s` where the words go, as `settings.json` keeps it under
-//! `search` (see [`crate::settings::SearchEngine`]), in an input that
+//! `search` (see [`coxd::settings::SearchEngine`]), in an input that
 //! keeps it on Enter or as the keyboard leaves it, or, emptied, goes by
 //! Google's.
 
@@ -8,9 +8,9 @@ use gpui::{Context, Entity, Subscription, Window, div, prelude::*, px, rgb};
 use serde_json::Value;
 
 use super::words::Words;
-use crate::settings::{DEFAULT_SEARCH, SearchEngine};
 use crate::ui::button::INPUT_HEIGHT;
 use crate::ui::input::{Blurred, LineInput, Submitted};
+use coxd::settings::{DEFAULT_SEARCH, SearchEngine};
 use coxd::theme::{ACCENT, BORDER, FAILED, FAINT, FOREGROUND};
 
 /// The key of the engine in `settings.json`.
@@ -55,7 +55,7 @@ impl SearchSection {
     /// Shows what `settings.json` holds now, when it changed since the
     /// section read it, saying what is wrong with it, if anything is.
     pub fn reread(&mut self, cx: &mut Context<Self>) {
-        let kept = crate::settings::kept(KEY);
+        let kept = coxd::settings::kept(KEY);
         if kept == self.kept {
             return;
         }
@@ -110,7 +110,7 @@ impl SearchSection {
             }
         };
         let value = engine.map(|engine| Value::String(engine.as_str().to_owned()));
-        if let Err(error) = crate::settings::keep(KEY, value.clone()) {
+        if let Err(error) = coxd::settings::keep(KEY, value.clone()) {
             tracing::error!("the search engine is not kept: {error:#}");
             return self.tell(format!("Cox cannot keep it: {error:#}"), FAILED, cx);
         }

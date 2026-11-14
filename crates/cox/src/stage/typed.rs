@@ -8,8 +8,8 @@
 use std::path::{Path, PathBuf};
 
 use super::page::address::Address;
-use crate::settings::SearchEngine;
 use coxd::home::expanded;
+use coxd::settings::SearchEngine;
 
 /// What a line typed in the menu opens.
 #[derive(Debug, Clone, PartialEq, Eq)]

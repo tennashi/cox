@@ -5,7 +5,7 @@
 //! input, which sets what the human typed, a whole path or one from `~`,
 //! on Enter or as the keyboard leaves it, and "Choose…" asks for a folder
 //! and sets it. Set, the home is
-//! kept (see [`super::keep_home`]), and the window opens the chats in no
+//! kept (see [`coxd::settings::keep_home`]), and the window opens the chats in no
 //! project there from then on. Under it are the folders of the human's
 //! workflow and wiki (see [`folder`]), the agents they run (see
 //! [`agents`]), the language servers of the code tabs (see [`servers`]),
@@ -157,7 +157,7 @@ impl SettingsView {
                     "The folder of how you work with Cox, whatever the project: its COX.md, \
                      which every chat's agent is told first, and its sketch/ and wiki/, what Cox \
                      tells the agent in your place.",
-                    Some(crate::settings::Folder::Workflow.in_home()),
+                    Some(coxd::settings::Folder::Workflow.in_home()),
                     words.clone(),
                     cx,
                 )
@@ -168,7 +168,7 @@ impl SettingsView {
                     "WIKI",
                     "The folder of your wiki, one for all your projects, where the agents keep \
                      what they learned, as an Obsidian vault or a Git repository of yours.",
-                    Some(crate::settings::Folder::Wiki.in_home()),
+                    Some(coxd::settings::Folder::Wiki.in_home()),
                     words.clone(),
                     cx,
                 )
@@ -269,7 +269,7 @@ impl SettingsView {
     /// Sets the home to the folder the input names, if it names one.
     fn submit(&mut self, cx: &mut Context<Self>) {
         let text = self.input.read(cx).text().to_owned();
-        match super::folder_of(&text, home().as_deref()) {
+        match coxd::settings::folder_of(&text, home().as_deref()) {
             Ok(folder) => self.set(folder, cx),
             Err(why) => self.tell(Told::Failed(why.to_owned()), cx),
         }
@@ -277,7 +277,7 @@ impl SettingsView {
 
     /// Sets the home to `folder`, and keeps it.
     fn set(&mut self, folder: PathBuf, cx: &mut Context<Self>) {
-        if let Err(error) = super::keep_home(&folder) {
+        if let Err(error) = coxd::settings::keep_home(&folder) {
             tracing::error!("the home is not kept: {error:#}");
             self.tell(Told::Failed(format!("Cox cannot keep it: {error:#}")), cx);
             return;
@@ -289,10 +289,10 @@ impl SettingsView {
         self.given = false;
         // The folders the settings name none of are the new home's.
         self.workflow.update(cx, |field, cx| {
-            field.set_fallback(super::Folder::Workflow.in_home(), cx);
+            field.set_fallback(coxd::settings::Folder::Workflow.in_home(), cx);
         });
         self.wiki.update(cx, |field, cx| {
-            field.set_fallback(super::Folder::Wiki.in_home(), cx);
+            field.set_fallback(coxd::settings::Folder::Wiki.in_home(), cx);
         });
         self.tell(Told::Set, cx);
         cx.emit(HomeChanged(folder));

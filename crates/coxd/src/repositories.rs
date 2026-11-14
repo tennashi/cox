@@ -91,7 +91,7 @@ pub fn hows(folder: &Path) -> HashMap<PathBuf, How> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use coxd::testing::{TempDir, run_git};
+    use crate::testing::{TempDir, run_git};
 
     /// A Git repository at `folder` with nothing committed and one file
     /// Git does not track yet, `new.txt`.

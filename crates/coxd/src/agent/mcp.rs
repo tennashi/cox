@@ -171,7 +171,7 @@ pub enum ChatRequest {
     /// `from`, with `caption`, if the agent gave one, in the
     /// conversation; answer once it is there.
     ShowMedia {
-        shown: coxd::media::Shown,
+        shown: crate::media::Shown,
         from: String,
         caption: Option<String>,
         answer: oneshot::Sender<()>,
@@ -518,17 +518,17 @@ const PROTOCOL_VERSIONS: &[&str] = &["2025-11-25", "2025-06-18", "2025-03-26", "
 /// JSON-RPC's codes for what went wrong with a request.
 const PARSE_ERROR: i64 = -32700;
 const METHOD_NOT_FOUND: i64 = -32601;
-pub(crate) const INVALID_PARAMS: i64 = -32602;
-pub(crate) const INTERNAL_ERROR: i64 = -32603;
+pub const INVALID_PARAMS: i64 = -32602;
+pub const INTERNAL_ERROR: i64 = -32603;
 
 /// What a request's tool answers: MCP's result of `tools/call`, or the
 /// JSON-RPC error, with its code, that the request gets instead.
-pub(crate) type Answered = Result<Value, (i64, String)>;
+pub type Answered = Result<Value, (i64, String)>;
 
 /// The tools a server serves: what a client learns of them, and what each
 /// does when called. A server answers many calls at once, so a call that
 /// waits holds up no other.
-pub(crate) trait Serves: Send + Sync + 'static {
+pub trait Serves: Send + Sync + 'static {
     /// The tools, as MCP lists them.
     fn tools(&self) -> Value;
     /// Calls the tool `params`, those of `tools/call`, name, with its
@@ -539,7 +539,8 @@ pub(crate) trait Serves: Send + Sync + 'static {
 
 /// The result of a call that answers with `text`, as an error when
 /// `is_error`.
-pub(crate) fn answered(text: &str, is_error: bool) -> Value {
+#[must_use]
+pub fn answered(text: &str, is_error: bool) -> Value {
     json!({
         "content": [{ "type": "text", "text": text }],
         "isError": is_error,
@@ -594,11 +595,11 @@ pub fn start(
     // its runtime runs on this one thread, which keeps what lasts where
     // this one was told to.
     let span = tracing::Span::current();
-    let data = coxd::storage::kept_on_this_thread();
-    let trash = coxd::trash::kept_on_this_thread();
+    let data = crate::storage::kept_on_this_thread();
+    let trash = crate::trash::kept_on_this_thread();
     thread::spawn(move || {
-        coxd::storage::keep_on_this_thread(data);
-        coxd::trash::keep_on_this_thread(trash);
+        crate::storage::keep_on_this_thread(data);
+        crate::trash::keep_on_this_thread(trash);
         let _entered = span.enter();
         if let Err(error) = serve(listener, served, until.closed()) {
             tracing::error!("the agent's tools stopped: {error:#}");
@@ -616,9 +617,9 @@ pub fn start(
 }
 
 /// Makes a new directory for a socket that only this user can enter, in
-/// the folder of this run (see [`coxd::scratch`]).
+/// the folder of this run (see [`crate::scratch`]).
 fn private_directory() -> anyhow::Result<PathBuf> {
-    let scratch = coxd::scratch::folder().context("cannot make the folder of this run")?;
+    let scratch = crate::scratch::folder().context("cannot make the folder of this run")?;
     loop {
         let number = STARTED.fetch_add(1, Ordering::Relaxed);
         let directory = scratch.join(number.to_string());
@@ -638,7 +639,7 @@ fn private_directory() -> anyhow::Result<PathBuf> {
 /// # Errors
 ///
 /// When the socket cannot be made.
-pub(crate) fn listen(socket: &Path) -> anyhow::Result<StdUnixListener> {
+pub fn listen(socket: &Path) -> anyhow::Result<StdUnixListener> {
     StdUnixListener::bind(socket)
         .and_then(|listener| {
             listener.set_nonblocking(true)?;
@@ -653,7 +654,7 @@ pub(crate) fn listen(socket: &Path) -> anyhow::Result<StdUnixListener> {
 /// # Errors
 ///
 /// When the runtime cannot start, or the listener fails.
-pub(crate) fn serve(
+pub fn serve(
     listener: StdUnixListener,
     served: Arc<dyn Serves>,
     until: impl Future<Output = ()>,

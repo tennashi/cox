@@ -10,13 +10,13 @@ use cox_core::tabs::KeptTabs;
 use gpui::{App, Context, Window};
 
 use super::{Chat, NO_TAB, NO_TERMINAL, Staged, Workspace};
-use crate::agent::mcp::ToolRequest;
 use crate::chat::conversation::State;
 use crate::chat::view::StageView;
 use crate::daemon::wire::{FromDaemon, StageAsk, ToDaemon};
 use crate::stage::Stage;
 use crate::stage::changes::ShowTurn;
 use crate::stage::owners::ShowChat;
+use coxd::agent::mcp::ToolRequest;
 
 impl Workspace {
     /// Gives the chat `key` the stage of the folder it works in, unless it
@@ -288,7 +288,7 @@ impl Workspace {
         &mut self,
         id: u64,
         cx: &mut Context<Self>,
-    ) -> tokio::sync::oneshot::Sender<Result<crate::agent::mcp::Seen, String>> {
+    ) -> tokio::sync::oneshot::Sender<Result<coxd::agent::mcp::Seen, String>> {
         let (answer, seen) = tokio::sync::oneshot::channel();
         let link = self.link.clone();
         let waits = cx.spawn(async move |this, cx| {

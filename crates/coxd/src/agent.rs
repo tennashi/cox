@@ -40,10 +40,10 @@ use cox_core::settings::{Choice, Setting};
 
 use crate::agent::instructions::Instructions;
 use crate::agent::setup::{Asked, Decision, Policy, Setup};
-use coxd::agents::{Known, download};
-use coxd::chat::mention;
-use coxd::process::close_on_exec;
-use coxd::storage::Kept;
+use crate::agents::{Known, download};
+use crate::chat::mention;
+use crate::process::close_on_exec;
+use crate::storage::Kept;
 
 /// What the agent side tells the window.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -293,10 +293,11 @@ pub struct AgentThread {
     thread: Option<JoinHandle<()>>,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 impl AgentThread {
     /// No thread, for an agent a test plays.
-    pub(crate) fn none() -> Self {
+    #[must_use]
+    pub fn none() -> Self {
         Self {
             stop: None,
             thread: None,
@@ -392,12 +393,7 @@ const NO_AGENT: &str = "Cox was opened without an agent command, and settings.js
 /// `tools`, as `start` says: a chat's agent, or one with no chat, such as
 /// the judge of a goal, or the agent that translates the wiki (see
 /// [`crate::translate`]).
-pub(crate) fn spawn_known(
-    known: Known,
-    cwd: PathBuf,
-    tools: Vec<McpServer>,
-    start: Start,
-) -> Agent {
+pub fn spawn_known(known: Known, cwd: PathBuf, tools: Vec<McpServer>, start: Start) -> Agent {
     tracing::info!(agent = %known.id, "starts the agent");
     let Known {
         id,
@@ -415,7 +411,7 @@ pub(crate) fn spawn_known(
                 let installed = download::installed(Kept::Downloads, &id, &download, &|note| {
                     told(format!("{name}: {note}"));
                 })?;
-                coxd::agents::located(&command, &installed)
+                crate::agents::located(&command, &installed)
             }
             None => command,
         };
@@ -1404,7 +1400,7 @@ mod tests {
     use std::time::{Duration, Instant};
 
     use super::*;
-    use coxd::testing::TempDir;
+    use crate::testing::TempDir;
 
     #[test]
     fn a_line_runs_a_command_the_agent_named() {

@@ -1,6 +1,6 @@
 //! What the window shows of a chat, and what the human's input means,
 //! without GPUI: the conversation, as the agent's events change it, and
-//! the commands the human's lines turn into (see [`crate::agent`]).
+//! the commands the human's lines turn into (see [`coxd::agent`]).
 //!
 //! The goal and the triggers that run as a turn ends, or as something
 //! else happens, live in `checks`.
@@ -19,8 +19,8 @@ use cox_core::goal;
 use cox_core::settings::Setting;
 use cox_core::store::ChatId;
 
-use crate::agent::mcp::{Ended, Ran};
-use crate::agent::{AgentEvent, Command, Opened, Prompt};
+use coxd::agent::mcp::{Ended, Ran};
+use coxd::agent::{AgentEvent, Command, Opened, Prompt};
 
 mod checks;
 
@@ -1677,7 +1677,7 @@ mod tests {
     use std::collections::BTreeMap;
 
     use super::*;
-    use crate::agent::Prompt;
+    use coxd::agent::Prompt;
 
     fn asks_to_log_in() -> AgentEvent {
         AgentEvent::LoginNeeded {

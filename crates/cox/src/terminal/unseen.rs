@@ -14,7 +14,7 @@ use tokio::sync::oneshot;
 use super::colors::color_at;
 use super::pty::{Program, Running, START_SIZE};
 use super::{START_CELL, ended_of, text_of};
-use crate::agent::mcp::Ran;
+use coxd::agent::mcp::Ran;
 
 /// How long a command has to end once it is interrupted, as no one waits
 /// for it any more, before its terminal hangs up on it.

@@ -61,7 +61,7 @@ pub enum Mode {
     /// the window starts it (see [`crate::daemon::process`]).
     Daemon { data: Option<PathBuf> },
     /// The bridge between an agent and the server of its chat's tools on
-    /// the socket given, as `cox --mcp <socket>` (see [`crate::agent::mcp`]).
+    /// the socket given, as `cox --mcp <socket>` (see [`coxd::agent::mcp`]).
     Bridge(PathBuf),
     /// The client that asks a running Cox how it stands, and drives it,
     /// as `cox [--data <dir>] --inspect <tool> [<arguments>...]` (see
@@ -75,7 +75,7 @@ pub enum Mode {
     /// [--data <dir>] --phone-link` (see [`crate::daemon::phone`]).
     PhoneLink { data: Option<PathBuf> },
     /// The reader of the web page at the URL given, for `raw_keep`, as
-    /// `cox --read-page <url>` (see [`crate::raw::page`]).
+    /// `cox --read-page <url>` (see [`coxd::raw::page`]).
     ReadPage(String),
     /// The usage, as `cox --help`.
     Usage,
@@ -87,7 +87,7 @@ pub struct Settings {
     /// The page each chat's stage shows first.
     pub stage: String,
     /// Where Cox's own chats work for this run, if not where the
-    /// settings say, or `~/cox` (see [`crate::settings`]).
+    /// settings say, or `~/cox` (see [`coxd::settings`]).
     pub home: Option<PathBuf>,
     /// Where Cox keeps what lasts across its runs, if not where it keeps
     /// it from the place it runs from (see [`coxd::storage`]).
@@ -95,7 +95,7 @@ pub struct Settings {
     /// The agent each chat starts with, and its arguments, or none when
     /// the system opens Cox, as from the Finder, which then starts the
     /// agent of `agents.json` the settings name (see
-    /// [`crate::settings::agent`]).
+    /// [`coxd::settings::agent`]).
     pub command: Vec<String>,
 }
 
@@ -104,10 +104,10 @@ impl Mode {
     /// for.
     pub fn parse(args: impl IntoIterator<Item = String>) -> Self {
         let args: Vec<String> = args.into_iter().collect();
-        if let Some(socket) = crate::agent::mcp::bridge_to(&args) {
+        if let Some(socket) = coxd::agent::mcp::bridge_to(&args) {
             return Self::Bridge(socket);
         }
-        if let Some(url) = crate::raw::page::reading(&args) {
+        if let Some(url) = coxd::raw::page::reading(&args) {
             return Self::ReadPage(url.to_owned());
         }
         let settings = Settings::parse(args);
@@ -183,18 +183,18 @@ pub fn run(settings: Settings) -> ExitCode {
     let home = settings
         .home
         .clone()
-        .or_else(|| crate::settings::Saved::read().home);
-    let home = crate::settings::home_for_chats(home);
+        .or_else(|| coxd::settings::Saved::read().home);
+    let home = coxd::settings::home_for_chats(home);
     // Opened from the Finder, the Dock or a launcher, Cox is given no
     // command, and starts the agent the settings name.
     let named = settings
         .command
         .is_empty()
-        .then(crate::settings::agent)
+        .then(coxd::settings::agent)
         .flatten();
     let agents = Agents::read(settings.command.clone(), named.as_deref());
     agents.fetch();
-    crate::translate::start(agents.clone());
+    coxd::translate::start(agents.clone());
     crate::trigger::discuss::start(agents.clone());
     // 3. coxd, which runs the chats, in a process of its own.
     let hello = crate::daemon::wire::Hello::new(settings.home, settings.command);
@@ -236,7 +236,7 @@ pub fn run(settings: Settings) -> ExitCode {
         .with_assets(Icons)
         .run(move |cx: &mut App| {
             bind_keys(cx);
-            crate::vim::turn(crate::settings::vim(), cx);
+            crate::vim::turn(coxd::settings::vim(), cx);
             cx.set_global(Servers::default());
             cx.set_global(crate::settings::window::AppAgents(agents.clone()));
             serve_browser(&cef, cx);
@@ -595,13 +595,13 @@ mod tests {
     fn coxs_own_chats_work_in_cox_in_the_home_directory() {
         let user = || Some(PathBuf::from("/home/me"));
         assert_eq!(
-            crate::settings::home_for_chats_of(None, user()),
+            coxd::settings::home_for_chats_of(None, user()),
             PathBuf::from("/home/me/cox")
         );
         assert_eq!(
-            crate::settings::home_for_chats_of(Some("/work".into()), user()),
+            coxd::settings::home_for_chats_of(Some("/work".into()), user()),
             PathBuf::from("/work")
         );
-        assert!(crate::settings::home_for_chats_of(Some("relative".into()), user()).is_absolute());
+        assert!(coxd::settings::home_for_chats_of(Some("relative".into()), user()).is_absolute());
     }
 }

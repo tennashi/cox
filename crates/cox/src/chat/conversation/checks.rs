@@ -1,6 +1,6 @@
 //! A chat can have a [`Goal`](super::Goal): a command, which the chat works until it
 //! passes, or words, which it works until an agent judges them met (see
-//! [`crate::chat::judge`]). When a turn ends as the agent ends it, the
+//! [`coxd::chat::judge`]). When a turn ends as the agent ends it, the
 //! command runs, or the judge is asked; while the goal is not met, Cox
 //! sends the agent what the command printed, or what the judge said, as
 //! the next turn, and the agent goes on, until the goal is met, or the
@@ -31,9 +31,9 @@ use super::{
     Check, CheckState, Conversation, Entry, GOAL_TURNS, OUTPUT_TAIL, Proposal, Proposed, State,
     tail,
 };
-use crate::agent::Command;
-use crate::agent::mcp::{Ended, Ran};
-use crate::chat::judge::{self, Verdict};
+use coxd::agent::Command;
+use coxd::agent::mcp::{Ended, Ran};
+use coxd::chat::judge::{self, Verdict};
 
 /// How many turns in a row without a tool call stop a chat working toward
 /// its goal: an agent that only talks waits for the human.
@@ -678,7 +678,7 @@ mod tests {
     use super::super::tests::step;
     use super::super::{Answer, Goal, StepState, ToolCallResult};
     use super::*;
-    use crate::agent::{AgentEvent, Prompt};
+    use coxd::agent::{AgentEvent, Prompt};
 
     /// How the goal's command went: it exited with `code`, printing
     /// `output`.

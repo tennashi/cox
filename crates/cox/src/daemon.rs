@@ -3,7 +3,7 @@
 //! projects and their chats, keeps them as they go (see
 //! [`cox_core::store`]), starts each chat's agent, and goes on with its
 //! turns: the check of its goal, its judge, the chats its agent opens, and
-//! its sketches (see [`crate::chat::sketch`]).
+//! its sketches (see [`coxd::chat::sketch`]).
 //!
 //! A window tells it what the human does, as [`ToDaemon`], and hears from
 //! it, as [`FromDaemon`], the projects and chats, how the conversations it
@@ -48,19 +48,19 @@ use cox_core::tabs::{KeptTab, KeptTabs};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use tokio::sync::oneshot;
 
-use crate::agent::instructions::Instructions;
-use crate::agent::mcp::{ChatRequest, OpenedChat, Ran, Seen, ToolRequest, Waited, Whereabouts};
-use crate::agent::setup::{Policy, Setup, StageUse, Withheld, keeps_in_wiki};
-use crate::agent::{Agent, AgentEvent, Start};
 use crate::chat::conversation::{Content, Conversation, Entry, Gathered, Patch, State};
-use crate::chat::judge::{Heard, Starts};
-use crate::chat::sketch::{self, Sketch};
 use crate::terminal::run_unseen;
 use crate::trigger::By;
-use crate::workflow;
 use chat::{Again, Chat, Task, spawn};
+use coxd::agent::instructions::Instructions;
+use coxd::agent::mcp::{ChatRequest, OpenedChat, Ran, Seen, ToolRequest, Waited, Whereabouts};
+use coxd::agent::setup::{Policy, Setup, StageUse, Withheld, keeps_in_wiki};
+use coxd::agent::{Agent, AgentEvent, Start};
 use coxd::agents::Agents;
+use coxd::chat::judge::{Heard, Starts};
+use coxd::chat::sketch::{self, Sketch};
 use coxd::storage;
+use coxd::workflow;
 use wire::{Build, ChatRow, FromDaemon, Hello, Listing, ProjectRow, StageAsk, ToDaemon};
 
 /// What the project of chats with no folder is called.
@@ -1082,7 +1082,7 @@ impl Daemon {
     /// first number no folder there has yet, in the projects of Cox's
     /// home.
     fn untitled(&self) -> PathBuf {
-        let projects = self.projects[0].folder.join(crate::settings::PROJECTS);
+        let projects = self.projects[0].folder.join(coxd::settings::PROJECTS);
         (1..=u32::MAX)
             .map(|number| projects.join(format!("untitled-{number}")))
             .find(|folder| !folder.exists() && self.project_at(folder).is_none())
@@ -1446,8 +1446,8 @@ impl Daemon {
         if index == 0 {
             return instructions;
         }
-        let wiki = project.folder.join(crate::wiki::PROJECT_WIKI);
-        let pages = crate::wiki::read(&wiki, crate::wiki::INDEX).ok();
+        let wiki = project.folder.join(coxd::wiki::PROJECT_WIKI);
+        let pages = coxd::wiki::read(&wiki, coxd::wiki::INDEX).ok();
         instructions
             .about(&project.name, project.about.as_deref())
             .wiki(&wiki, pages.as_deref())
@@ -1530,7 +1530,7 @@ impl Daemon {
                 .map_err(|error| format!("Chat {number} cannot be read: {error:#}"))?
                 .unwrap_or_default(),
         };
-        Ok(crate::agent::read_out(number, &slot.name, &entries)
+        Ok(coxd::agent::read_out(number, &slot.name, &entries)
             .unwrap_or_else(|| format!("Nothing was said in chat {number} yet.")))
     }
 
@@ -1742,7 +1742,7 @@ impl Daemon {
             }
             Internal::Quit => self.done = true,
             Internal::Schedules => {
-                self.run_schedules(&crate::settings::workflow(), &jiff::Zoned::now());
+                self.run_schedules(&coxd::settings::workflow(), &jiff::Zoned::now());
             }
         }
     }
@@ -1859,12 +1859,11 @@ impl Daemon {
         // the settings say now, which may have changed while none was
         // there.
         self.home_given = home.is_some();
-        self.projects[0].folder = home.unwrap_or_else(|| {
-            crate::settings::home_for_chats(crate::settings::Saved::read().home)
-        });
+        self.projects[0].folder = home
+            .unwrap_or_else(|| coxd::settings::home_for_chats(coxd::settings::Saved::read().home));
         self.spawns
             .agents()
-            .command(command, crate::settings::agent().as_deref());
+            .command(command, coxd::settings::agent().as_deref());
         self.window = Some(window);
         self.window_id = Some(id);
         self.window_watches.clear();

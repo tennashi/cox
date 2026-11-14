@@ -14,7 +14,6 @@ use std::sync::Arc;
 use agent_client_protocol::schema::v1::{
     McpServer as AcpMcpServer, McpServerStdio, RequestPermissionOutcome, SelectedPermissionOutcome,
 };
-use cox::agent::setup::{Policy, Setup};
 use cox::chat::conversation::{Content, Entry, State, ToolCallResult};
 use cox::chat::view::ChatView;
 use cox::stage::page::address::{AddressLine, Asked, Row};
@@ -23,6 +22,7 @@ use cox::ui::input::{Blurred, LineInput};
 use cox::workspace::Workspace;
 use cox_acp::McpServer;
 use cox_core::diff::Line;
+use coxd::agent::setup::{Policy, Setup};
 use fake_agent::{Event, FakeAgent, LogsIn};
 use fake_daemon::{FakeStages, Fakes, Kept, Opened, open_window, settle, settle_until, shown_view};
 use gpui::{

@@ -19,8 +19,8 @@ use cox_editor::lsp::servers::Got;
 use cox_editor::lsp::{self, Client, Error, Server, Status, languages};
 use gpui::{App, AppContext as _, Context, Entity, Global, Task};
 
-use crate::settings::DIRECTORIES;
 use coxd::agents::download;
+use coxd::settings::DIRECTORIES;
 use coxd::storage::Kept;
 
 /// What starts a server in a project's folder, and answers it once it is

@@ -1,7 +1,7 @@
 //! A tab of the stage that shows a Markdown file, drawn as the
 //! conversation draws replies, for the human to read beside the
 //! conversation. The agent opens it with Cox's tool for that (see
-//! [`crate::agent::mcp`]).
+//! [`coxd::agent::mcp`]).
 //!
 //! The tab follows the file as it changes (see [`crate::stage::follow`]). The
 //! human selects and copies its text

@@ -9,7 +9,7 @@
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
-pub use crate::settings::DIRECTORIES;
+use coxd::settings::DIRECTORIES;
 
 /// A directory of a project, as it stands.
 #[derive(Clone, Debug, PartialEq, Eq)]

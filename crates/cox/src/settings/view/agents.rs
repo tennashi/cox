@@ -107,7 +107,7 @@ impl AgentsSection {
     /// makes the rows anew when another program changed the agents, as
     /// when the human edits the file.
     pub fn reread(&mut self, cx: &mut Context<Self>) {
-        self.default = crate::settings::agent();
+        self.default = coxd::settings::agent();
         match Listing::read() {
             Ok(listing) => {
                 self.unreadable = None;
@@ -266,7 +266,7 @@ impl AgentsSection {
     /// Names `name` in `settings.json` as the agent a new chat talks to
     /// when the command line names none, or names none, keeping it.
     fn set_default(&mut self, name: Option<&str>) {
-        match crate::settings::keep_agent(name) {
+        match coxd::settings::keep_agent(name) {
             Ok(()) => {
                 self.default = name.map(str::to_owned);
                 self.not_named = None;

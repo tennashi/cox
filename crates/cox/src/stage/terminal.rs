@@ -1,6 +1,6 @@
 //! A tab of the stage that is a terminal: a shell the human types into,
 //! or a command the agent runs with Cox's tool for that (see
-//! [`crate::agent::mcp`]), which the human watches run, and can type into too.
+//! [`coxd::agent::mcp`]), which the human watches run, and can type into too.
 //!
 //! The terminal is `alacritty_terminal`'s: it runs the program on a
 //! pseudoterminal, reads what the program writes on a thread of its own,
@@ -52,7 +52,6 @@ use tokio::sync::oneshot;
 
 use self::grid::{Grid, Laid, whole_cells};
 use self::keys::{key_bytes, pasted};
-use crate::agent::mcp::{Ended, Ran};
 use crate::chat::region::{self, Described};
 use crate::stage::tab::Shows;
 use crate::terminal::colors::color_at;
@@ -65,6 +64,7 @@ use crate::ui::selected::{self, Selected};
 use crate::vim::keymap::Motion;
 use crate::vim::search::{Direction, Find};
 use crate::vim::{Move, Region, Visual};
+use coxd::agent::mcp::{Ended, Ran};
 use coxd::paths::shortened;
 use coxd::theme::{ACCENT, BORDER, DIM, FAILED};
 

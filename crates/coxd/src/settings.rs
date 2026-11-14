@@ -1,0 +1,769 @@
+//! What the human sets of Cox itself, on the window's settings screen,
+//! which lasts across runs in `settings.json`, where Cox keeps
+//! what lasts (see [`crate::storage`]), as `{"home": "/home/me/Cox"}`.
+//!
+//! That is Cox's home: the folder Cox's own chats work in, which the
+//! rail shows as Cox's icon. `--home` on the command line goes ahead of it for
+//! the run, and without either, the home is `~/cox`. The file also says
+//! where the human keeps how they work with Cox, whatever the project, as
+//! `{"workflow": "~/dotfiles/cox"}`, and where their wiki is, as
+//! `{"wiki": "~/notes/cox"}`, or else each in the home (see [`Folder`]),
+//! and where what the agents read is kept, as `{"raw": "~/notes/raw"}`,
+//! or else `raw` in the home (see [`raw`]),
+//! and what language
+//! they read it, and what they select, in, as `{"translation":
+//! {"language": "Japanese"}}` (see [`translation`]), and the agent a new
+//! chat talks to when the command line names none, by its name in
+//! `agents.json`, as `{"agent": "Claude"}` (see [`agent`]), which
+//! the human writes in it themselves, and whether the keys work as in
+//! Vim, as `{"vim": true}`, and the engine the
+//! words typed in the stage's + menu are searched with, as `{"search":
+//! "https://duckduckgo.com/?q=%s"}` (see [`SearchEngine`]).
+//!
+//! The window reads the file again as it changes, as when the human
+//! edits it while Cox runs (see `cox::settings::window`).
+
+use std::fs;
+use std::io;
+use std::path::{Path, PathBuf};
+
+use anyhow::{Context as _, bail};
+use serde_json::{Map, Value};
+
+use crate::storage::Kept;
+
+/// The folder Cox's own chats work in, in the home directory, unless
+/// the human chose another.
+pub const HOME: &str = "cox";
+
+/// The settings as `settings.json` keeps them.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct Saved {
+    /// Where Cox's own chats work, if the human chose it.
+    pub home: Option<PathBuf>,
+    /// The folder of the human's workflow, if they named one.
+    pub workflow: Option<PathBuf>,
+    /// The folder of the human's wiki, if they named one.
+    pub wiki: Option<PathBuf>,
+    /// The folder what the agents read is kept in, if they named one.
+    pub raw: Option<PathBuf>,
+    /// How the human reads the wiki, and what they select, in a language
+    /// of their own, if they named one.
+    pub translation: Option<Translation>,
+    /// The agent a new chat talks to when the command line names none,
+    /// as when Cox is opened from the Finder, the Dock or a launcher, if
+    /// they named one.
+    pub agent: Option<String>,
+    /// Whether the keys work as in Vim, which the human turns on.
+    pub vim: bool,
+    /// Where the words typed after Vim's `t`, `:open` or `:tabopen` that
+    /// are no URL, file or path are searched for, if the human named an
+    /// engine.
+    pub search: Option<SearchEngine>,
+}
+
+/// A search engine, as the address of its results with `%s` where the
+/// words go, as `settings.json` says it: `{"search":
+/// "https://duckduckgo.com/?q=%s"}`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SearchEngine(String);
+
+impl Default for SearchEngine {
+    fn default() -> Self {
+        Self(DEFAULT_SEARCH.to_owned())
+    }
+}
+
+/// The engine searched when the settings name none.
+pub const DEFAULT_SEARCH: &str = "https://www.google.com/search?q=%s";
+
+impl SearchEngine {
+    /// The engine `text` names.
+    ///
+    /// # Errors
+    ///
+    /// What is wrong with `text`, for the human to read.
+    pub fn of(text: &str) -> Result<Self, &'static str> {
+        let text = text.trim();
+        if !text.contains("%s") {
+            return Err("Put %s where the words go.");
+        }
+        let url = url::Url::parse(&text.replace("%s", "words"))
+            .map_err(|_| "Give the whole address, from https://.")?;
+        if !matches!(url.scheme(), "http" | "https") || url.host_str().is_none() {
+            return Err("Give the whole address, from https://.");
+        }
+        Ok(Self(text.to_owned()))
+    }
+
+    /// The address of the results for `words`, put where `%s` is, encoded
+    /// as a form encodes them.
+    #[must_use]
+    pub fn url(&self, words: &str) -> String {
+        let words: String = url::form_urlencoded::byte_serialize(words.trim().as_bytes()).collect();
+        self.0.replace("%s", &words)
+    }
+
+    /// The engine's host, without `www.`, as `google.com`.
+    #[must_use]
+    pub fn host(&self) -> String {
+        url::Url::parse(&self.0.replace("%s", "words"))
+            .ok()
+            .and_then(|url| url.host_str().map(str::to_owned))
+            .map(|host| {
+                host.strip_prefix("www.")
+                    .map_or_else(|| host.clone(), str::to_owned)
+            })
+            .unwrap_or_default()
+    }
+
+    /// The address, with `%s` where the words go.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+/// How the human reads the wiki, which the agents write in English, and
+/// what they select, in a language of their own, as `settings.json` says
+/// it: `{"language": "Japanese", "command": ["plamo-translate", "--from",
+/// "{from}", "--to", "{to}"]}`, or `{"language": "Japanese", "agent":
+/// "Codex"}` (see [`crate::translate`]).
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Translation {
+    /// The language, as the human names it, which English goes into, and
+    /// the rest into English, as the agent translating is told it, and
+    /// the command gets it for `{from}` or `{to}`.
+    pub language: String,
+    /// The command that translates, reading the text on its standard
+    /// input and writing the translation on its standard output, with
+    /// `{from}` and `{to}` in its arguments standing for the languages;
+    /// or `None` for an agent.
+    pub command: Option<Vec<String>>,
+    /// The agent that translates, when no command does, by the name the
+    /// human knows it by among the agents Cox knows; or `None` for the
+    /// one a new chat talks to.
+    pub agent: Option<String>,
+}
+
+impl Translation {
+    /// The translation `value`, as `settings.json` holds it.
+    ///
+    /// # Errors
+    ///
+    /// What is wrong with `value`, for the human to read.
+    fn of(value: &Value) -> Result<Self, &'static str> {
+        let language = value
+            .get("language")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|language| !language.is_empty())
+            .ok_or("it names no \"language\"")?;
+        let command = match value.get("command") {
+            None | Some(Value::Null) => None,
+            Some(Value::Array(words)) => {
+                let words: Option<Vec<String>> = words
+                    .iter()
+                    .map(|word| word.as_str().map(str::to_owned))
+                    .collect();
+                match words {
+                    Some(words) if !words.is_empty() => Some(words),
+                    _ => return Err("its \"command\" is not a list of words"),
+                }
+            }
+            Some(_) => return Err("its \"command\" is not a list of words"),
+        };
+        let agent = match value.get("agent") {
+            None | Some(Value::Null) => None,
+            Some(Value::String(agent)) if !agent.trim().is_empty() => Some(agent.trim().to_owned()),
+            Some(_) => return Err("its \"agent\" is not the name of an agent"),
+        };
+        Ok(Self {
+            language: language.to_owned(),
+            command,
+            agent,
+        })
+    }
+}
+
+impl Saved {
+    /// The settings this Cox keeps, or none when there are none, or they
+    /// cannot be read, which is said.
+    #[must_use]
+    pub fn read() -> Self {
+        crate::storage::path(Kept::Settings)
+            .map_or_else(Self::default, |file| Self::read_from(&file))
+    }
+
+    fn read_from(file: &Path) -> Self {
+        match fs::read(file) {
+            Ok(bytes) => Self::parse(&bytes).unwrap_or_else(|error| {
+                tracing::error!("{} cannot be read: {error:#}", file.display());
+                Self::default()
+            }),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Self::default(),
+            Err(error) => {
+                tracing::error!("{} cannot be read: {error}", file.display());
+                Self::default()
+            }
+        }
+    }
+
+    fn parse(bytes: &[u8]) -> anyhow::Result<Self> {
+        Self::parse_for(bytes, crate::home::home().as_deref())
+    }
+
+    /// The settings `bytes` hold, for a human whose home directory is
+    /// `user`, which the folders they name from `~` are in.
+    fn parse_for(bytes: &[u8], user: Option<&Path>) -> anyhow::Result<Self> {
+        let value: Value = serde_json::from_slice(bytes)?;
+        let home = match value.get("home") {
+            None | Some(Value::Null) => None,
+            Some(Value::String(home)) => Some(PathBuf::from(home)),
+            Some(_) => anyhow::bail!("\"home\" is not a path"),
+        };
+        // The human writes them in the file themselves, so what is wrong
+        // with one is said, and the rest of the file still counts.
+        let folder = |key: &str| match value.get(key) {
+            None | Some(Value::Null) => None,
+            Some(Value::String(folder)) => folder_of(folder, user)
+                .inspect_err(|why| tracing::error!("\"{key}\" names no folder: {why}"))
+                .ok(),
+            Some(_) => {
+                tracing::error!("\"{key}\" is not a path");
+                None
+            }
+        };
+        let workflow = folder("workflow");
+        let wiki = folder("wiki");
+        let raw = folder("raw");
+        let translation = match value.get("translation") {
+            None | Some(Value::Null) => None,
+            Some(translation) => Translation::of(translation)
+                .inspect_err(|why| tracing::error!("\"translation\" cannot be read: {why}"))
+                .ok(),
+        };
+        let agent = match value.get("agent") {
+            None | Some(Value::Null) => None,
+            Some(Value::String(agent)) if !agent.trim().is_empty() => Some(agent.trim().to_owned()),
+            Some(_) => {
+                tracing::error!("\"agent\" is not the name of an agent");
+                None
+            }
+        };
+        let vim = match value.get("vim") {
+            None | Some(Value::Null) => false,
+            Some(Value::Bool(vim)) => *vim,
+            Some(_) => {
+                tracing::error!("\"vim\" is neither true nor false");
+                false
+            }
+        };
+        let search = match value.get("search") {
+            None | Some(Value::Null) => None,
+            Some(Value::String(search)) => SearchEngine::of(search)
+                .inspect_err(|why| tracing::error!("\"search\" names no engine: {why}"))
+                .ok(),
+            Some(_) => {
+                tracing::error!("\"search\" is not the address of an engine");
+                None
+            }
+        };
+        Ok(Self {
+            home,
+            workflow,
+            wiki,
+            raw,
+            translation,
+            agent,
+            vim,
+            search,
+        })
+    }
+}
+
+/// The folder of Cox's home the projects are in, each in a folder of
+/// its own.
+pub const PROJECTS: &str = "projects";
+
+/// The folder of a project's directories, in its own.
+pub const DIRECTORIES: &str = "directories";
+
+/// Where Cox's own chats work: `home`, or `~/cox`, as an absolute
+/// path, which the agent needs.
+#[must_use]
+pub fn home_for_chats(home: Option<PathBuf>) -> PathBuf {
+    home_for_chats_of(home, crate::home::home())
+}
+
+/// Where Cox's own chats work as [`home_for_chats`] says, for a human
+/// whose home directory is `user`, or, with none, in the system's
+/// temporary files.
+#[must_use]
+pub fn home_for_chats_of(home: Option<PathBuf>, user: Option<PathBuf>) -> PathBuf {
+    let home = home.unwrap_or_else(|| user.unwrap_or_else(std::env::temp_dir).join(HOME));
+    std::path::absolute(&home).unwrap_or(home)
+}
+
+/// The agent a new chat talks to when the command line names none, by
+/// the name `agents.json` lists it by: what `settings.json` names, as
+/// `{"agent": "Claude"}`, if it names one.
+#[must_use]
+pub fn agent() -> Option<String> {
+    Saved::read().agent
+}
+
+/// Whether the keys work as in Vim, as `settings.json` says with
+/// `{"vim": true}`.
+#[must_use]
+pub fn vim() -> bool {
+    Saved::read().vim
+}
+
+/// The engine the words typed after Vim's `t`, `:open` or `:tabopen` are
+/// searched with: the one `settings.json` names, or else Google.
+#[must_use]
+pub fn search() -> SearchEngine {
+    Saved::read().search.unwrap_or_default()
+}
+
+/// A folder the human keeps their own in, which `settings.json` names,
+/// as a folder of their dotfiles or a vault of their notes, or else Cox
+/// keeps in the home the settings set, as `~/cox/workflow`, where the
+/// human sees it, and every Cox of theirs finds it, wherever it keeps
+/// what lasts; but `--home` is for its run, and does not move it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Folder {
+    /// How the human works with Cox, whatever the project: its `COX.md`
+    /// is what every chat's agent is told first (see
+    /// [`crate::agent::instructions`]), and the rest what Cox says in
+    /// their place (see [`crate::workflow`]).
+    Workflow,
+    /// The human's wiki, where the agents keep what they learned (see
+    /// [`crate::wiki`]).
+    Wiki,
+}
+
+impl Folder {
+    /// The folders, in the order the settings screen shows them.
+    pub const ALL: [Self; 2] = [Self::Workflow, Self::Wiki];
+
+    /// Its key in `settings.json`, and its name in the home.
+    #[must_use]
+    pub const fn key(self) -> &'static str {
+        match self {
+            Self::Workflow => "workflow",
+            Self::Wiki => "wiki",
+        }
+    }
+
+    fn named(self, saved: &Saved) -> Option<PathBuf> {
+        match self {
+            Self::Workflow => saved.workflow.clone(),
+            Self::Wiki => saved.wiki.clone(),
+        }
+    }
+
+    /// Where it is: what the settings name, or else the home's (see
+    /// [`Self::in_home`]).
+    #[must_use]
+    pub fn path(self) -> PathBuf {
+        let saved = Saved::read();
+        self.named(&saved)
+            .unwrap_or_else(|| self.in_home_of(saved.home))
+    }
+
+    /// Where it is when the settings name none: in the home.
+    #[must_use]
+    pub fn in_home(self) -> PathBuf {
+        self.in_home_of(Saved::read().home)
+    }
+
+    fn in_home_of(self, home: Option<PathBuf>) -> PathBuf {
+        home_for_chats(home).join(self.key())
+    }
+}
+
+/// The folder where the human keeps how they work with Cox, whatever the
+/// project (see [`Folder::Workflow`]).
+#[must_use]
+pub fn workflow() -> PathBuf {
+    Folder::Workflow.path()
+}
+
+/// The folder of the human's wiki (see [`Folder::Wiki`]).
+#[must_use]
+pub fn wiki() -> PathBuf {
+    Folder::Wiki.path()
+}
+
+/// The folder what the agents read is kept in (see [`crate::raw`]): the
+/// one the settings name, or else `raw` in the home.
+#[must_use]
+pub fn raw() -> PathBuf {
+    let saved = Saved::read();
+    saved
+        .raw
+        .unwrap_or_else(|| home_for_chats(saved.home).join(crate::raw::RAW))
+}
+
+/// How the human reads the wiki, and what they select, in a language of
+/// their own, if `settings.json` says (see [`Translation`]).
+#[must_use]
+pub fn translation() -> Option<Translation> {
+    Saved::read().translation
+}
+
+/// Keeps `home` as where Cox's own chats work, in this Cox's
+/// `settings.json`.
+///
+/// # Errors
+///
+/// When Cox has no place to keep it, the path is not UTF-8, or the file
+/// cannot be read as settings or written.
+pub fn keep_home(home: &Path) -> anyhow::Result<()> {
+    let file =
+        crate::storage::path(Kept::Settings).context("there is no place to keep the settings")?;
+    keep_home_in(&file, home)
+}
+
+/// Keeps `home` in `file`, leaving the rest of what it holds as it was.
+fn keep_home_in(file: &Path, home: &Path) -> anyhow::Result<()> {
+    let home = home
+        .to_str()
+        .context("the folder's path is not UTF-8, which settings.json holds")?;
+    keep_in(file, "home", Some(Value::String(home.to_owned())))
+}
+
+/// Keeps `agent`, by its name in `agents.json`, as the agent a new chat
+/// talks to when the command line names none, or, with none, names none,
+/// in this Cox's `settings.json`.
+///
+/// # Errors
+///
+/// When Cox has no place to keep it, or the file cannot be read as
+/// settings or written.
+pub fn keep_agent(agent: Option<&str>) -> anyhow::Result<()> {
+    let file =
+        crate::storage::path(Kept::Settings).context("there is no place to keep the settings")?;
+    keep_in(
+        &file,
+        "agent",
+        agent.map(|agent| Value::String(agent.to_owned())),
+    )
+}
+
+/// What this Cox's `settings.json` holds as `key`, as it is written, if
+/// it holds it.
+#[must_use]
+pub fn kept(key: &str) -> Option<Value> {
+    let file = crate::storage::path(Kept::Settings)?;
+    let mut settings: Map<String, Value> = serde_json::from_slice(&fs::read(file).ok()?).ok()?;
+    settings.remove(key).filter(|value| !value.is_null())
+}
+
+/// Keeps `value` as `key` in this Cox's `settings.json`, or takes `key`
+/// out with none, leaving the rest of what it holds as it was.
+///
+/// # Errors
+///
+/// When Cox has no place to keep it, or the file cannot be read as
+/// settings or written.
+pub fn keep(key: &str, value: Option<Value>) -> anyhow::Result<()> {
+    let file =
+        crate::storage::path(Kept::Settings).context("there is no place to keep the settings")?;
+    keep_in(&file, key, value)
+}
+
+/// Keeps `value` as `key` of `file`, or takes `key` out with none,
+/// leaving the rest of what it holds as it was.
+///
+/// # Errors
+///
+/// When `file` cannot be read as an object of settings, as when the human
+/// left a mistake in it, which leaves it as it is, or it cannot be written.
+fn keep_in(file: &Path, key: &str, value: Option<Value>) -> anyhow::Result<()> {
+    let mut settings = match fs::read(file) {
+        Ok(bytes) => {
+            let read = serde_json::from_slice(&bytes)
+                .with_context(|| format!("{} is not JSON, so it is left as it is", file.display()));
+            let Value::Object(settings) = read? else {
+                bail!(
+                    "{} is not an object of settings, so it is left as it is",
+                    file.display()
+                );
+            };
+            settings
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Map::new(),
+        Err(error) => return Err(error).with_context(|| format!("reading {}", file.display())),
+    };
+    match value {
+        Some(value) => {
+            settings.insert(key.to_owned(), value);
+        }
+        None => {
+            settings.remove(key);
+        }
+    }
+    crate::storage::write_json(file, &Value::Object(settings))
+        .with_context(|| format!("writing {}", file.display()))
+}
+
+/// The folder `text` names, as the human types it on the settings screen:
+/// a whole path, or one from the home directory `user` that starts with
+/// `~`. A folder that is not there yet is made when a chat first works in
+/// it.
+///
+/// # Errors
+///
+/// What is wrong with `text`, for the human to read, when it names no
+/// folder.
+pub fn folder_of(text: &str, user: Option<&Path>) -> Result<PathBuf, &'static str> {
+    let text = text.trim();
+    if text.is_empty() {
+        return Err("Give the folder's path.");
+    }
+    let path = crate::home::expanded_in(text, user)
+        .ok_or("There is no home directory for ~ to stand for.")?;
+    if !path.is_absolute() {
+        return Err("Give the whole path, from / or from ~.");
+    }
+    if path.exists() && !path.is_dir() {
+        return Err("That is a file, not a folder.");
+    }
+    Ok(path)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::{Path, PathBuf};
+
+    use super::{Saved, SearchEngine, Translation, folder_of, keep_home_in, keep_in};
+    use crate::testing::TempDir;
+
+    #[test]
+    fn the_home_is_read_and_kept_beside_what_else_the_file_holds() {
+        let dir = TempDir::new();
+        let file = dir.join("settings.json");
+        assert_eq!(Saved::read_from(&file), Saved::default());
+
+        keep_home_in(&file, Path::new("/work/one")).unwrap();
+        assert_eq!(
+            Saved::read_from(&file).home,
+            Some(PathBuf::from("/work/one"))
+        );
+
+        std::fs::write(&file, r#"{"home": "/work/one", "later": 1}"#).unwrap();
+        keep_home_in(&file, Path::new("/work/two")).unwrap();
+        let kept: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
+        assert_eq!(kept["home"], "/work/two");
+        assert_eq!(kept["later"], 1);
+
+        keep_in(&file, "agent", Some("Claude".into())).unwrap();
+        assert_eq!(Saved::read_from(&file).agent.as_deref(), Some("Claude"));
+        keep_in(&file, "agent", None).unwrap();
+        assert_eq!(Saved::read_from(&file).agent, None);
+        assert_eq!(
+            Saved::read_from(&file).home,
+            Some(PathBuf::from("/work/two"))
+        );
+    }
+
+    #[test]
+    fn a_setting_kept_leaves_the_others_as_they_were() {
+        let dir = TempDir::new();
+        let file = dir.join("settings.json");
+        std::fs::write(
+            &file,
+            r#"{"agent": "Claude", "wiki": "~/notes", "raw": "~/raw",
+                "phone": {"tailscale": false}, "translation": {"language": "Japanese"}}"#,
+        )
+        .unwrap();
+
+        keep_in(&file, "home", Some("/work".into())).unwrap();
+        let kept: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
+        assert_eq!(
+            kept,
+            serde_json::json!({"agent": "Claude", "wiki": "~/notes", "raw": "~/raw",
+                "phone": {"tailscale": false}, "translation": {"language": "Japanese"},
+                "home": "/work"})
+        );
+    }
+
+    #[test]
+    fn a_settings_file_that_cannot_be_read_is_left_as_the_human_wrote_it() {
+        let dir = TempDir::new();
+        let file = dir.join("settings.json");
+        for written in [
+            "{\"agent\": \"Claude\", \"wiki\": \"~/notes\",}\n",
+            "[\"agent\", \"Claude\"]\n",
+        ] {
+            std::fs::write(&file, written).unwrap();
+            let kept = keep_in(&file, "home", Some("/work".into()));
+            assert_eq!(std::fs::read_to_string(&file).unwrap(), written);
+            let error = format!("{:#}", kept.unwrap_err());
+            assert!(error.contains("settings.json"), "{error}");
+        }
+    }
+
+    #[test]
+    fn a_home_that_is_not_a_path_is_not_read() {
+        assert!(Saved::parse(br#"{"home": 3}"#).is_err());
+        assert_eq!(Saved::parse(b"{}").unwrap(), Saved::default());
+    }
+
+    #[test]
+    fn the_workflow_is_a_folder_named_whole_or_from_the_home_directory() {
+        let saved = Saved::parse(br#"{"workflow": "/srv/cox"}"#).unwrap();
+        assert_eq!(saved.workflow, Some(PathBuf::from("/srv/cox")));
+        let user = Some(Path::new("/home/me"));
+        let saved = Saved::parse_for(br#"{"workflow": "~/dotfiles/cox"}"#, user).unwrap();
+        assert_eq!(saved.workflow, Some(PathBuf::from("/home/me/dotfiles/cox")));
+        let saved = Saved::parse(br#"{"home": "/work", "workflow": "dotfiles"}"#).unwrap();
+        assert_eq!(saved.home, Some(PathBuf::from("/work")));
+        assert_eq!(saved.workflow, None);
+        assert_eq!(Saved::parse(br#"{"workflow": 3}"#).unwrap().workflow, None);
+    }
+
+    #[test]
+    fn vim_is_on_only_when_the_human_says_true() {
+        assert!(Saved::parse(br#"{"vim": true}"#).unwrap().vim);
+        for bytes in [&b"{}"[..], br#"{"vim": false}"#, br#"{"vim": "yes"}"#] {
+            assert!(!Saved::parse(bytes).unwrap().vim);
+        }
+    }
+
+    #[test]
+    fn the_agent_is_named() {
+        let saved = Saved::parse(br#"{"agent": " Claude "}"#).unwrap();
+        assert_eq!(saved.agent.as_deref(), Some("Claude"));
+        for bytes in [
+            br#"{"home": "/work", "agent": " "}"#.as_slice(),
+            br#"{"home": "/work", "agent": ["npx", "agent"]}"#,
+        ] {
+            let saved = Saved::parse(bytes).unwrap();
+            assert_eq!(saved.agent, None);
+            assert_eq!(saved.home, Some(PathBuf::from("/work")));
+        }
+    }
+
+    #[test]
+    fn the_wiki_is_a_folder_as_the_workflow_is() {
+        let saved = Saved::parse(br#"{"wiki": "/srv/notes", "workflow": "/srv/cox"}"#).unwrap();
+        assert_eq!(saved.wiki, Some(PathBuf::from("/srv/notes")));
+        assert_eq!(saved.workflow, Some(PathBuf::from("/srv/cox")));
+        assert_eq!(Saved::parse(br#"{"wiki": "notes"}"#).unwrap().wiki, None);
+        let saved = Saved::parse(br#"{"raw": "/srv/raw"}"#).unwrap();
+        assert_eq!(saved.raw, Some(PathBuf::from("/srv/raw")));
+    }
+
+    #[test]
+    fn the_wiki_is_read_in_a_language_by_a_command_or_an_agent() {
+        let saved = Saved::parse(
+            br#"{"translation": {"language": "Japanese",
+                "command": ["plamo-translate", "--to", "{to}"]}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            saved.translation,
+            Some(Translation {
+                language: "Japanese".to_owned(),
+                command: Some(vec![
+                    "plamo-translate".to_owned(),
+                    "--to".to_owned(),
+                    "{to}".to_owned()
+                ]),
+                agent: None,
+            })
+        );
+        let saved = Saved::parse(br#"{"translation": {"language": "Japanese"}}"#).unwrap();
+        assert_eq!(saved.translation.clone().unwrap().command, None);
+        assert_eq!(saved.translation.unwrap().agent, None);
+        let saved = Saved::parse(br#"{"translation": {"language": "Japanese", "agent": "Codex"}}"#)
+            .unwrap();
+        assert_eq!(saved.translation.unwrap().agent.as_deref(), Some("Codex"));
+        // What is wrong with it is said, and the rest of the file counts.
+        for wrong in [
+            br#"{"home": "/work", "translation": {}}"#.as_slice(),
+            br#"{"home": "/work", "translation": {"language": " "}}"#,
+            br#"{"home": "/work", "translation": {"language": "ja", "command": []}}"#,
+            br#"{"home": "/work", "translation": {"language": "ja", "command": "tr"}}"#,
+            br#"{"home": "/work", "translation": "Japanese"}"#,
+            br#"{"home": "/work", "translation": {"language": "ja", "agent": 1}}"#,
+        ] {
+            let saved = Saved::parse(wrong).unwrap();
+            assert_eq!(saved.translation, None);
+            assert_eq!(saved.home, Some(PathBuf::from("/work")));
+        }
+    }
+
+    #[test]
+    fn a_folder_is_typed_whole_or_from_the_home_directory() {
+        let user = Path::new("/home/me");
+        assert_eq!(folder_of("~", Some(user)), Ok(PathBuf::from("/home/me")));
+        assert_eq!(
+            folder_of(" ~/Work ", Some(user)),
+            Ok(PathBuf::from("/home/me/Work"))
+        );
+        assert_eq!(
+            folder_of("/srv/cox", Some(user)),
+            Ok(PathBuf::from("/srv/cox"))
+        );
+        assert!(folder_of("Work", Some(user)).is_err());
+        assert!(folder_of("~other/Work", Some(user)).is_err());
+        assert!(folder_of("", Some(user)).is_err());
+        assert!(folder_of("~/Work", None).is_err());
+    }
+
+    #[test]
+    fn the_search_engine_is_google_unless_the_file_names_a_good_one() {
+        assert_eq!(Saved::parse(b"{}").unwrap().search, None);
+        assert_eq!(
+            super::SearchEngine::default().url("a"),
+            "https://www.google.com/search?q=a"
+        );
+        let saved = Saved::parse(br#"{"search": "https://duckduckgo.com/?q=%s"}"#).unwrap();
+        assert_eq!(
+            saved.search.map(|engine| engine.url("rust")),
+            Some("https://duckduckgo.com/?q=rust".to_owned())
+        );
+        for wrong in [
+            br#"{"home": "/work", "search": "https://duckduckgo.com/"}"#.as_slice(),
+            br#"{"home": "/work", "search": "ftp://example.com/?q=%s"}"#,
+            br#"{"home": "/work", "search": "duckduckgo.com/?q=%s"}"#,
+            br#"{"home": "/work", "search": 3}"#,
+        ] {
+            let saved = Saved::parse(wrong).unwrap();
+            assert_eq!(saved.search, None);
+            assert_eq!(saved.home, Some(PathBuf::from("/work")));
+        }
+    }
+
+    #[test]
+    fn the_words_searched_are_encoded() {
+        let engine = SearchEngine::of(" https://www.google.com/search?q=%s ").unwrap();
+        assert_eq!(
+            engine.url("rust & gpui"),
+            "https://www.google.com/search?q=rust+%26+gpui"
+        );
+        assert_eq!(
+            engine.url("検索"),
+            "https://www.google.com/search?q=%E6%A4%9C%E7%B4%A2"
+        );
+        assert_eq!(
+            engine.url("a=b?c#d/e%"),
+            "https://www.google.com/search?q=a%3Db%3Fc%23d%2Fe%25"
+        );
+        assert_eq!(engine.host(), "google.com");
+        assert_eq!(
+            SearchEngine::of("http://localhost:8080/s/%s")
+                .unwrap()
+                .host(),
+            "localhost"
+        );
+        assert!(SearchEngine::of("javascript:alert(%s)").is_err());
+    }
+}

@@ -11,10 +11,10 @@ use gpui::{AppContext as _, AsyncApp, Context, Entity, WeakEntity, Window};
 use tokio::sync::oneshot;
 
 use super::mac::{FIRST_PICTURE, LOOK_AGAIN, SETTLE, png};
-use crate::agent::mcp::{AndroidAct, Seen};
 use crate::stage::Stage;
 use crate::stage::android::Android;
 use crate::stage::tab::TabContent;
+use coxd::agent::mcp::{AndroidAct, Seen};
 
 /// How many steps a swipe's finger moves in, and how long each takes, as
 /// a finger moves.

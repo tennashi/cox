@@ -18,13 +18,13 @@
 //! (see `cox::daemon::process`).
 //!
 //! The agents run `cox` too, as `cox --mcp <socket>`, the MCP server of
-//! Cox's own tools that `cox::agent::mcp` hands them. An agent that debugs
+//! Cox's own tools that `coxd::agent::mcp` hands them. An agent that debugs
 //! Cox runs `cox [--data <dir>] --inspect <tool>` to ask a running Cox how
 //! it stands, and to drive it (see `cox::inspect`). `cox [--data <dir>]
 //! --phone-link` prints the link that pairs a phone with the page coxd
 //! serves it (see `cox::daemon::phone`). Cox reads a web page
 //! for `raw_keep` as `cox --read-page <url>`, apart from itself (see
-//! `cox::raw::page`). And on Linux, CEF runs
+//! `coxd::raw::page`). And on Linux, CEF runs
 //! `cox` for its helper processes, which `cox_browser` tells apart.
 
 use std::process::ExitCode;
@@ -45,7 +45,7 @@ fn main() -> ExitCode {
             let logs = (!helper)
                 .then(|| coxd::storage::path(coxd::storage::Kept::Logs))
                 .flatten();
-            cox::logs::init(logs.as_deref());
+            coxd::logs::init(logs.as_deref());
             if !helper {
                 coxd::scratch::sweep();
             }
@@ -63,8 +63,8 @@ fn main() -> ExitCode {
         }
         Mode::Daemon { data } => cox::daemon::main::run(data.as_deref()),
         Mode::Bridge(socket) => {
-            cox::logs::init(None);
-            match cox::agent::mcp::bridge(&socket) {
+            coxd::logs::init(None);
+            match coxd::agent::mcp::bridge(&socket) {
                 Ok(()) => ExitCode::SUCCESS,
                 Err(error) => {
                     eprintln!("cox: {error:#}");
@@ -76,7 +76,7 @@ fn main() -> ExitCode {
             if let Some(data) = &data {
                 coxd::storage::keep_in(data);
             }
-            cox::logs::init(None);
+            coxd::logs::init(None);
             let Some(socket) = cox::inspect::socket() else {
                 eprintln!("cox: there is no place for the socket of a Cox run from here");
                 return ExitCode::from(1);
@@ -105,8 +105,8 @@ fn main() -> ExitCode {
             }
         }
         // A page of anyone's, read in a process of its own (see
-        // `cox::raw::page`), which keeps no file.
-        Mode::ReadPage(url) => cox::raw::page::run(&url),
+        // `coxd::raw::page`), which keeps no file.
+        Mode::ReadPage(url) => coxd::raw::page::run(&url),
         Mode::Usage => {
             println!("{}", app::USAGE);
             ExitCode::SUCCESS

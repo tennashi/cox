@@ -1,7 +1,7 @@
 //! What the human selected, read in their language: [`Translate`] in any
 //! part of the window with text selected, or "Translate" in the menu the
 //! right button opens on it (see [`offer`]), shows a card by the mouse with the text's
-//! translation as it arrives (see [`crate::translate`]), which the human
+//! translation as it arrives (see [`coxd::translate`]), which the human
 //! copies, and closes with Escape, the ×, or a click beside it. The menu
 //! also hands the selection to the chat shown, as [`crate::chat::hand`]
 //! says, where it knows where the selection is from.
@@ -15,9 +15,9 @@ use gpui::{
 
 use cox_core::entry::Attachment;
 
-use crate::translate::{Arriving, Way};
 use crate::vim::hints::Hinted as _;
 use coxd::theme::{BORDER_STRONG, BUTTON_HOVER, DIM, FAILED, FAINT, FOREGROUND, RAISED};
+use coxd::translate::{Arriving, Way};
 
 actions!(
     cox,
@@ -164,7 +164,7 @@ impl TranslationCard {
     /// Asks for the translation, which the card shows once it arrives.
     fn translate(&mut self, cx: &mut Context<Self>) {
         self.offered = false;
-        let Some((way, mut answer)) = crate::translate::text(&self.text) else {
+        let Some((way, mut answer)) = coxd::translate::text(&self.text) else {
             self.translated = Some(Err(NO_LANGUAGE.to_owned()));
             cx.notify();
             return;
