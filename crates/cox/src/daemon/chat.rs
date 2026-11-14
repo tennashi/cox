@@ -38,8 +38,8 @@ const OPENED_BY_LENGTH: usize = 40;
 
 /// How long the human waits on the triggers that gather what they need
 /// to answer a permission request, before they are asked without what
-/// has not come.
-const GATHER_FOR: std::time::Duration = std::time::Duration::from_mins(1);
+/// has not come; and how long a trigger tried from its card runs.
+pub(crate) const GATHER_FOR: std::time::Duration = std::time::Duration::from_mins(1);
 
 /// A task that stops when this is dropped, unless it was let go on its
 /// own (see [`Task::detach`]).

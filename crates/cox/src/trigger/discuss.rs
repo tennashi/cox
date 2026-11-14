@@ -17,13 +17,17 @@ use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 use cox_acp::{PermissionAnswer, StopReason};
 use cox_core::entry::CheckState;
 use serde_json::{Value, json};
+use tokio::sync::oneshot;
 
 use super::card::Draft;
 use super::{By, Scope};
+use crate::agent::mcp::Ended;
 use crate::agent::setup::{Policy, Setup, StageUse};
 use crate::agent::{Agent, AgentEvent, Command, Start};
 use crate::agents::Agents;
 use crate::chat::judge::{ALLOWED, Verdict};
+use crate::daemon::chat::GATHER_FOR;
+use crate::stage::terminal::run_unseen;
 
 /// The agents Cox knows, once the window has read them.
 static AGENTS: OnceLock<Agents> = OnceLock::new();
@@ -536,44 +540,67 @@ fn tried_on(tried: &Try, last: Option<&Path>) -> Tried {
     }
 }
 
-/// How the command `text` goes in `folder`: what it printed, the end of
-/// it, and whether it exited 0.
+/// How the command `text` goes in `folder`, run as a chat runs it when
+/// no window is there to show it: what its terminal shows, the end of
+/// it, and whether it exited 0. One that takes longer than a chat waits
+/// on a trigger is stopped as a chat stops it, and fails.
 fn run(text: &str, folder: &Path) -> Tried {
-    let output = std::process::Command::new("sh")
-        .arg("-c")
-        .arg(text)
-        .current_dir(folder)
-        .output();
-    match output {
-        Ok(output) => {
-            let mut printed = String::from_utf8_lossy(&output.stdout).into_owned();
-            printed.push_str(&String::from_utf8_lossy(&output.stderr));
-            let printed = printed.trim();
-            let start = printed.len().saturating_sub(PRINTED);
-            let start = (start..=printed.len())
-                .find(|&at| printed.is_char_boundary(at))
-                .unwrap_or(printed.len());
-            let ended = output.status.code().map_or_else(
-                || "it was stopped".to_owned(),
-                |code| format!("it exited {code}"),
-            );
-            Tried {
-                state: if output.status.success() {
-                    CheckState::Passed
-                } else {
-                    CheckState::Failed
-                },
-                said: Some(
-                    format!("{}\n\n{ended}", &printed[start..])
-                        .trim()
-                        .to_owned(),
-                ),
-            }
+    let runtime = match tokio::runtime::Builder::new_current_thread()
+        .enable_time()
+        .build()
+    {
+        Ok(runtime) => runtime,
+        Err(error) => return cannot_run(&error.to_string()),
+    };
+    let (answer, ran) = oneshot::channel();
+    let ((), ran) = runtime.block_on(async {
+        tokio::join!(
+            run_unseen(text.to_owned(), folder, answer),
+            tokio::time::timeout(GATHER_FOR, ran),
+        )
+    });
+    let ran = match ran {
+        Ok(Ok(Ok(ran))) => ran,
+        Ok(Ok(Err(error))) => return cannot_run(&error),
+        Ok(Err(_)) => return cannot_run("its terminal went away"),
+        Err(_) => {
+            return Tried {
+                state: CheckState::Failed,
+                said: Some(format!(
+                    "It took longer than {} seconds, so it was stopped.",
+                    GATHER_FOR.as_secs()
+                )),
+            };
         }
-        Err(error) => Tried {
-            state: CheckState::Broken,
-            said: Some(format!("cannot run it: {error}")),
+    };
+    let printed = ran.output.trim();
+    let start = printed.len().saturating_sub(PRINTED);
+    let start = (start..=printed.len())
+        .find(|&at| printed.is_char_boundary(at))
+        .unwrap_or(printed.len());
+    let ended = match ran.ended {
+        Ended::Exited(code) => format!("it exited {code}"),
+        Ended::Signal(_) | Ended::Unknown | Ended::Closed => "it was stopped".to_owned(),
+    };
+    Tried {
+        state: if ran.ended == Ended::Exited(0) {
+            CheckState::Passed
+        } else {
+            CheckState::Failed
         },
+        said: Some(
+            format!("{}\n\n{ended}", &printed[start..])
+                .trim()
+                .to_owned(),
+        ),
+    }
+}
+
+/// How a command that could not run for `error` went.
+fn cannot_run(error: &str) -> Tried {
+    Tried {
+        state: CheckState::Broken,
+        said: Some(format!("cannot run it: {error}")),
     }
 }
 
@@ -616,6 +643,13 @@ mod tests {
             tried.said,
             Some(format!("{}\n\nit exited 0", folder.display()))
         );
+    }
+
+    #[test]
+    fn a_shell_trigger_is_tried_on_a_terminal_as_a_chat_runs_it() {
+        let folder = TempDir::new();
+        let tried = run("test -t 0 && test -t 1 && echo terminal", &folder);
+        assert_eq!(tried.said.as_deref(), Some("terminal\n\nit exited 0"));
     }
 
     #[test]
