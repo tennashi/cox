@@ -9,8 +9,7 @@ use gpui::{App, AsyncApp, Global, WindowHandle};
 
 use super::{Saved, home_for_chats, view};
 use crate::agents::Agents;
-use crate::stage::follow::Stamp;
-use crate::storage::Kept;
+use crate::storage::{Kept, Stamp};
 use crate::workspace::Workspace;
 
 /// How often Cox looks whether `settings.json` or `agents.json` changed.

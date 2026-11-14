@@ -4,9 +4,8 @@
 //! the window shows it: the window makes each folder's stage through
 //! [`Stages`].
 //!
-//! - [`launcher`] starts a chat: its agent, with the tools between it and
-//!   its stage, for the daemon; and its stage and the relay to it, for
-//!   the window.
+//! - [`launcher`] starts a chat's stage and the relay to it, for the
+//!   window; the daemon starts its agent.
 //! - [`view`] draws a chat's conversation with GPUI, its stage beside it,
 //!   and turns keystrokes and clicks into what the human does.
 //! - [`hand`] is what the human hands a chat from elsewhere on the

@@ -61,21 +61,7 @@ fn main() -> ExitCode {
             }
             app::run(settings)
         }
-        Mode::Daemon { data } => {
-            // First, while coxd has no other thread.
-            let environment = cox::login::take_in();
-            if let Some(data) = &data {
-                cox::storage::keep_in(data);
-            }
-            cox::logs::init(cox::storage::path(cox::storage::Kept::Logs).as_deref());
-            cox::scratch::sweep();
-            if let cox::login::Taken::Failed(why) = environment {
-                tracing::warn!(
-                    "the agents get launchd's environment, not the login shell's: {why}"
-                );
-            }
-            app::daemon()
-        }
+        Mode::Daemon { data } => cox::daemon::main::run(data.as_deref()),
         Mode::Bridge(socket) => {
             cox::logs::init(None);
             match cox::agent::mcp::bridge(&socket) {

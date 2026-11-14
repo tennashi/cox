@@ -62,9 +62,10 @@ use gpui::{
 };
 
 use crate::chat::region::{self, Described};
-use crate::stage::follow::{self, Follows, Stamp};
+use crate::stage::follow::{self, Follows};
 use crate::stage::servers::{LanguageServer, Servers};
 use crate::stage::tab::{self, Shows, ShowsFile};
+use crate::storage::Stamp;
 use crate::ui::paths::shortened;
 use crate::ui::selected::{self, Selected};
 use crate::ui::{Copy, LinkClicked};

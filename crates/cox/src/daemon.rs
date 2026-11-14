@@ -18,14 +18,17 @@
 //! - [`chat`] runs one chat: its conversation, its agent, the check of its
 //!   goal and its judge.
 //! - [`wire`] says what the window and the daemon say to each other.
-//! - [`process`] runs the daemon as a process of its own, coxd, which a
-//!   window reaches on a socket, and [`client`] is how the window does.
+//! - [`main`] starts coxd, and [`process`] runs it as a process of its
+//!   own, which a window reaches on a socket, and [`client`] is how the
+//!   window does. [`launcher`] starts each chat's agent for it.
 //! - [`phone`] serves the human's phone a page of the chats, which watches
 //!   them beside the window, and [`push`] tells the phone of the chats that
 //!   need the human while they are away from the Mac.
 
 pub mod chat;
 pub mod client;
+mod launcher;
+pub mod main;
 pub mod phone;
 pub mod process;
 mod project;

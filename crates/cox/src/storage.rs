@@ -18,6 +18,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::SystemTime;
 
 /// Where `cargo xtask install` puts Cox, from the home directory.
 const INSTALLED: &str = if cfg!(target_os = "macos") {
@@ -362,6 +363,29 @@ fn outside_app(exe: &Path) -> Option<&Path> {
     match directory.parent().and_then(Path::parent) {
         Some(app) if app.extension().is_some_and(|extension| extension == "app") => app.parent(),
         _ => Some(directory),
+    }
+}
+
+/// When a file last changed, and how long it was, as a tab, or coxd
+/// following the settings, last read it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Stamp {
+    modified: SystemTime,
+    len: u64,
+}
+
+impl Stamp {
+    /// When the file at `path` last changed, and how long it is.
+    ///
+    /// # Errors
+    ///
+    /// When the file cannot be looked at, as when there is none.
+    pub fn of(path: &Path) -> std::io::Result<Self> {
+        let metadata = std::fs::metadata(path)?;
+        Ok(Self {
+            modified: metadata.modified()?,
+            len: metadata.len(),
+        })
     }
 }
 
