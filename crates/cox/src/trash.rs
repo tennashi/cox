@@ -92,7 +92,7 @@ fn home_trash() -> Option<PathBuf> {
     let data = std::env::var_os("XDG_DATA_HOME")
         .map(PathBuf::from)
         .filter(|data| data.is_absolute())
-        .or_else(|| Some(crate::ui::paths::home()?.join(".local/share")))?;
+        .or_else(|| Some(crate::home::home()?.join(".local/share")))?;
     Some(data.join("Trash"))
 }
 

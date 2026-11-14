@@ -13,10 +13,11 @@ use gpui::{
 use serde_json::Value;
 
 use super::words::Words;
+use crate::home::home;
 use crate::ui::button::{INPUT_HEIGHT, Kind, button};
 use crate::ui::icons::{Icon, icon};
 use crate::ui::input::{Blurred, LineInput, Submitted};
-use crate::ui::paths::{home, shortened};
+use crate::ui::paths::shortened;
 use crate::ui::theme::{ACCENT, BORDER, DIM, FAILED, FAINT, FOREGROUND};
 use crate::vim::hints::Hinted as _;
 

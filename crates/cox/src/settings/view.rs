@@ -45,10 +45,11 @@ use self::search::SearchSection;
 use self::servers::ServersSection;
 use self::translation::TranslationSection;
 use self::words::Words;
+use crate::home::home;
 use crate::ui::button::{INPUT_HEIGHT, Kind, button};
 use crate::ui::icons::{Icon, icon};
 use crate::ui::input::{Blurred, LineInput, Submitted};
-use crate::ui::paths::{home, shortened};
+use crate::ui::paths::shortened;
 use crate::ui::theme::{
     ACCENT, ACCENT_GROUND, BORDER, BUTTON, BUTTON_HOVER, DIM, FAILED, FAINT, FOREGROUND, HOVER,
     LINK,

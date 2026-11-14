@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 use cox_core::tabs::Lines;
 use gpui::{Context, EventEmitter, Focusable as _, Subscription, Window, prelude::*};
 
+use crate::home::{expanded_in, home};
 use crate::stage::Stage;
 use crate::stage::changes::{self, Changes, ShowTurn};
 use crate::stage::code::Code;
@@ -20,7 +21,6 @@ use crate::stage::tab::{ShowsFile, Tab, TabContent};
 use crate::stage::tree::{self, Chosen, Unchosen};
 use crate::ui::LinkClicked;
 use crate::ui::markdown::FileLink;
-use crate::ui::paths::{expanded_in, home};
 
 impl EventEmitter<ShowTurn> for Stage {}
 

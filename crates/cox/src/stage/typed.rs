@@ -8,8 +8,8 @@
 use std::path::{Path, PathBuf};
 
 use super::page::address::Address;
+use crate::home::expanded;
 use crate::settings::SearchEngine;
-use crate::ui::paths::expanded;
 
 /// What a line typed in the menu opens.
 #[derive(Debug, Clone, PartialEq, Eq)]
