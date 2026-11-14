@@ -1000,8 +1000,18 @@ async fn the_plan_stays_in_sight_until_the_next_line(cx: &mut TestAppContext) {
 
     cx.simulate_input("plan, and wait");
     cx.simulate_keystrokes("enter");
-    cx.condition(&view, |view, _| view.conversation().last_plan().is_some())
-        .await;
+    // The plan comes before the reply that says the agent waits, and both
+    // must be drawn before their bounds are read.
+    cx.condition(&view, |view, _| {
+        view.conversation().last_plan().is_some()
+            && view
+                .conversation()
+                .entries()
+                .iter()
+                .any(|entry| matches!(entry, Entry::Reply(text) if text.contains("waiting")))
+    })
+    .await;
+    cx.run_until_parked();
     // On a card over the top of the conversation, at its right.
     let card = cx.debug_bounds("plan").expect("the plan is drawn");
     let conversation = cx.debug_bounds("reply-2").expect("the reply is drawn");
