@@ -9,8 +9,8 @@ Cox talks to agents over the
 [Agent Client Protocol](https://agentclientprotocol.com) (ACP), so it
 works with any agent that speaks ACP.
 
-Cox runs on macOS and Linux. It is in early, active development: there
-are no releases yet, and things change often.
+Cox runs on macOS and Linux. It is in early, active development, and
+things change often.
 
 ## What it does
 
@@ -37,12 +37,28 @@ are no releases yet, and things change often.
 - **On the phone.** Follow and answer your chats from your phone, over
   Tailscale, and try the web app you are making there too.
 
-## Building and installing
+## Installing
 
-Cox is built from source. You need the Rust toolchain
-([rustup](https://rustup.rs) installs the version `rust-toolchain.toml`
-pins) and Node.js, for `npx`, which starts most agents and the browser
-tools.
+On a Mac with Apple silicon, install Cox with Homebrew:
+
+```sh
+brew install --cask tennashi/tap/cox
+```
+
+Cox is signed with a certificate of its own, not one from Apple, so macOS
+blocks it the first time it opens. Close the message, then in System
+Settings, under Privacy & Security, click "Open Anyway". Cox also needs
+Node.js, for `npx`, which starts most agents and the browser tools.
+
+To update Cox, run `brew upgrade --cask cox`, then restart the window.
+`coxd` moves to the new version as it does after building from source,
+below.
+
+## Building from source
+
+On Linux, and to work on Cox, build it from source. You need the Rust
+toolchain ([rustup](https://rustup.rs) installs the version
+`rust-toolchain.toml` pins) and Node.js.
 
 - **macOS**: the Command Line Tools, plus `cmake` and `ninja`
   (`brew install cmake ninja`).

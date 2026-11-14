@@ -1,0 +1,118 @@
+name: Release
+
+# A tag such as v0.1.0 builds Cox.app for Apple silicon, signs it with the
+# certificate Cox's builds share, publishes it as a release, and points the
+# cask in tennashi/homebrew-tap at it. A pull request that changes this
+# workflow builds and signs the app the same way, and publishes nothing.
+
+on:
+  push:
+    tags: ["v*"]
+  pull_request:
+    paths: [.github/workflows/release.yml]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  macos:
+    runs-on: macos-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Read the version, and check that the tag names it
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)
+          if [ "$GITHUB_REF_TYPE" = tag ] && [ "$GITHUB_REF_NAME" != "v$version" ]; then
+            echo "::error::the tag $GITHUB_REF_NAME does not name the workspace's version, $version"
+            exit 1
+          fi
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+          echo "ZIP=Cox-$version-arm64.zip" >> "$GITHUB_ENV"
+      - name: Install the tools that build CEF's wrapper
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: 1
+        run: brew install cmake ninja
+      - name: Install the toolchain from rust-toolchain.toml
+        run: rustup toolchain install
+      # Without a cache: a release is built from what the tag holds alone.
+      - name: Put the signing certificate in a keychain of its own
+        env:
+          IDENTITY_P12: ${{ secrets.COX_IDENTITY_P12 }}
+          IDENTITY_PASSWORD: ${{ secrets.COX_IDENTITY_PASSWORD }}
+        run: |
+          keychain="$RUNNER_TEMP/signing.keychain-db"
+          password=$(openssl rand -hex 24)
+          security create-keychain -p "$password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$password" "$keychain"
+          printf '%s' "$IDENTITY_P12" | base64 --decode > "$RUNNER_TEMP/identity.p12"
+          security import "$RUNNER_TEMP/identity.p12" -k "$keychain" -P "$IDENTITY_PASSWORD" -T /usr/bin/codesign
+          rm "$RUNNER_TEMP/identity.p12"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$password" "$keychain" > /dev/null
+          security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
+          identity=$(security find-identity -p codesigning "$keychain" | awk '$3 == "\"Cox\"" { print $2; exit }')
+          if [ -z "$identity" ]; then
+            echo "::error::the keychain holds no certificate named Cox"
+            exit 1
+          fi
+          echo "COX_SIGNING_IDENTITY=$identity" >> "$GITHUB_ENV"
+      - name: Build Cox.app and sign it
+        run: cargo xtask bundle --release
+      - name: Check the signature
+        run: |
+          codesign --verify --deep --strict target/release/Cox.app
+          codesign --display --verbose=2 target/release/Cox.app 2>&1 | grep -x 'Authority=Cox'
+      - name: Zip the app
+        run: |
+          ditto -c -k --keepParent target/release/Cox.app "$RUNNER_TEMP/$ZIP"
+          echo "SHA256=$(shasum -a 256 "$RUNNER_TEMP/$ZIP" | cut -d ' ' -f 1)" >> "$GITHUB_ENV"
+      - name: Keep the zip with the run
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ${{ env.ZIP }}
+          path: ${{ runner.temp }}/${{ env.ZIP }}
+          if-no-files-found: error
+      - name: Publish the release
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" "$RUNNER_TEMP/$ZIP" --title "Cox $VERSION" --notes-file - <<EOF
+          Install Cox with Homebrew, on a Mac with Apple silicon:
+
+          \`\`\`sh
+          brew install --cask tennashi/tap/cox
+          \`\`\`
+
+          Or unzip $ZIP into Applications.
+
+          Cox is signed with a certificate of its own, not one from Apple, so
+          macOS blocks it the first time it opens. Close the message, then in
+          System Settings, under Privacy & Security, click "Open Anyway".
+
+          Cox starts agents with npx, so it needs Node.js.
+          EOF
+      - name: Point the cask at the release
+        if: github.ref_type == 'tag'
+        env:
+          TAP_DEPLOY_KEY: ${{ secrets.TAP_DEPLOY_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          echo 'github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl' >> ~/.ssh/known_hosts
+          eval "$(ssh-agent -s)"
+          printf '%s\n' "$TAP_DEPLOY_KEY" | ssh-add -
+          tap="$RUNNER_TEMP/homebrew-tap"
+          git clone git@github.com:tennashi/homebrew-tap.git "$tap"
+          sed -i '' -e "s/^  version \".*\"$/  version \"$VERSION\"/" -e "s/^  sha256 .*$/  sha256 \"$SHA256\"/" "$tap/Casks/cox.rb"
+          git -C "$tap" diff
+          git -C "$tap" -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
+            commit --all --message "cox $VERSION"
+          git -C "$tap" push
+          ssh-agent -k
