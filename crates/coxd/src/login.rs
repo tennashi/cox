@@ -5,11 +5,19 @@
 //! its `PATH` is `/usr/bin:/bin:/usr/sbin:/sbin`, so the agent's program,
 //! as `npx`, is not found, and what the human exports in their shell's
 //! profile, as `CLAUDE_CODE_ENABLE_TODO_TOOLS`, does not reach the agent.
-//! So Cox asks the login shell what its environment is, as the shell the
-//! human types in has it, and takes it in, as Zed and VS Code do.
+//! So the window asks the login shell what its environment is, as the
+//! shell the human types in has it, and takes it in, as Zed and VS Code
+//! do, giving the shell a few seconds, since the human waits on the window.
+//!
+//! coxd, which launchd starts as the human logs in, while the Mac is busy
+//! and a shell may take a while, starts again from the login shell instead
+//! (see [`start_from_login_shell`]), as a launchd service wrapped in a
+//! shell does: it has the shell's environment whenever the shell is done,
+//! however long that takes.
 
 use std::ffi::{OsStr, OsString};
 use std::os::unix::ffi::{OsStrExt as _, OsStringExt as _};
+use std::os::unix::process::CommandExt as _;
 use std::path::PathBuf;
 use std::process::Command;
 use std::time::Duration;
@@ -23,8 +31,18 @@ const PATIENCE: Duration = Duration::from_secs(5);
 /// its profile writes.
 const MARK: &str = "__cox_environment__";
 
-/// The variables the shell sets of itself, which say nothing of Cox.
-const ITS_OWN: [&str; 4] = ["PWD", "OLDPWD", "SHLVL", "_"];
+/// Set for a login shell Cox reads, so that a profile can tell, as with
+/// VS Code's `VSCODE_RESOLVING_ENVIRONMENT`, and skip what only a terminal
+/// needs. coxd started from the shell finds it set, and takes it away.
+pub const RESOLVING: &str = "COX_RESOLVING_ENVIRONMENT";
+
+/// Set by a window that could not take in the shell's environment, so
+/// that the coxd it starts starts from the login shell.
+const LAUNCHDS: &str = "COX_ENVIRONMENT_IS_LAUNCHDS";
+
+/// The variables the shell sets of itself, which say nothing of Cox, and
+/// the one Cox sets for it.
+const ITS_OWN: [&str; 5] = ["PWD", "OLDPWD", "SHLVL", "_", RESOLVING];
 
 /// What came of taking in the login shell's environment, for the log.
 #[derive(Debug)]
@@ -49,6 +67,90 @@ pub fn take_in() -> Taken {
         return Taken::NotNeeded;
     }
     let shell = shell();
+    let taken = take_in_from(&shell);
+    if matches!(taken, Taken::Failed(_)) {
+        // SAFETY: as below, before any thread of Cox's starts.
+        unsafe { std::env::set_var(LAUNCHDS, "1") };
+    }
+    taken
+}
+
+/// What came of starting coxd from the login shell, for the log.
+#[derive(Debug)]
+pub enum Started {
+    /// coxd has the environment it was started with: a terminal's, or a
+    /// window's that took in the shell's.
+    AsItIs,
+    /// coxd was started again from the login shell, and has its
+    /// environment.
+    FromShell,
+    /// coxd could not be started from the shell, for this reason, and has
+    /// launchd's environment.
+    Failed(String),
+}
+
+/// For coxd, first, before any thread starts: when launchd started it, or
+/// a window that has launchd's environment did, starts it again, as the
+/// same process, from the human's login shell, which hands it its
+/// environment. Returns only when it is not started again.
+#[must_use]
+pub fn start_from_login_shell() -> Started {
+    if std::env::var_os(RESOLVING).is_some() {
+        // SAFETY: coxd has no other thread yet.
+        unsafe {
+            std::env::remove_var(RESOLVING);
+            std::env::remove_var(LAUNCHDS);
+        }
+        return Started::FromShell;
+    }
+    let launchds = std::env::var_os(LAUNCHDS).is_some();
+    if !(cfg!(target_os = "macos") && (launchds || opened_by_the_system())) {
+        return Started::AsItIs;
+    }
+    let shell = shell();
+    let script = std::env::current_exe()
+        .map_err(|error| error.to_string())
+        .and_then(|exe| {
+            let mut words = vec![exe.into_os_string()];
+            words.extend(std::env::args_os().skip(1));
+            started_again(&words).ok_or_else(|| {
+                "its command has a quote or a backslash, which no shell quotes alike".to_owned()
+            })
+        });
+    let error = match script {
+        // `exec` returns only if the shell does not start.
+        Ok(script) => Command::new(&shell)
+            .args(["-l", "-i", "-c"])
+            .arg(script)
+            .env(RESOLVING, "1")
+            .exec()
+            .to_string(),
+        Err(error) => error,
+    };
+    Started::Failed(format!("{}: {error}", shell.display()))
+}
+
+/// The script that has a shell run `words`, a program and its arguments,
+/// in its place: each word in single quotes, which sh, bash, zsh and fish
+/// read alike, unless a word holds a quote or a backslash, which they do
+/// not.
+fn started_again(words: &[OsString]) -> Option<String> {
+    let mut script = String::from("exec");
+    for word in words {
+        let word = word.to_str()?;
+        if word.contains(['\'', '\\']) {
+            return None;
+        }
+        script.push_str(" '");
+        script.push_str(word);
+        script.push('\'');
+    }
+    Some(script)
+}
+
+/// Takes in the environment of `shell`.
+fn take_in_from(shell: &std::path::Path) -> Taken {
+    let shell = shell.to_owned();
     match environment_of(&shell) {
         Ok(environment) => {
             let count = environment.len();
@@ -99,7 +201,8 @@ fn environment_of(shell: &std::path::Path) -> Result<Vec<(OsString, OsString)>, 
     let output = run_with_deadline(
         Command::new(shell)
             .args(["-l", "-i", "-c"])
-            .arg(format!("printf '\\0{MARK}\\0'; exec /usr/bin/env -0")),
+            .arg(format!("printf '\\0{MARK}\\0'; exec /usr/bin/env -0"))
+            .env(RESOLVING, "1"),
         None,
         PATIENCE,
         |_| {},
@@ -155,6 +258,27 @@ mod tests {
             ])
         );
         assert_eq!(parse(b"PATH=/usr/bin\0"), None);
+    }
+
+    #[test]
+    fn a_shell_runs_the_words_it_is_started_again_with() {
+        let words: Vec<OsString> = ["/bin/echo", "a b", "--data", "/tmp/my data"]
+            .map(OsString::from)
+            .to_vec();
+        let script = started_again(&words).unwrap();
+        for shell in ["/bin/sh", "/bin/zsh", "/bin/bash"] {
+            if !std::path::Path::new(shell).exists() {
+                continue;
+            }
+            let output = Command::new(shell).arg("-c").arg(&script).output().unwrap();
+            assert_eq!(output.stdout, b"a b --data /tmp/my data\n", "{shell}");
+        }
+    }
+
+    #[test]
+    fn words_no_shell_quotes_alike_are_not_started_again() {
+        assert_eq!(started_again(&["/bin/echo".into(), "it's".into()]), None);
+        assert_eq!(started_again(&["/bin/echo".into(), "a\\b".into()]), None);
     }
 
     #[test]
