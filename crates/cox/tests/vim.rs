@@ -1613,7 +1613,9 @@ fn the_conversation_scrolls_from_the_input_in_normal_mode(cx: &mut TestAppContex
     let (workspace, cx) = open_window(cx, "conversation");
     keys::press(cx, &workspace, "secondary-n");
     let view = shown_view(cx, &workspace);
-    let words = "word ".repeat(1500);
+    // Enough for ctrl-d to move half a window, and no more: each letter is
+    // a keystroke of its own, and 1,500 words took 30 s.
+    let words = "word ".repeat(400);
     cx.simulate_input(&words);
     keys::press(cx, &workspace, "enter");
     wait_for_reply(cx, &view);
