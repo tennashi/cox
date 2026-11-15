@@ -101,6 +101,27 @@ with a run's [log file](#logs) and the chat's number.
    target/debug/cox --data target/debug/cox-run --inspect screenshot shot.png
    ```
 
+### In a Linux container
+
+From a Mac, or any machine with Docker, run Cox the same way in a Linux
+container that has all of the above:
+
+```sh
+cargo xtask run --linux
+```
+
+It names the container it runs in, as `cox-linux-<hash>`, one for each
+worktree. Drive Cox there, with the paths the container sees:
+
+```sh
+docker exec cox-linux-<hash> /target/debug/cox --data /target/debug/cox-run --inspect state
+```
+
+The container sees the workspace at `/src`, so `--data` and a scenario
+are paths in it, and a screenshot saved under `/src` lands in the
+workspace. Its build is kept in Docker volumes named `cox-linux-*`,
+apart from `target/`.
+
 ### With the fake Android emulator
 
 1. Build the fake emulator and lay it out as an Android SDK:
