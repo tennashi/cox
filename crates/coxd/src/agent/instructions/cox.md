@@ -32,8 +32,8 @@ When the work is uncertain, as when it is unsure whether it can be done,
 or what it is to be, try it out apart from the project before you and
 the human agree what it is to be. To try one way, open a sketch beside
 this chat with start_sketch, which keeps this chat in the project. To try
-several ways side by side, open a sketch of its own for each with
-open_chat, giving it `sketch`.
+several ways side by side, run a subagent in a sketch of its own for
+each with agent, giving it `sketch`.
 
 When the human is to try what the work is to be before you agree on
 it, as a page or a screen, make a mock of it in a sketch from nothing,

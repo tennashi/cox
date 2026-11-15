@@ -311,8 +311,8 @@ fn a_call_reaches_the_server_cox_handed_over() {
 done"#;
     let servers = json!([{ "name": "cox", "command": "sh", "args": ["-c", server], "env": [] }]);
     let scenario = json!({ "turns": [{ "steps": [
-        { "call": { "tool": "open_chat", "arguments": { "text": "review it" } } },
-        { "call": { "tool": "wait_chat", "arguments": { "chat": "{result:number after as chat }" } } },
+        { "call": { "tool": "agent", "arguments": { "description": "Review", "prompt": "review it" } } },
+        { "call": { "tool": "agent_report", "arguments": { "chat": "{result:number after as chat }" } } },
         { "say": "It said: {result}" },
     ] }] });
     let mut agent = Agent::session(&scenario, &servers);
@@ -322,13 +322,13 @@ done"#;
     assert_eq!(answer["result"]["stopReason"], "end_turn");
     let updates = updates(&sent);
     assert_eq!(updates[0]["sessionUpdate"], "tool_call");
-    assert_eq!(updates[0]["title"], "open_chat");
+    assert_eq!(updates[0]["title"], "agent");
     assert_eq!(updates[0]["status"], "in_progress");
     assert_eq!(updates[1]["sessionUpdate"], "tool_call_update");
     assert_eq!(updates[1]["status"], "completed");
     assert_eq!(
         updates[1]["content"][0]["content"]["text"],
-        r#"Chat 3 is open as chat 7, given {"text":"review it"}"#
+        r#"Chat 3 is open as chat 7, given {"description":"Review","prompt":"review it"}"#
     );
     assert_eq!(updates[2]["rawInput"], json!({ "chat": 7 }));
     assert_eq!(

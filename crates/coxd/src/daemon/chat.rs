@@ -556,6 +556,13 @@ impl Chat {
         }
     }
 
+    /// Has the chat's agent run with the model `asked`, as the agent that
+    /// opened the chat named it, from its first line on (see
+    /// [`crate::agent::model`]).
+    pub fn run_with(&mut self, asked: &str) {
+        self.send(Command::Model(asked.to_owned()));
+    }
+
     /// Starts the chat, opened from the chat named `opened_by`, on `text`
     /// as its first line, sent in the human's place, working until `goal`
     /// is met if given.
@@ -1587,6 +1594,7 @@ impl Chat {
         crate::agent::mcp::Waited {
             asking: self.conversation.asking_for().map(str::to_owned),
             said: self.conversation.last_told().map(str::to_owned),
+            unoffered: self.conversation.unoffered().map(str::to_owned),
         }
     }
 

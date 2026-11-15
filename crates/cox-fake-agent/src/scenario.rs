@@ -91,8 +91,8 @@ fn end_turn() -> String {
 /// for what the last [`Step::Call`] answered, and a value that is
 /// just `"{result:number}"` for the first number in it, or
 /// `"{result:number after <text>}"` for the first number after `<text>`,
-/// as `"{result:number after as chat }"` stands for the chat `open_chat`
-/// opened, to give `wait_chat`.
+/// as `"{result:number after chat }"` stands for the chat of the subagent
+/// `agent` ran, to give `agent_report`.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum Step {

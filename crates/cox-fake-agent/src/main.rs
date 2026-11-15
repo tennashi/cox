@@ -4,7 +4,7 @@
 //! `claude-agent-acp` does, and answers each line sent to it as the
 //! scenario, a JSON file, says: it replies, thinks, calls tools, asks
 //! permission and goes on as the human answers, and calls the tools Cox
-//! hands it, such as `open_chat` (see [`scenario`]).
+//! hands it, such as `agent` (see [`scenario`]).
 //!
 //! `cox-fake-agent <scenario> --log-in` logs the agent of the scenario in,
 //! as a way to log in that runs in a terminal does.

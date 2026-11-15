@@ -16,6 +16,7 @@
 
 pub mod instructions;
 pub mod mcp;
+pub mod model;
 pub mod setup;
 pub mod tools;
 
@@ -68,6 +69,9 @@ pub enum AgentEvent {
     /// The agent did not set the setting `name` as the human asked, for
     /// `error`.
     SettingFailed { name: String, error: String },
+    /// The session does not offer the model, or the effort, that the agent
+    /// that opened the chat asked for ([`Command::Model`]), as this says.
+    Unoffered(String),
     /// A piece of the agent's reply.
     ReplyText(String),
     /// A piece of what the agent thinks on its way to the reply.
@@ -182,6 +186,12 @@ pub enum Command {
         id: String,
         value: String,
     },
+    /// Asks the agent to run with the model `asked`, as the agent that
+    /// opened the chat named it, and its effort, when the name ends with
+    /// one (see [`model::chosen`]): each set as [`Command::Set`] sets it,
+    /// and what the session does not offer told as an
+    /// [`AgentEvent::Unoffered`].
+    Model(String),
     /// Tells the agent how the human logged in, as it asked.
     LogIn(Login),
 }
@@ -538,6 +548,10 @@ async fn run<T: Transport + Send + 'static>(
                         let set = async |id: &str, value: &str| session.set(id, value).await;
                         set_setting(set, &settings, &id, &value, events).await;
                     }
+                    Command::Model(asked) => {
+                        let set = async |id: &str, value: &str| session.set(id, value).await;
+                        set_model(set, &settings, &asked, events).await;
+                    }
                     Command::Answer(_) | Command::Cancel | Command::LogIn(_) => {}
                 }
             }
@@ -623,9 +637,15 @@ async fn logged_in(
         match commands.recv().await {
             Some(Command::LogIn(how)) => return Ok(how),
             Some(Command::Cancel) | None => anyhow::bail!("the human did not log in"),
-            // A line sent, or a setting set, before the agent asked waits
-            // for the session, which opens once the human has logged in.
-            Some(command @ (Command::Prompt(_) | Command::Steer(_) | Command::Set { .. })) => {
+            // A line sent, or a setting or a model set, before the agent
+            // asked waits for the session, which opens once the human has
+            // logged in.
+            Some(
+                command @ (Command::Prompt(_)
+                | Command::Steer(_)
+                | Command::Set { .. }
+                | Command::Model(_)),
+            ) => {
                 commands.held.push_back(command);
             }
             Some(Command::Answer(_)) => {}
@@ -770,6 +790,24 @@ async fn set_setting(
         },
     };
     let _ = events.send(event);
+}
+
+/// Sets the session, whose settings stand as `settings` says, to run
+/// with the model `asked`, with `set`, as far as it offers it, and tells
+/// the window what it does not offer.
+async fn set_model(
+    mut set: impl AsyncFnMut(&str, &str) -> anyhow::Result<Vec<cox_acp::Setting>>,
+    settings: &Mutex<Vec<cox_acp::Setting>>,
+    asked: &str,
+    events: &UnboundedSender<AgentEvent>,
+) {
+    let chosen = model::chosen(asked, &settings.lock().expect("no one panics holding it"));
+    for (id, value) in &chosen.set {
+        set_setting(&mut set, settings, id, value, events).await;
+    }
+    if let Some(unoffered) = chosen.unoffered {
+        let _ = events.send(AgentEvent::Unoffered(unoffered));
+    }
 }
 
 /// The blocks of `prompt`, a line for the agent: its text, what the
@@ -956,9 +994,10 @@ async fn take_one_turn(
                 Some(Command::Steer(prompt)) => {
                     steer(&turn, prompt, steers, folder, &mut later, events).await;
                 }
-                // The window sends no prompt while a turn runs, and
-                // no login while the agent does not ask for one.
-                Some(Command::Prompt(_) | Command::LogIn(_)) => {}
+                // The window sends no prompt while a turn runs, no
+                // login while the agent does not ask for one, and a
+                // model only ahead of the first line.
+                Some(Command::Prompt(_) | Command::LogIn(_) | Command::Model(_)) => {}
                 None => break PermissionAnswer::Cancel,
             }
         };
@@ -1072,8 +1111,8 @@ async fn unprompted(
                 set_setting(set, settings, &id, &value, events).await;
             }
             // No turn runs to take a line into: it goes once the human
-            // has answered.
-            Some(command @ (Command::Prompt(_) | Command::Steer(_))) => {
+            // has answered, with the model asked for ahead of it.
+            Some(command @ (Command::Prompt(_) | Command::Steer(_) | Command::Model(_))) => {
                 commands.held.push_back(command);
             }
             Some(Command::LogIn(_)) => {}

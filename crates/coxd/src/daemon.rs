@@ -2078,13 +2078,15 @@ impl Daemon {
             }
             ChatRequest::OpenChat {
                 text,
+                title,
                 setup,
+                model,
                 goal,
                 sketch,
                 answer,
             } => {
                 let setup = Setup { sketch, ..setup };
-                let opened = self.open_chat(key, &text, setup, goal);
+                let opened = self.open_chat(key, &text, title, setup, model.as_deref(), goal);
                 answer.send(opened).ok();
             }
             ChatRequest::WaitChat { chat, answer } => self.wait_chat(key, chat, answer),
@@ -2212,12 +2214,17 @@ impl Daemon {
     /// [`Setup::opened_by`]), which works until `goal` is met if given,
     /// and gets `text` as its first line, and answers how it goes by. A
     /// sketch, as the setup's `sketch` makes it, works in a folder of its
-    /// own; any other chat works where the chat that opened it does.
+    /// own; any other chat works where the chat that opened it does. Its
+    /// agent runs with `model` as far as its session offers it, and it
+    /// goes by `title`, if given, as it would by its first line, until its
+    /// agent titles it.
     fn open_chat(
         &mut self,
         key: u64,
         text: &str,
+        title: Option<String>,
         setup: Setup,
+        model: Option<&str>,
         goal: Option<Goal>,
     ) -> Result<OpenedChat, String> {
         let slot = self.slot(key).ok_or("the chat is gone")?;
@@ -2233,17 +2240,27 @@ impl Daemon {
             }
             None => folder,
         };
-        let opened = self.open_under(key, text, setup, goal)?;
+        let mut opened = self.open_under(key, text, setup, model, goal)?;
+        let store = Rc::clone(&self.store);
+        if let Some(title) = title
+            && let Some(slot) = self.slot_mut(opened.number)
+        {
+            let title: String = title.chars().take(NAME_LENGTH).collect();
+            slot.name_as(&title, Named::FirstLine, &store);
+            opened.name = title;
+        }
         Ok(OpenedChat { withheld, ..opened })
     }
 
     /// Opens a chat under the chat `key`, set up as `setup` says, on
-    /// `text`, toward `goal`, and answers how it goes by.
+    /// `text`, toward `goal`, its agent running with `model` if given,
+    /// and answers how it goes by.
     fn open_under(
         &mut self,
         key: u64,
         text: &str,
         setup: Setup,
+        model: Option<&str>,
         goal: Option<Goal>,
     ) -> Result<OpenedChat, String> {
         let slot = self.slot(key).ok_or("the chat is gone")?;
@@ -2260,6 +2277,9 @@ impl Daemon {
             withheld: Withheld::default(),
         };
         if let Some(chat) = self.chat(opened) {
+            if let Some(model) = model {
+                chat.run_with(model);
+            }
             chat.tell(&opened_by, text, goal);
         }
         Ok(told)

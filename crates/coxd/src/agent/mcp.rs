@@ -228,13 +228,17 @@ pub enum ChatRequest {
         sketch: Option<String>,
         answer: oneshot::Sender<Result<PathBuf, String>>,
     },
-    /// Open a chat in the chat's project, under it in the list, whose
-    /// agent is set up as `setup` says, works until `goal` is met if
-    /// given, and gets `text` as its first line; answer how the chat goes
-    /// by, or why it could not open.
+    /// Open a chat in the chat's project, under it in the list, named
+    /// `title` if given, whose agent is set up as `setup` says, runs with
+    /// `model` as far as its session offers it (see
+    /// [`crate::agent::model`]), works until `goal` is met if given, and
+    /// gets `text` as its first line; answer how the chat goes by, or why
+    /// it could not open.
     OpenChat {
         text: String,
+        title: Option<String>,
         setup: Setup,
+        model: Option<String>,
         goal: Option<Goal>,
         /// What the chat starts from when it is a sketch, working in a
         /// folder of its own.
@@ -295,6 +299,9 @@ pub struct Waited {
     /// What came last in its last turn: its agent's reply, or Cox's note
     /// of how the turn ended, if anything did.
     pub said: Option<String>,
+    /// What its session did not offer of the model asked for it, if
+    /// anything.
+    pub unoffered: Option<String>,
 }
 
 /// A chat opened from a chat, as its agent is told of it.

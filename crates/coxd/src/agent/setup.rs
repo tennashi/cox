@@ -1026,7 +1026,7 @@ mod tests {
     #[test]
     fn a_chat_a_chat_opens_may_do_no_more_than_it() {
         let opener = Setup {
-            tools: Some(strings(&["show_file", "run_command", "open_chat"])),
+            tools: Some(strings(&["show_file", "run_command", "agent"])),
             stage: StageUse::Look,
             policy: Policy {
                 allow: strings(&["cargo test*", "read:*", "edit:**"]),

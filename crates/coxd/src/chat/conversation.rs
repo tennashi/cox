@@ -265,6 +265,9 @@ pub struct Conversation {
     /// What happened on the last line whose triggers ran, as the goal
     /// being met, which the turns after on the line meet again.
     raised_line: BTreeSet<&'static str>,
+    /// What the session did not offer of the model the agent that opened
+    /// the chat asked for, as Cox told it, if anything.
+    unoffered: Option<String>,
 }
 
 impl Default for Conversation {
@@ -297,6 +300,7 @@ impl Conversation {
             waiting: VecDeque::new(),
             told_line: BTreeSet::new(),
             raised_line: BTreeSet::new(),
+            unoffered: None,
         }
     }
 
@@ -341,6 +345,7 @@ impl Conversation {
             waiting: VecDeque::new(),
             told_line: BTreeSet::new(),
             raised_line: BTreeSet::new(),
+            unoffered: None,
         }
     }
 
@@ -1356,6 +1361,13 @@ impl Conversation {
             })
     }
 
+    /// What the session did not offer of the model the agent that opened
+    /// the chat asked for, as Cox told it, if anything.
+    #[must_use]
+    pub fn unoffered(&self) -> Option<&str> {
+        self.unoffered.as_deref()
+    }
+
     /// What the agent asks permission for, or that it asks the human to log
     /// in, while it waits on the human.
     #[must_use]
@@ -1479,6 +1491,10 @@ impl Conversation {
                 self.push(Entry::Note(format!(
                     "The agent did not set {name}: {error}"
                 )));
+            }
+            AgentEvent::Unoffered(unoffered) => {
+                self.push(Entry::Note(unoffered.clone()));
+                self.unoffered = Some(unoffered);
             }
             AgentEvent::Steered => self.steering = self.steering.saturating_sub(1),
             AgentEvent::WentOn => self.push(Entry::Note(WENT_ON.to_owned())),
