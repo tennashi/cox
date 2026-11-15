@@ -18,6 +18,7 @@ use coxd::chat::judge::Starts;
 use coxd::daemon::client::{self, Connected};
 use coxd::daemon::wire::{FromDaemon, Hello, ToDaemon};
 use coxd::daemon::{Spawned, Spawns};
+use coxd::settings::Subagents;
 
 /// Spawns no agent: the tests start no chat's agent, and judge no goal,
 /// though a chat read from what is kept is given what would judge it.
@@ -28,7 +29,19 @@ impl Spawns for NoAgents {
         Agents::new(vec!["fake".to_owned()], Vec::new(), Vec::new())
     }
 
-    fn chat(&self, _: PathBuf, _: Start, _: &str, _: Option<u16>, _: bool) -> Spawned {
+    fn subagents(&self) -> Subagents {
+        Subagents::Agent
+    }
+
+    fn chat(
+        &self,
+        _: PathBuf,
+        _: Start,
+        _: &str,
+        _: Option<u16>,
+        _: bool,
+        _: Subagents,
+    ) -> Spawned {
         unreachable!("no chat opens")
     }
 

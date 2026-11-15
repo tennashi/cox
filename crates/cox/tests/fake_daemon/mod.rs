@@ -23,6 +23,7 @@ use coxd::agent::setup::Setup;
 use coxd::agents::{Agents as Choices, Known};
 use coxd::chat::judge::Starts;
 use coxd::daemon::{Running, Spawned, Spawns};
+use coxd::settings::Subagents;
 use gpui::{
     App, AppContext as _, Context, Entity, Focusable, IntoElement, ParentElement as _, Render,
     Styled as _, TestAppContext, VisualTestContext, Window, div,
@@ -112,6 +113,8 @@ pub struct Fakes {
     /// The commands the shell ran, as `terminal` says, once each ended
     /// and the daemon was told how it went, in order.
     pub ran: Shared<Vec<String>>,
+    /// Where the settings say a chat's agent runs its subagents.
+    pub subagents: Subagents,
 }
 
 impl Default for Fakes {
@@ -129,6 +132,7 @@ impl Default for Fakes {
             terminal: true,
             staged_terminal: false,
             ran: Shared::default(),
+            subagents: Subagents::Agent,
         }
     }
 }
@@ -141,7 +145,21 @@ impl Spawns for FakeSpawns {
         self.0.choices.clone()
     }
 
-    fn chat(&self, cwd: PathBuf, start: Start, _: &str, _: Option<u16>, _: bool) -> Spawned {
+    fn subagents(&self) -> Subagents {
+        self.0.subagents
+    }
+
+    /// Starts a fake agent, its session asked for as Cox asks for a chat
+    /// whose own tools started.
+    fn chat(
+        &self,
+        cwd: PathBuf,
+        start: Start,
+        _: &str,
+        _: Option<u16>,
+        _: bool,
+        subagents: Subagents,
+    ) -> Spawned {
         let fakes = &self.0;
         let made = fakes.next.borrow_mut().pop_front();
         let agent = Arc::new(made.unwrap_or_else(|| match &start {
@@ -159,11 +177,13 @@ impl Spawns for FakeSpawns {
             },
             again @ Start::Again { .. } => again,
         };
+        let only = start.setup().and_then(|setup| setup.tools.as_deref());
+        let meta = coxd::daemon::session_meta(subagents, only, true);
         let mut spawned = coxd::agent::spawn(
             move |_| Ok(agent.connect()),
             cwd,
             fakes.mcp_servers.clone(),
-            None,
+            meta,
             start,
         );
         // The chat's commands run in a shell here, or else go through the

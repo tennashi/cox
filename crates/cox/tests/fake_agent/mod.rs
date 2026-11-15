@@ -133,6 +133,9 @@ pub struct FakeAgent {
     logged_in: Arc<Mutex<Vec<String>>>,
     /// The sessions Cox asked to go on with, in order.
     asked_to_resume: Arc<Mutex<Vec<String>>>,
+    /// The `_meta` of each session Cox asked for, opened, resumed or
+    /// loaded, in order.
+    metas: Arc<Mutex<Vec<serde_json::Value>>>,
     sessions_opened: Arc<AtomicUsize>,
     cwd: Arc<Mutex<Option<PathBuf>>>,
     mcp_servers: Arc<Mutex<Vec<McpServer>>>,
@@ -395,6 +398,7 @@ impl FakeAgent {
             login,
             self.resumes,
             Arc::clone(&self.asked_to_resume),
+            Arc::clone(&self.metas),
             Arc::clone(&self.sessions_opened),
             Arc::clone(&self.cwd),
             Arc::clone(&self.mcp_servers),
@@ -414,6 +418,12 @@ impl FakeAgent {
     /// The sessions Cox asked to go on with, in order.
     pub fn resumed(&self) -> Vec<String> {
         self.asked_to_resume.lock().unwrap().clone()
+    }
+
+    /// The `_meta` of each session Cox asked for, opened, resumed or
+    /// loaded, in order, `null` for none.
+    pub fn metas(&self) -> Vec<serde_json::Value> {
+        self.metas.lock().unwrap().clone()
     }
 
     /// How many sessions Cox has opened.
@@ -533,6 +543,7 @@ async fn serve(
     login: Login,
     resumes: Resumes,
     asked_to_resume: Arc<Mutex<Vec<String>>>,
+    metas: Arc<Mutex<Vec<serde_json::Value>>>,
     sessions_opened: Arc<AtomicUsize>,
     cwd: Arc<Mutex<Option<PathBuf>>>,
     mcp_servers: Arc<Mutex<Vec<McpServer>>>,
@@ -544,6 +555,14 @@ async fn serve(
     let prompted = Arc::clone(&turns);
     let steers = Arc::clone(&turns);
     let loaded = Arc::clone(&asked_to_resume);
+    let (on_resume_meta, on_load_meta) = (Arc::clone(&metas), Arc::clone(&metas));
+    let asked_with = |metas: &Mutex<Vec<serde_json::Value>>,
+                      meta: Option<serde_json::Map<_, _>>| {
+        metas
+            .lock()
+            .unwrap()
+            .push(meta.map_or(serde_json::Value::Null, serde_json::Value::Object));
+    };
     let (on_initialize, on_authenticate, on_new, on_prompt_login) =
         (login.clone(), login.clone(), login.clone(), login);
     let (on_resume, on_new_settings, on_set, on_prompt) = (
@@ -584,6 +603,7 @@ async fn serve(
         )
         .on_receive_request(
             async move |request: ResumeSessionRequest, responder, _cx| {
+                asked_with(&on_resume_meta, request.meta);
                 asked_to_resume
                     .lock()
                     .unwrap()
@@ -598,6 +618,7 @@ async fn serve(
         )
         .on_receive_request(
             async move |request: LoadSessionRequest, responder, cx: ConnectionTo<Client>| {
+                asked_with(&on_load_meta, request.meta);
                 loaded.lock().unwrap().push(request.session_id.to_string());
                 // What the session said before, which Cox shows already.
                 say(&cx, &request.session_id, "said before")?;
@@ -611,6 +632,7 @@ async fn serve(
                 if on_new.asks(true) {
                     return responder.respond_with_error(Error::auth_required());
                 }
+                asked_with(&metas, request.meta);
                 sessions_opened.fetch_add(1, Ordering::SeqCst);
                 *cwd.lock().unwrap() = Some(request.cwd);
                 *mcp_servers.lock().unwrap() = request.mcp_servers;
