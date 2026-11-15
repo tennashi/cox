@@ -55,6 +55,10 @@ mod calls;
 /// The option that runs `cox` as the bridge, followed by the socket.
 pub const OPTION: &str = "--mcp";
 
+/// The tool that runs a subagent in a chat of its own, in the place of the
+/// agent's own tool for subagents.
+pub const AGENT_TOOL: &str = "agent";
+
 /// The target under which each line the agent and the server send each
 /// other over the socket is said, with `from` saying whose it is: `cox` or
 /// `agent`. At `debug` it is said in [`brief`], with `bytes`, how long it

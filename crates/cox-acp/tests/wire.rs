@@ -84,11 +84,13 @@ done"#;
         cox_acp::launch(["sh".to_owned(), "-c".to_owned(), script.to_owned()]).unwrap()
     };
     let folder = tempfile::TempDir::new().unwrap();
+    let opening = cox_acp::Opening {
+        cwd: folder.path().to_owned(),
+        ..cox_acp::Opening::default()
+    };
     let connected = cox_acp::connect(
         agent,
-        folder.path().to_owned(),
-        Vec::new(),
-        None,
+        opening,
         |_| {},
         async |_, _| anyhow::bail!("no login"),
         // Open until what the agent wrote to its standard error is said.

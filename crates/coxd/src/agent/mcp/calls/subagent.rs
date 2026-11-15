@@ -16,7 +16,7 @@ use crate::agent::mcp::{ChatRequest, OpenedChat, Waited};
 use crate::agent::setup::{Policy, Setup, StageUse, Withheld};
 use crate::chat::sketch::Sketch;
 
-pub(super) const AGENT: &str = "agent";
+pub(super) const AGENT: &str = crate::agent::mcp::AGENT_TOOL;
 pub(super) const AGENT_REPORT: &str = "agent_report";
 
 /// The tool that runs a subagent, as the agent learns of it.

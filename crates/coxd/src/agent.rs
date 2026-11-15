@@ -329,12 +329,14 @@ impl Drop for AgentThread {
 /// may block, as while it downloads the agent's program, telling the human
 /// what it does on the way with the function it is given, and returns the
 /// transport to the agent, which works in `cwd`, an absolute path, gets the
-/// tools of `mcp_servers`, and starts as `start` says. What the agent side
-/// says is said in the span `spawn` is called in, such as its chat's.
+/// tools of `mcp_servers`, has its session asked for with `meta` if given,
+/// and starts as `start` says. What the agent side says is said in the
+/// span `spawn` is called in, such as its chat's.
 pub fn spawn<T: Transport + Send + 'static>(
     connect: impl FnOnce(&dyn Fn(String)) -> anyhow::Result<T> + Send + 'static,
     cwd: PathBuf,
     mcp_servers: Vec<McpServer>,
+    meta: Option<cox_acp::Meta>,
     start: Start,
 ) -> Agent {
     let source = match &start {
@@ -349,6 +351,15 @@ pub fn spawn<T: Transport + Send + 'static>(
     let (sent, events) = unbounded_channel();
     let (stop, stopped) = oneshot::channel();
     let works_in = cwd.clone();
+    let opening = cox_acp::Opening {
+        cwd,
+        mcp_servers,
+        resume: match &start {
+            Start::New { .. } => None,
+            Start::Again { session, .. } => session.clone(),
+        },
+        meta,
+    };
     let span = tracing::Span::current();
     let thread = thread::spawn(move || {
         close_on_exec();
@@ -360,7 +371,7 @@ pub fn spawn<T: Transport + Send + 'static>(
                 let outcome = runtime.block_on(
                     async {
                         tokio::select! {
-                            outcome = run(connect, cwd, mcp_servers, start, &policy, received, &sent) => outcome,
+                            outcome = run(connect, opening, start, &policy, received, &sent) => outcome,
                             // Dropping the connection kills the agent.
                             _ = stopped => Ok(()),
                         }
@@ -395,13 +406,14 @@ const NO_AGENT: &str = "Cox was opened without an agent command, and settings.js
     \"@agentclientprotocol/claude-agent-acp\"]}]";
 
 /// Starts `known`, working in `cwd`, an absolute path, with the tools of
-/// `tools`, as `start` says: a chat's agent, or one with no chat, such as
-/// the judge of a goal, or the agent that translates the wiki (see
-/// [`crate::translate`]).
+/// `tools`, its session asked for with `meta` if given, as `start` says:
+/// a chat's agent, or one with no chat, such as the judge of a goal, or
+/// the agent that translates the wiki (see [`crate::translate`]).
 pub(crate) fn spawn_known(
     known: Known,
     cwd: PathBuf,
     tools: Vec<McpServer>,
+    meta: Option<cox_acp::Meta>,
     start: Start,
 ) -> Agent {
     tracing::info!(agent = %known.id, "starts the agent");
@@ -427,7 +439,7 @@ pub(crate) fn spawn_known(
         };
         cox_acp::launch(command)
     };
-    spawn(connect, cwd, tools, start)
+    spawn(connect, cwd, tools, meta, start)
 }
 
 /// What the human handed, as blocks of the prompt: what it says, with
@@ -444,8 +456,7 @@ fn handed_blocks(attachment: Attachment) -> impl Iterator<Item = Block> {
 
 async fn run<T: Transport + Send + 'static>(
     connect: impl FnOnce(&dyn Fn(String)) -> anyhow::Result<T> + Send + 'static,
-    cwd: PathBuf,
-    mcp_servers: Vec<McpServer>,
+    opening: cox_acp::Opening,
     start: Start,
     policy: &Policy,
     commands: UnboundedReceiver<Command>,
@@ -455,17 +466,13 @@ async fn run<T: Transport + Send + 'static>(
     // Heard by the human's logging in before the session opens, then by
     // the session.
     let commands = tokio::sync::Mutex::new(Commands::new(commands));
-    let resume = match &start {
-        Start::New { .. } => None,
-        Start::Again { session, .. } => session.clone(),
-    };
     // The settings as they stand, which the agent changes as it tells, in
     // between turns too.
     let settings = Arc::new(Mutex::new(Vec::new()));
     // The names of the agent's commands, as it last told them.
     let commands_known = Arc::new(Mutex::new(Vec::new()));
     // Where the files a line points to are, from.
-    let folder = cwd.clone();
+    let folder = opening.cwd.clone();
     let heard = hears(
         events.clone(),
         Arc::clone(&settings),
@@ -473,9 +480,7 @@ async fn run<T: Transport + Send + 'static>(
     );
     cox_acp::connect(
         transport,
-        cwd,
-        mcp_servers,
-        resume,
+        opening,
         heard,
         async |methods, failed| {
             let mut commands = commands.lock().await;
@@ -1629,6 +1634,7 @@ mod tests {
             // allow-temp-dir: only the agent's working folder, which nothing writes in
             std::env::temp_dir(),
             Vec::new(),
+            None,
             Start::New {
                 instructions: None,
                 setup: None,
@@ -1683,6 +1689,7 @@ mod tests {
             // allow-temp-dir: only the agent's working folder, which nothing writes in
             std::env::temp_dir(),
             Vec::new(),
+            None,
             Start::New {
                 instructions: None,
                 setup: None,
@@ -1717,6 +1724,7 @@ mod tests {
             // allow-temp-dir: only the agent's working folder, which nothing writes in
             std::env::temp_dir(),
             Vec::new(),
+            None,
             Start::New {
                 instructions: None,
                 setup: None,
@@ -1754,6 +1762,7 @@ mod tests {
             // allow-temp-dir: only the agent's working folder, which nothing writes in
             std::env::temp_dir(),
             Vec::new(),
+            None,
             Start::New {
                 instructions: None,
                 setup: None,

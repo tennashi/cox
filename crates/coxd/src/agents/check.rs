@@ -105,11 +105,13 @@ pub fn check(command: Vec<String>, cwd: &Path) -> Checked {
         let refuse = async |ways: Vec<LoginMethod>, _: Option<String>| -> anyhow::Result<Login> {
             Err(AsksToLogIn(ways.into_iter().map(|way| way.name).collect()).into())
         };
+        let opening = cox_acp::Opening {
+            cwd: cwd.to_owned(),
+            ..cox_acp::Opening::default()
+        };
         let session = cox_acp::connect(
             agent,
-            cwd.to_owned(),
-            Vec::new(),
-            None,
+            opening,
             |_| {},
             refuse,
             async |session| {

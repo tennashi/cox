@@ -286,7 +286,7 @@ fn talk(card: &Card, context: &str, lines: &Receiver<String>, told: &Mutex<Told>
         instructions: None,
         setup: Some(setup),
     };
-    let mut agent = crate::agent::spawn_known(known, card.folder.clone(), Vec::new(), start);
+    let mut agent = crate::agent::spawn_known(known, card.folder.clone(), Vec::new(), None, start);
     while let Ok(prompt) = lines.recv() {
         told.lock()
             .unwrap_or_else(PoisonError::into_inner)
@@ -520,8 +520,13 @@ fn tried_on(tried: &Try, last: Option<&Path>) -> Tried {
                 instructions: None,
                 setup: Some(setup),
             };
-            let mut agent =
-                crate::agent::spawn_known(agents.of(None), tried.folder.clone(), Vec::new(), start);
+            let mut agent = crate::agent::spawn_known(
+                agents.of(None),
+                tried.folder.clone(),
+                Vec::new(),
+                None,
+                start,
+            );
             match ask(&mut agent, super::question(said.as_deref()), |_| {}) {
                 Ok(reply) => Tried {
                     state: match Verdict::of(&reply) {

@@ -98,7 +98,7 @@ pub fn generate(agents: &Agents, id: ProjectId, name: &str, folder: &Path) -> an
         setup: Some(drawer()),
     };
     let mut agent =
-        crate::agent::spawn_known(agents.of(None), folder.to_owned(), Vec::new(), start);
+        crate::agent::spawn_known(agents.of(None), folder.to_owned(), Vec::new(), None, start);
     let ask = workflow::ICON_GENERATE.say(&[("name", name)]);
     agent
         .commands

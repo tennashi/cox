@@ -6,7 +6,8 @@
 //!    passes on to the window.
 //! 2. The agent, working in the chat's directory, told of the two MCP
 //!    servers it starts to reach the stage's relay and the server
-//!    ([`crate::agent::spawn_known`], [`Launcher::tools`]).
+//!    ([`crate::agent::spawn_known`], [`Launcher::tools`]), its session
+//!    asked for as the settings say of subagents ([`session_meta`]).
 //!
 //! The window starts the chat's stage, and the relay to it (see
 //! `cox::chat::launcher`).
@@ -18,10 +19,11 @@ use std::rc::Rc;
 use cox_acp::McpServer;
 
 use super::{Spawned, Spawns};
-use crate::agent::mcp::ToolServer;
+use crate::agent::mcp::{AGENT_TOOL, ToolServer};
 use crate::agent::{Agent, Start};
 use crate::agents::Agents;
 use crate::chat::judge::Starts;
+use crate::settings::Subagents;
 
 /// Starts the agents of the chats, each with the agent it talks to: the
 /// daemon's [`Spawns`] when Cox runs.
@@ -60,6 +62,11 @@ impl Spawns for Launcher {
         let server = self.server(&cwd, only, in_project);
         // What the agent gets: the MCP servers it starts to reach both.
         let tools = self.tools(&cwd, relay, server.as_ref());
+        let meta = session_meta(
+            crate::settings::Saved::read().subagents,
+            only,
+            server.is_some(),
+        );
         let (stage, asks, chat_requests) = match server {
             Some((_, server)) => (
                 Some(server.requests),
@@ -70,7 +77,7 @@ impl Spawns for Launcher {
         };
         // 2. The agent, on a thread of its own, which the chat asks of the
         // stage through what its tools ask, and hears ask of the daemon.
-        let mut agent = self.spawn(cwd, tools, start, agent);
+        let mut agent = self.spawn(cwd, tools, meta, start, agent);
         agent.tools = asks;
         agent.chat_requests = chat_requests;
         Spawned { agent, stage }
@@ -85,7 +92,7 @@ impl Spawns for Launcher {
         Rc::new(move |cwd, start| {
             let span = tracing::info_span!("judge", cwd = %cwd.display());
             let _entered = span.enter();
-            launcher.spawn(cwd, Vec::new(), start, &agent)
+            launcher.spawn(cwd, Vec::new(), None, start, &agent)
         })
     }
 }
@@ -130,9 +137,71 @@ impl Launcher {
             .collect()
     }
 
-    /// Starts the agent kept as `agent` working in `cwd` with `tools`, as
-    /// `start` says.
-    fn spawn(&self, cwd: PathBuf, tools: Vec<McpServer>, start: Start, agent: &str) -> Agent {
-        crate::agent::spawn_known(self.agents.of(Some(agent)), cwd, tools, start)
+    /// Starts the agent kept as `agent` working in `cwd` with `tools`, its
+    /// session asked for with `meta` if given, as `start` says.
+    fn spawn(
+        &self,
+        cwd: PathBuf,
+        tools: Vec<McpServer>,
+        meta: Option<cox_acp::Meta>,
+        start: Start,
+        agent: &str,
+    ) -> Agent {
+        crate::agent::spawn_known(self.agents.of(Some(agent)), cwd, tools, meta, start)
+    }
+}
+
+/// What the session of a chat's agent is asked for with, as its `_meta`:
+/// when its subagents run as chats, as `subagents` says, and it gets
+/// Cox's `agent`, as Cox's tools are `served` to it, those named in
+/// `only` or all of them, Claude Code's own tools for subagents turned
+/// off, `Agent` and `Task`, its name before, for `agent` to take their
+/// place. Other agents leave it be.
+fn session_meta(
+    subagents: Subagents,
+    only: Option<&[String]>,
+    served: bool,
+) -> Option<cox_acp::Meta> {
+    let gets_agent = served && only.is_none_or(|only| only.iter().any(|tool| tool == AGENT_TOOL));
+    if subagents != Subagents::Chats || !gets_agent {
+        return None;
+    }
+    serde_json::json!({
+        "claudeCode": { "options": { "disallowedTools": ["Agent", "Task"] } }
+    })
+    .as_object()
+    .cloned()
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+
+    #[test]
+    fn turns_claude_codes_subagents_off_only_for_chats_that_run_them_as_chats() {
+        let off = json!({ "claudeCode": { "options": { "disallowedTools": ["Agent", "Task"] } } });
+        let meta = |subagents, only: Option<&[&str]>, served| {
+            let only: Option<Vec<String>> =
+                only.map(|only| only.iter().map(|&tool| tool.to_owned()).collect());
+            session_meta(subagents, only.as_deref(), served).map(serde_json::Value::Object)
+        };
+        assert_eq!(meta(Subagents::Chats, None, true), Some(off.clone()));
+        assert_eq!(
+            meta(Subagents::Chats, Some(&["show_file", "agent"]), true),
+            Some(off)
+        );
+        assert_eq!(meta(Subagents::Agent, None, true), None, "off by default");
+        assert_eq!(
+            meta(Subagents::Chats, Some(&["show_file"]), true),
+            None,
+            "a chat without agent keeps the agent's own"
+        );
+        assert_eq!(
+            meta(Subagents::Chats, None, false),
+            None,
+            "a chat whose tools of Cox's did not start keeps the agent's own"
+        );
     }
 }
