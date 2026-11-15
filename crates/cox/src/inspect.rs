@@ -26,9 +26,11 @@ use std::sync::Arc;
 use std::thread;
 
 use base64::Engine as _;
+#[cfg(not(target_os = "macos"))]
+use gpui::Bounds;
 use gpui::{
-    AnyView, App, AppContext as _, AsyncApp, Bounds, Keystroke, Modifiers, Pixels, Point, Window,
-    WindowHandle, px,
+    AnyView, App, AppContext as _, AsyncApp, Keystroke, Modifiers, MouseButton, Pixels, Point,
+    Window, WindowHandle, px,
 };
 use serde_json::{Value, json};
 use tokio::sync::mpsc::{UnboundedSender, unbounded_channel};
@@ -66,16 +68,22 @@ enum Inquiry {
         chat: Option<u64>,
         answer: oneshot::Sender<String>,
     },
-    /// Where the window is on the screen.
-    Window { answer: oneshot::Sender<Placed> },
     /// Where the window is on the screen, once it has drawn itself anew
     /// and shown what it drew.
-    #[cfg(not(target_os = "macos"))]
     Drawn { answer: oneshot::Sender<Placed> },
     /// Keystrokes, as the human's; answers whether each was handled.
     Keys {
         keystrokes: Vec<Keystroke>,
         answer: oneshot::Sender<String>,
+    },
+    /// Clicks of `button`, `count` of them, at `at`, a point of the window,
+    /// as the human's, told to the window from inside.
+    #[cfg(target_os = "macos")]
+    Click {
+        at: Point<Pixels>,
+        button: MouseButton,
+        count: usize,
+        answer: oneshot::Sender<Result<(), String>>,
     },
     /// A GPUI action, by its name, on what has the keyboard.
     Action {
@@ -88,9 +96,14 @@ enum Inquiry {
 /// clicked on.
 struct Placed {
     /// Its bounds, in the screen's coordinates, in points.
+    #[cfg(not(target_os = "macos"))]
     bounds: Bounds<Pixels>,
     /// How many pixels of the screen a point is.
+    #[cfg(not(target_os = "macos"))]
     scale: f32,
+    /// What the window server numbers it by.
+    #[cfg(target_os = "macos")]
+    number: Option<isize>,
 }
 
 /// What the tools know of Cox, past the window.
@@ -181,8 +194,21 @@ fn answer(inquiry: Inquiry, known: &Known, root: &AnyView, window: &mut Window, 
             };
             let _ = answer.send(told);
         }
-        Inquiry::Window { answer } => {
-            let _ = answer.send(placed(window, cx));
+        #[cfg(target_os = "macos")]
+        Inquiry::Drawn { answer } => {
+            // A window that others cover draws nothing on its own. Drawn
+            // now, in a task of its own once gpui lets go of the app, what
+            // it draws is shown.
+            window.refresh();
+            let placed = placed(window, cx);
+            let view = crate::ui::screen::ns_view(window);
+            cx.spawn(async move |_| {
+                if let Some(view) = view {
+                    crate::ui::screen::draw_now(&view);
+                }
+                let _ = answer.send(placed);
+            })
+            .detach();
         }
         #[cfg(not(target_os = "macos"))]
         Inquiry::Drawn { answer } => {
@@ -205,16 +231,42 @@ fn answer(inquiry: Inquiry, known: &Known, root: &AnyView, window: &mut Window, 
             }
             let _ = answer.send(told.join("\n"));
         }
+        #[cfg(target_os = "macos")]
+        Inquiry::Click {
+            at,
+            button,
+            count,
+            answer,
+        } => {
+            // In a task of its own, as `Drawn`: the view tells gpui of each
+            // event, which gpui takes only once it lets go of the app.
+            let view = crate::ui::screen::ns_view(window);
+            cx.spawn(async move |_| {
+                let clicked = view
+                    .ok_or_else(|| "the window has no view".to_owned())
+                    .and_then(|view| crate::ui::screen::click(&view, at, button, count));
+                let _ = answer.send(clicked);
+            })
+            .detach();
+        }
         Inquiry::Action { name, answer } => {
             let _ = answer.send(act(&name, window, cx));
         }
     }
 }
 
+#[cfg(not(target_os = "macos"))]
 fn placed(window: &Window, cx: &App) -> Placed {
     Placed {
         bounds: crate::ui::screen::window_bounds(window, cx),
         scale: window.scale_factor(),
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn placed(window: &Window, _cx: &App) -> Placed {
+    Placed {
+        number: crate::ui::screen::window_number(window),
     }
 }
 
@@ -362,8 +414,9 @@ impl Inspector {
         Ok(Ok(format!("Typed {count} characters.")))
     }
 
-    /// Clicks on the window where it is on the screen, as the screen's
-    /// own tools do.
+    /// Clicks on the window: on macOS from inside it, so that the screen's
+    /// pointer stays the human's; elsewhere through `xdotool`, on a display
+    /// of Cox's own.
     async fn click(&self, arguments: &Value) -> Result<Result<String, String>, (i64, String)> {
         let number = |name: &str| {
             arguments
@@ -372,38 +425,48 @@ impl Inspector {
                 .ok_or_else(|| (INVALID_PARAMS, format!("{name} is a number")))
         };
         #[expect(clippy::cast_possible_truncation, reason = "a point of the window")]
-        let position = Point::new(px(number("x")? as f32), px(number("y")? as f32));
+        let at = Point::new(px(number("x")? as f32), px(number("y")? as f32));
         let button = match arguments.get("button").and_then(Value::as_str) {
-            None | Some("left") => 1,
-            Some("middle") => 2,
-            Some("right") => 3,
+            None | Some("left") => MouseButton::Left,
+            Some("middle") => MouseButton::Middle,
+            Some("right") => MouseButton::Right,
             Some(other) => return Ok(Err(format!("no button {other}: left, right or middle"))),
         };
         let count = arguments
             .get("count")
             .and_then(Value::as_u64)
-            .unwrap_or(1)
-            .clamp(1, 3);
-        let placed = self.ask(|answer| Inquiry::Window { answer }).await?;
-        let clicked = tokio::task::spawn_blocking(move || click(&placed, position, button, count))
-            .await
-            .map_err(|error| (mcp::INTERNAL_ERROR, error.to_string()))?;
-        Ok(clicked.map(|()| {
-            format!(
-                "Clicked at {}, {}.",
-                f32::from(position.x),
-                f32::from(position.y)
-            )
-        }))
+            .map_or(1, |count| usize::try_from(count.clamp(1, 3)).unwrap_or(1));
+        // What is clicked is found on the frame drawn last.
+        let placed = match self.drawn().await? {
+            Ok(placed) => placed,
+            Err(error) => return Ok(Err(error)),
+        };
+        #[cfg(target_os = "macos")]
+        let clicked = {
+            let _ = placed;
+            self.ask(|answer| Inquiry::Click {
+                at,
+                button,
+                count,
+                answer,
+            })
+            .await?
+        };
+        #[cfg(not(target_os = "macos"))]
+        let clicked = {
+            tokio::task::spawn_blocking(move || click(&placed, at, button, count))
+                .await
+                .map_err(|error| (mcp::INTERNAL_ERROR, error.to_string()))?
+        };
+        Ok(clicked.map(|()| format!("Clicked at {}, {}.", f32::from(at.x), f32::from(at.y))))
     }
 
-    /// Captures the window, as the screen shows it, and answers it as an
-    /// image.
-    async fn screenshot(&self) -> Result<Result<String, String>, (i64, String)> {
+    /// Where the window is, once it shows a frame drawn now.
+    async fn drawn(&self) -> Result<Result<Placed, String>, (i64, String)> {
         #[cfg(target_os = "macos")]
-        let placed = self.ask(|answer| Inquiry::Window { answer }).await?;
+        return Ok(Ok(self.ask(|answer| Inquiry::Drawn { answer }).await?));
         #[cfg(not(target_os = "macos"))]
-        let placed = {
+        {
             let woken = tokio::task::spawn_blocking(crate::ui::screen::wake)
                 .await
                 .map_err(|error| (mcp::INTERNAL_ERROR, error.to_string()))?;
@@ -413,15 +476,32 @@ impl Inspector {
             // A software renderer takes seconds to draw its first frame.
             let drawn = self.ask(|answer| Inquiry::Drawn { answer });
             match tokio::time::timeout(DRAWING, drawn).await {
-                Ok(placed) => placed?,
-                Err(_) => {
-                    return Ok(Err(format!(
-                        "the window drew nothing in {} s",
-                        DRAWING.as_secs()
-                    )));
-                }
+                Ok(placed) => Ok(Ok(placed?)),
+                Err(_) => Ok(Err(format!(
+                    "the window drew nothing in {} s",
+                    DRAWING.as_secs()
+                ))),
             }
+        }
+    }
+
+    /// Captures the window, as the screen shows it, and answers it as an
+    /// image.
+    async fn screenshot(&self) -> Result<Result<String, String>, (i64, String)> {
+        let placed = match self.drawn().await? {
+            Ok(placed) => placed,
+            Err(error) => return Ok(Err(error)),
         };
+        #[cfg(target_os = "macos")]
+        let captured = tokio::task::spawn_blocking(move || {
+            placed
+                .number
+                .ok_or_else(|| "the window has no number with the window server".to_owned())
+                .and_then(crate::ui::screen::capture_window)
+        })
+        .await
+        .map_err(|error| (mcp::INTERNAL_ERROR, error.to_string()))?;
+        #[cfg(not(target_os = "macos"))]
         let captured = tokio::task::spawn_blocking(move || {
             crate::ui::screen::capture(placed.bounds, placed.scale)
         })
@@ -431,11 +511,21 @@ impl Inspector {
     }
 }
 
-/// Clicks `button`, as X11 numbers them, `count` times at `position` of
+/// Clicks `button` `count` times at `position` of
 /// the window placed as `placed`, through `xdotool`, which moves the
 /// pointer there and presses, as the human would.
 #[cfg(not(target_os = "macos"))]
-fn click(placed: &Placed, position: Point<Pixels>, button: u8, count: u64) -> Result<(), String> {
+fn click(
+    placed: &Placed,
+    position: Point<Pixels>,
+    button: MouseButton,
+    count: usize,
+) -> Result<(), String> {
+    let button = match button {
+        MouseButton::Right => 3,
+        MouseButton::Middle => 2,
+        _ => 1,
+    };
     let x = (f32::from(placed.bounds.origin.x) + f32::from(position.x)) * placed.scale;
     let y = (f32::from(placed.bounds.origin.y) + f32::from(position.y)) * placed.scale;
     let ran = std::process::Command::new("xdotool")
@@ -453,17 +543,6 @@ fn click(placed: &Placed, position: Point<Pixels>, button: u8, count: u64) -> Re
         ));
     }
     Ok(())
-}
-
-/// On macOS, nothing clicks for the agent yet.
-#[cfg(target_os = "macos")]
-fn click(
-    _placed: &Placed,
-    _position: Point<Pixels>,
-    _button: u8,
-    _count: u64,
-) -> Result<(), String> {
-    Err("clicking is not done on macOS yet: use the keys, or the screen's own tools".to_owned())
 }
 
 /// The string `arguments` gives as `name`.
@@ -531,8 +610,8 @@ fn tools() -> Value {
             "name": CLICK,
             "description": "Clicks at a point of the window, in points from its top left corner, \
                 as the screenshot shows it (divide by the scale the state names on a screen that \
-                draws a point with several pixels), moving the pointer there as the human \
-                would. Not on macOS yet.",
+                draws a point with several pixels), as the human would. The window hears of it \
+                from inside: the screen's pointer does not move.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
