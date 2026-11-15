@@ -261,7 +261,7 @@ a good starting point to copy.
 | --- | --- | --- |
 | `COX.md` | What every chat's agent is told first, before the project's `COX.md`. | [`cox.md`](../crates/coxd/src/agent/instructions/cox.md) |
 | `sketch/start.md` | The first line of a sketch opened beside a chat. `{folder}`, `{from}` and `{what}` stand for the sketch's folder, what it starts from and what it tries. | [`sketch/start.md`](../crates/coxd/src/workflow/sketch/start.md) |
-| `sketch/opened.md` | What an agent that opened a sketch with `open_chat` is told about it. | [`sketch/opened.md`](../crates/coxd/src/workflow/sketch/opened.md) |
+| `sketch/opened.md` | What an agent that ran a subagent in a sketch with `agent` is told about it. | [`sketch/opened.md`](../crates/coxd/src/workflow/sketch/opened.md) |
 | `sketch/discard.md` | What a sketch's agent is asked before the sketch ends. `{left_out}` stands for the files too big to keep. | [`sketch/discard.md`](../crates/coxd/src/workflow/sketch/discard.md) |
 | `sketch.json` | How sketches end. See [`sketch.json`](#sketchjson). | [`sketch.json`](../crates/coxd/src/workflow/sketch.json) |
 | `wiki/save.md` | What "Save to wiki" asks the agent. | [`wiki/save.md`](../crates/coxd/src/workflow/wiki/save.md) |

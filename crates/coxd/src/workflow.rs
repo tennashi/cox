@@ -36,7 +36,7 @@ pub const SKETCH_START: Text = Text {
     own: include_str!("workflow/sketch/start.md"),
 };
 
-/// What the agent that opened a sketch with `open_chat` is told of it:
+/// What the agent that ran a subagent in a sketch with `agent` is told of it:
 /// that it works in `{folder}`, which is `{from}`.
 pub const SKETCH_OPENED: Text = Text {
     name: "sketch/opened.md",

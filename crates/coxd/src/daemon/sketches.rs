@@ -67,7 +67,7 @@ impl Daemon {
             ("from", started.what()),
             ("what", what),
         ]);
-        let opened = self.open_under(key, &line, setup, None)?;
+        let opened = self.open_under(key, &line, setup, None, None)?;
         // Named after what it tries, not after the line Cox sends it.
         let name: String = what.chars().take(NAME_LENGTH).collect();
         let store = Rc::clone(&self.store);
@@ -384,8 +384,8 @@ impl Daemon {
         for (ended, told) in &ended {
             for (_, answer) in self.waiting.extract_if(.., |(waited, _)| waited == ended) {
                 let stands = Waited {
-                    asking: None,
                     said: Some(told.clone()),
+                    ..Waited::default()
                 };
                 answer.send(Ok(stands)).ok();
             }

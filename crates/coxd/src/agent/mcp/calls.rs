@@ -18,12 +18,12 @@ use crate::agent::mcp::{
     ASKS, Answered, ChatRequest, Ended, INVALID_PARAMS, Ran, ToolRequest, Whereabouts, answered,
     answered_with_picture,
 };
-use crate::agent::setup::{Policy, Setup, StageUse, Withheld};
 use crate::chat::sketch::Sketch;
 use crate::{raw, wiki};
 
 mod android;
 mod mac;
+mod subagent;
 
 const SHOW_MARKDOWN: &str = "show_markdown";
 const SHOW_FILE: &str = "show_file";
@@ -31,8 +31,6 @@ const SHOW_CHANGES: &str = "show_changes";
 const SHOW_MAP: &str = "show_map";
 const SHOW_MEDIA: &str = "show_media";
 const RUN_COMMAND: &str = "run_command";
-const OPEN_CHAT: &str = "open_chat";
-const WAIT_CHAT: &str = "wait_chat";
 const READ_CHAT: &str = "read_chat";
 const PROPOSE_GOAL: &str = "propose_goal";
 const PROPOSE_NAME: &str = "propose_name";
@@ -138,7 +136,6 @@ pub(super) fn for_chat(only: Option<&[String]>, in_project: bool) -> Vec<String>
 }
 
 /// Every tool, as the agent learns of it.
-#[expect(clippy::too_many_lines, reason = "the tools, one after another")]
 fn all_tools() -> Value {
     let mut tools = json!([
     {
@@ -214,24 +211,8 @@ fn all_tools() -> Value {
             "required": ["command"],
         },
     },
-    open_chat_tool(),
-    {
-        "name": WAIT_CHAT,
-        "description": "Waits for a chat you opened with open_chat to end its turn, or to \
-            come to wait for the human, and tells you how it stands then: what its agent \
-            last said, or what it asks the human. A chat that is not at work answers at \
-            once. Use it after open_chat, to hear how the work went before you go on.",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "chat": {
-                    "type": "integer",
-                    "description": "The number open_chat gave the chat.",
-                },
-            },
-            "required": ["chat"],
-        },
-    },
+    subagent::agent_tool(),
+    subagent::agent_report_tool(),
     read_chat_tool(),
     show_media_tool(),
     propose_goal_tool(),
@@ -810,96 +791,6 @@ fn propose_project_tool() -> Value {
     })
 }
 
-/// The tool that opens a chat, as the agent learns of it.
-fn open_chat_tool() -> Value {
-    json!(
-    {
-        "name": OPEN_CHAT,
-        "description": "Opens another chat in this project, under this one in the human's \
-            list, with an agent of its own, and sends it `text` as its first line. Use it \
-            to hand work to another agent: a unit of change to build, a question to look \
-            into, a change to read with fresh eyes. The chat works in the same folder as \
-            this one, so two chats that change files at once may collide. The human sees \
-            the chat, its conversation and its stage, and can step in. How its agent is \
-            set up is yours to say: `context` is told to it after the project's \
-            instructions; `tools` names which of Cox's tools it gets, all of them unless \
-            given; `stage` is \"look\" to keep it from driving the pages of its stage, or \
-            \"drive\" (the default); `allow` and `reject` are patterns of the titles of \
-            its permission requests, as they show in the conversation, which Cox answers \
-            in the human's place, once each, with `*` for any run of characters (a title \
-            both match is rejected, and the human is asked about the rest). It may do no \
-            more than this chat: it gets only the tools this chat gets, drives its stage \
-            only if this chat does, rejects what this chat's setup rejects too, and \
-            allows only a pattern this chat's setup allows as written, or covers with \
-            `*` or a kind and `:*`; a chat the human set up with nothing allows nothing, \
-            and the answer says what was held back. `goal` is \
-            what the chat works until it is met, as a goal the human sets: `$ ` and a \
-            shell command, which has to pass, or words, which an agent judges; `sketch` \
-            makes the chat a sketch, which works in a folder of its own, apart from the \
-            project, and changes and tests its files there without asking the human: \
-            \"project\", a Git worktree of the project's last commit, to try a change to \
-            the project, or \"empty\", an empty Git repository, to try something from \
-            nothing. Answers the number the chat goes by, to wait for it with wait_chat.",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "text": {
-                    "type": "string",
-                    "description": "The first line the chat's agent gets: what to do.",
-                },
-                "context": {
-                    "type": "string",
-                    "description": "What the agent is told after the project's instructions, \
-                        ahead of the first line, to keep to for the whole session.",
-                },
-                "tools": {
-                    "type": "array",
-                    "items": { "type": "string" },
-                    "description": "The tools of Cox's own the agent gets, by name.",
-                },
-                "stage": {
-                    "type": "string",
-                    "enum": ["drive", "look"],
-                    "description": "Whether the agent gets the tools that drive its stage's \
-                        pages, or only shows the human things there.",
-                },
-                "allow": {
-                    "type": "array",
-                    "items": { "type": "string" },
-                    "description": "Patterns of the permission requests to allow once in \
-                        the human's place: of their titles, as the agent titles its calls, \
-                        where * stands for any run of characters, or, after the name of one \
-                        of ACP's kinds of tool (read, edit, delete, move, search, execute, \
-                        think, fetch, switch_mode, other) and a colon, of the titles of the \
-                        calls of that kind, such as \"read:*\", \"search:*\" or \
-                        \"execute:cargo test*\". Only the patterns this chat's own setup \
-                        allows are kept.",
-                },
-                "reject": {
-                    "type": "array",
-                    "items": { "type": "string" },
-                    "description": "Patterns of the permission requests to reject once in \
-                        the human's place, written as for allow, such as \"edit:*\" or \
-                        \"execute:git push*\"; a request both match is rejected.",
-                },
-                "goal": {
-                    "type": "string",
-                    "description": "What the chat works until it is met: \"$ \" and a shell \
-                        command, which has to pass, or words, which an agent judges.",
-                },
-                "sketch": {
-                    "type": "string",
-                    "enum": ["project", "empty"],
-                    "description": "What the chat starts from when it tries the work out \
-                        in a folder of its own, apart from the project: the project's last \
-                        commit, or nothing.",
-                },
-            },
-            "required": ["text"],
-        },
-    })
-}
-
 /// Calls the tool `params` names, and answers what it did, or the error
 /// the agent made in calling it.
 pub(super) async fn call(
@@ -934,8 +825,10 @@ pub(super) async fn call(
         SHOW_CHANGES => show_changes(arguments, cwd, requests),
         SHOW_MAP => show_map(arguments, cwd, requests),
         RUN_COMMAND => run_command(arguments, cwd, requests).await,
-        OPEN_CHAT => open_chat(arguments, chats).await,
-        WAIT_CHAT => wait_chat(arguments, chats).await,
+        subagent::AGENT => {
+            subagent::agent(arguments, &subagent::Kinds::of_claude(cwd), chats).await
+        }
+        subagent::AGENT_REPORT => subagent::agent_report(arguments, chats).await,
         READ_CHAT => read_chat(arguments, chats).await,
         PROPOSE_GOAL => propose_goal(arguments, chats).await,
         PROPOSE_NAME => propose_name(arguments, chats).await,
@@ -1334,154 +1227,6 @@ async fn run_command(
     }
 }
 
-/// Asks the window to open a chat as `arguments` say, and waits for it to
-/// open: answers how the chat goes by.
-async fn open_chat(
-    arguments: &Value,
-    chats: &UnboundedSender<ChatRequest>,
-) -> Result<String, String> {
-    let text = arguments
-        .get("text")
-        .and_then(Value::as_str)
-        .filter(|text| !text.trim().is_empty())
-        .ok_or("no text: give the chat's first line as `text`")?;
-    let strings = |name: &str| -> Result<Option<Vec<String>>, String> {
-        match arguments.get(name) {
-            None | Some(Value::Null) => Ok(None),
-            Some(Value::Array(items)) => items
-                .iter()
-                .map(|item| {
-                    item.as_str()
-                        .map(str::to_owned)
-                        .ok_or_else(|| format!("`{name}` holds something that is not a string"))
-                })
-                .collect::<Result<Vec<_>, _>>()
-                .map(Some),
-            Some(_) => Err(format!("`{name}` is not an array of strings")),
-        }
-    };
-    let string = |name: &str| -> Result<Option<String>, String> {
-        match arguments.get(name) {
-            None | Some(Value::Null) => Ok(None),
-            Some(Value::String(text)) => Ok(Some(text.clone())),
-            Some(_) => Err(format!("`{name}` is not a string")),
-        }
-    };
-    let stage = match string("stage")?.as_deref() {
-        None | Some("drive") => StageUse::Drive,
-        Some("look") => StageUse::Look,
-        Some(other) => return Err(format!("`stage` is \"{other}\": say \"drive\" or \"look\"")),
-    };
-    let setup = Setup {
-        context: string("context")?.filter(|context| !context.trim().is_empty()),
-        tools: strings("tools")?,
-        stage,
-        policy: Policy {
-            allow: strings("allow")?.unwrap_or_default(),
-            reject: strings("reject")?.unwrap_or_default(),
-            within: None,
-        },
-        folder: None,
-        sketch: None,
-    };
-    let goal = string("goal")?.as_deref().and_then(Goal::parse);
-    let sketch = string("sketch")?
-        .map(|name| Sketch::parse(&name).ok_or("`sketch` is not \"project\" or \"empty\""))
-        .transpose()?;
-    let (answer, opened) = oneshot::channel();
-    chats
-        .send(ChatRequest::OpenChat {
-            text: text.to_owned(),
-            setup,
-            goal,
-            sketch,
-            answer,
-        })
-        .map_err(|_| "the chat has closed".to_owned())?;
-    let opened = opened
-        .await
-        .map_err(|_| "the chat closed while the other opened".to_owned())??;
-    let mut told = format!(
-        "{} is open under this chat as chat {}, working on your line. Wait for its turn to \
-         end with wait_chat, giving {}.",
-        opened.name, opened.number, opened.number
-    );
-    if let (Some(sketch), Some(folder)) = (sketch, &opened.folder) {
-        let _ = write!(
-            told,
-            " {}",
-            crate::workflow::SKETCH_OPENED.say(&[
-                ("folder", &folder.display().to_string()),
-                ("from", sketch.what()),
-            ])
-        );
-    }
-    if let Some(withheld) = withheld(&opened.withheld) {
-        let _ = write!(told, " {withheld}");
-    }
-    Ok(told)
-}
-
-/// What the agent is told of what a chat it opened was not given, as
-/// more than its own chat may do, or `None` when nothing was withheld.
-fn withheld(withheld: &Withheld) -> Option<String> {
-    let quoted = |items: &[String]| {
-        items
-            .iter()
-            .map(|item| format!("`{item}`"))
-            .collect::<Vec<_>>()
-            .join(", ")
-    };
-    let mut held = Vec::new();
-    if !withheld.allow.is_empty() {
-        held.push(format!(
-            "it does not allow {}, which this chat's setup does not allow, and the human is \
-             asked instead",
-            quoted(&withheld.allow)
-        ));
-    }
-    match withheld.tools.as_deref() {
-        None => {}
-        Some([]) => held.push("it gets none of Cox's tools".to_owned()),
-        Some(tools) => held.push(format!("it gets only Cox's tools {}", quoted(tools))),
-    }
-    if withheld.stage {
-        held.push("it does not drive its stage".to_owned());
-    }
-    (!held.is_empty()).then(|| format!("It may do no more than this chat, so {}.", held.join("; ")))
-}
-
-/// Waits for the chat `arguments` name to end its turn, or to come to
-/// wait for the human, and tells how it stands.
-async fn wait_chat(
-    arguments: &Value,
-    chats: &UnboundedSender<ChatRequest>,
-) -> Result<String, String> {
-    let chat = arguments
-        .get("chat")
-        .and_then(Value::as_u64)
-        .ok_or("no chat: give the number open_chat gave it as `chat`")?;
-    let (answer, waited) = oneshot::channel();
-    chats
-        .send(ChatRequest::WaitChat { chat, answer })
-        .map_err(|_| "the chat has closed".to_owned())?;
-    let waited = waited
-        .await
-        .map_err(|_| "the chat closed while waiting".to_owned())??;
-    let mut told = match &waited.asking {
-        Some(asking) => format!("Chat {chat} waits for the human to answer: {asking}."),
-        None => format!("Chat {chat} ended its turn."),
-    };
-    match &waited.said {
-        Some(said) => {
-            told.push_str(" It last said:\n\n");
-            told.push_str(said);
-        }
-        None => told.push_str(" It said nothing."),
-    }
-    Ok(told)
-}
-
 /// Keeps the picture or the video `arguments` name, and asks the chat to
 /// show it in the conversation.
 async fn show_media(
@@ -1753,7 +1498,7 @@ async fn start_sketch(
         .map_err(|_| "the chat closed before the sketch was made".to_owned())??;
     let mut told = format!(
         "The sketch {} is open beside this chat as chat {}, trying it. Wait for its turn to \
-         end with wait_chat, giving {}.",
+         end with agent_report, giving {}.",
         opened.name, opened.number, opened.number
     );
     if let Some(folder) = &opened.folder {
@@ -2302,7 +2047,8 @@ mod tests {
     use tokio::sync::mpsc::unbounded_channel;
 
     use super::*;
-    use crate::agent::mcp::{OpenedChat, Waited};
+    use crate::agent::mcp::OpenedChat;
+    use crate::agent::setup::Withheld;
     use crate::testing::{TempDir, run_git};
 
     /// What the agent gets from calling the tool `name` with `arguments`
@@ -2337,8 +2083,8 @@ mod tests {
             "show_changes",
             "show_map",
             "run_command",
-            "open_chat",
-            "wait_chat",
+            "agent",
+            "agent_report",
             "read_chat",
             "show_media",
             "propose_goal",
@@ -2854,111 +2600,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_goal_in_words_opens_a_chat_judged_by_an_agent() {
-        let (sent, _requests) = unbounded_channel();
-        let (chats, mut asked) = unbounded_channel();
-        let window = tokio::spawn(async move {
-            let Some(ChatRequest::OpenChat { goal, answer, .. }) = asked.recv().await else {
-                panic!("the window was not asked");
-            };
-            let _ = answer.send(Ok(OpenedChat {
-                number: 3,
-                name: "Chat 3".to_owned(),
-                folder: None,
-                withheld: Withheld::default(),
-            }));
-            goal
-        });
-        let params = json!({ "name": OPEN_CHAT, "arguments": {
-            "text": "Make the greeting name the user.",
-            "goal": "The greeting names the user.",
-        } });
-        call(&params, Path::new("/work"), None, &sent, &chats)
-            .await
-            .unwrap();
-        assert_eq!(
-            window.await.unwrap(),
-            Some(Goal::Words("The greeting names the user.".to_owned()))
-        );
-    }
-
-    #[tokio::test]
-    async fn asks_the_window_to_open_a_chat_as_the_agent_says() {
-        let (sent, _requests) = unbounded_channel();
-        let (chats, mut asked) = unbounded_channel();
-        let window = tokio::spawn(async move {
-            let Some(ChatRequest::OpenChat {
-                text,
-                setup,
-                goal,
-                sketch,
-                answer,
-            }) = asked.recv().await
-            else {
-                panic!("the window was not asked");
-            };
-            let _ = answer.send(Ok(OpenedChat {
-                number: 7,
-                name: "Chat 2".to_owned(),
-                folder: Some("/sketches/greet-1".into()),
-                withheld: Withheld {
-                    allow: vec!["cargo *".to_owned()],
-                    tools: Some(vec!["show_file".to_owned()]),
-                    stage: false,
-                },
-            }));
-            (text, setup, goal, sketch)
-        });
-        let params = json!({ "name": OPEN_CHAT, "arguments": {
-            "text": "Build the first unit.",
-            "context": "Build one unit and no more.",
-            "tools": ["show_file", "run_command"],
-            "stage": "look",
-            "allow": ["Read *", "cargo *"],
-            "reject": ["Edit *"],
-            "goal": "$ cargo xtask ci",
-            "sketch": "project",
-        } });
-        let answered = call(&params, Path::new("/work"), None, &sent, &chats)
-            .await
-            .unwrap();
-        assert_eq!(answered["isError"], false);
-        let told = answered["content"][0]["text"].as_str().unwrap();
-        assert!(told.contains("Chat 2") && told.contains("chat 7"), "{told}");
-        assert!(
-            told.contains("a sketch, working in /sketches/greet-1"),
-            "{told}"
-        );
-        assert!(
-            told.ends_with(
-                " It may do no more than this chat, so it does not allow `cargo *`, which this \
-                 chat's setup does not allow, and the human is asked instead; it gets only \
-                 Cox's tools `show_file`."
-            ),
-            "{told}"
-        );
-        let (text, setup, goal, sketch) = window.await.unwrap();
-        assert_eq!(sketch, Some(Sketch::Project));
-        assert_eq!(text, "Build the first unit.");
-        assert_eq!(goal, Some(Goal::Command("cargo xtask ci".to_owned())));
-        assert_eq!(
-            setup,
-            Setup {
-                context: Some("Build one unit and no more.".to_owned()),
-                tools: Some(["show_file", "run_command"].map(str::to_owned).to_vec()),
-                stage: StageUse::Look,
-                policy: Policy {
-                    allow: ["Read *", "cargo *"].map(str::to_owned).to_vec(),
-                    reject: ["Edit *"].map(str::to_owned).to_vec(),
-                    within: None,
-                },
-                folder: None,
-                sketch: None,
-            }
-        );
-    }
-
-    #[tokio::test]
     async fn shows_only_pictures_and_videos() {
         let (sent, _requests) = unbounded_channel();
         let (chats, mut asked) = unbounded_channel();
@@ -3221,85 +2862,6 @@ mod tests {
                 (Goal::Words("The greeting names the user.".to_owned()), None),
             ]
         );
-    }
-
-    #[tokio::test]
-    async fn asks_the_window_how_a_chat_stands_once_it_waits() {
-        let (sent, _requests) = unbounded_channel();
-        let (chats, mut asked) = unbounded_channel();
-        let window = tokio::spawn(async move {
-            let mut waited_for = Vec::new();
-            for stands in [
-                Ok(Waited {
-                    asking: None,
-                    said: Some("Built, and the tests pass.".to_owned()),
-                }),
-                Ok(Waited {
-                    asking: Some("Edit src/main.rs".to_owned()),
-                    said: None,
-                }),
-                Err("no chat 9".to_owned()),
-            ] {
-                let Some(ChatRequest::WaitChat { chat, answer }) = asked.recv().await else {
-                    panic!("the window was not asked");
-                };
-                waited_for.push(chat);
-                let _ = answer.send(stands);
-            }
-            waited_for
-        });
-        let wait = |chat: u64| {
-            let params = json!({ "name": WAIT_CHAT, "arguments": { "chat": chat } });
-            let (sent, chats) = (sent.clone(), chats.clone());
-            async move {
-                call(&params, Path::new("/work"), None, &sent, &chats)
-                    .await
-                    .unwrap()
-            }
-        };
-        let ended = wait(7).await;
-        assert_eq!(ended["isError"], false);
-        assert_eq!(
-            ended["content"][0]["text"],
-            "Chat 7 ended its turn. It last said:\n\nBuilt, and the tests pass."
-        );
-        let asking = wait(7).await;
-        assert_eq!(
-            asking["content"][0]["text"],
-            "Chat 7 waits for the human to answer: Edit src/main.rs. It said nothing."
-        );
-        let none = wait(9).await;
-        assert_eq!(none["isError"], true);
-        assert_eq!(none["content"][0]["text"], "no chat 9");
-        assert_eq!(window.await.unwrap(), [7, 7, 9]);
-
-        // A chat has to be named.
-        let params = json!({ "name": WAIT_CHAT, "arguments": { "chat": "seven" } });
-        let answered = call(&params, Path::new("/work"), None, &sent, &chats)
-            .await
-            .unwrap();
-        assert_eq!(answered["isError"], true);
-    }
-
-    #[tokio::test]
-    async fn asks_for_a_first_line_and_a_stage_it_knows() {
-        let (sent, _requests) = unbounded_channel();
-        let (chats, mut asked) = unbounded_channel();
-        for arguments in [
-            json!({}),
-            json!({ "text": " " }),
-            json!({ "text": "go", "stage": "fly" }),
-            json!({ "text": "go", "allow": "Read *" }),
-            json!({ "text": "go", "sketch": true }),
-            json!({ "text": "go", "sketch": "container" }),
-        ] {
-            let params = json!({ "name": OPEN_CHAT, "arguments": arguments });
-            let answered = call(&params, Path::new("/"), None, &sent, &chats)
-                .await
-                .unwrap();
-            assert_eq!(answered["isError"], true, "{arguments}");
-        }
-        assert!(asked.try_recv().is_err());
     }
 
     #[test]

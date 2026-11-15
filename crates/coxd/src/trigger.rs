@@ -251,7 +251,7 @@ pub enum By {
     /// the list, its first line the trigger's text.
     New {
         /// The patterns of the permission requests it goes on with, as
-        /// `open_chat`'s `allow` takes them, or, when empty, what the judge
+        /// `agent`'s `allow` takes them, or, when empty, what the judge
         /// of a goal may; for a schedule's chat, whose human answers the
         /// rest, none.
         allow: Vec<String>,

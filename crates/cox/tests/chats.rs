@@ -3748,7 +3748,9 @@ async fn opened_by_an_agent<'a>(
     asks.borrow()[0]
         .send(ChatRequest::OpenChat {
             text: "permission".to_owned(),
+            title: None,
             setup: setup.clone(),
+            model: None,
             goal: None,
             sketch: None,
             answer,
@@ -3880,7 +3882,9 @@ async fn opened_on(
     asks.borrow()[0]
         .send(ChatRequest::OpenChat {
             text: text.to_owned(),
+            title: None,
             setup: Setup::default(),
+            model: None,
             goal: None,
             sketch: None,
             answer,
@@ -3998,6 +4002,7 @@ async fn a_chat_opened_by_a_chat_is_allowed_no_more_than_it(cx: &mut TestAppCont
     asks.borrow()[0]
         .send(ChatRequest::OpenChat {
             text: "permission".to_owned(),
+            title: None,
             setup: Setup {
                 policy: Policy {
                     allow: vec!["*".to_owned()],
@@ -4005,6 +4010,7 @@ async fn a_chat_opened_by_a_chat_is_allowed_no_more_than_it(cx: &mut TestAppCont
                 },
                 ..Setup::default()
             },
+            model: None,
             goal: None,
             sketch: None,
             answer,
@@ -4084,7 +4090,9 @@ async fn open_sketch(
     asks.borrow()[0]
         .send(ChatRequest::OpenChat {
             text: "try it".to_owned(),
+            title: None,
             setup: Setup::default(),
+            model: None,
             goal: None,
             sketch: Some(sketch),
             answer,
@@ -4311,7 +4319,9 @@ async fn an_ended_sketch_goes_on_in_the_project(cx: &mut TestAppContext) {
     asks.borrow()[1]
         .send(ChatRequest::OpenChat {
             text: "help".to_owned(),
+            title: None,
             setup: Setup::default(),
+            model: None,
             goal: None,
             sketch: None,
             answer,
@@ -4798,7 +4808,9 @@ async fn open_child(
     asks.borrow()[0]
         .send(ChatRequest::OpenChat {
             text: text.to_owned(),
+            title: None,
             setup: Setup::default(),
+            model: None,
             goal: None,
             sketch: None,
             answer,
@@ -4838,8 +4850,8 @@ async fn an_agent_waits_for_the_chat_it_opened(cx: &mut TestAppContext) {
     assert_eq!(
         waited.try_recv().unwrap(),
         Ok(Waited {
-            asking: None,
             said: Some("echo: slow hello".to_owned()),
+            ..Waited::default()
         })
     );
 
@@ -4862,7 +4874,7 @@ async fn an_agent_waits_for_the_chat_it_opened(cx: &mut TestAppContext) {
         waited.await.unwrap(),
         Ok(Waited {
             asking: Some("Edit x.txt".to_owned()),
-            said: None,
+            ..Waited::default()
         })
     );
     // A chat not at work answers at once, as it stands.
@@ -4878,8 +4890,8 @@ async fn an_agent_waits_for_the_chat_it_opened(cx: &mut TestAppContext) {
     assert_eq!(
         waited.await.unwrap(),
         Ok(Waited {
-            asking: None,
             said: Some("echo: permission".to_owned()),
+            ..Waited::default()
         })
     );
 
@@ -4888,6 +4900,84 @@ async fn an_agent_waits_for_the_chat_it_opened(cx: &mut TestAppContext) {
     ask(ChatRequest::WaitChat { chat: 99, answer });
     cx.run_until_parked();
     assert_eq!(waited.await.unwrap(), Err("no chat 99".to_owned()));
+}
+
+#[gpui::test]
+async fn a_subagent_goes_by_its_title_and_runs_with_the_model_asked_as_offered(
+    cx: &mut TestAppContext,
+) {
+    let home = scratch::folder("subagent-model-home");
+    let store = kept_store("chats-subagent-model");
+    let (agents, asks, workspace, cx) = open_window_asking(cx, home, store, Resumes::Resume);
+    cx.simulate_keystrokes("secondary-n");
+    say(cx, &workspace, "hello").await;
+    let open = |title: &str, model: &str| {
+        let (answer, opened) = tokio::sync::oneshot::channel();
+        asks.borrow()[0]
+            .send(ChatRequest::OpenChat {
+                text: "go".to_owned(),
+                title: Some(title.to_owned()),
+                setup: Setup::default(),
+                model: Some(model.to_owned()),
+                goal: None,
+                sketch: None,
+                answer,
+            })
+            .unwrap();
+        opened
+    };
+    let wait = |chat: u64| {
+        let (answer, waited) = tokio::sync::oneshot::channel();
+        asks.borrow()[0]
+            .send(ChatRequest::WaitChat { chat, answer })
+            .unwrap();
+        waited
+    };
+
+    let small = open("Try it small", "Small").await.unwrap().unwrap();
+    assert_eq!(small.name, "Try it small");
+    let waited = wait(small.number);
+    let view = view_at(cx, &workspace, 1);
+    wait_for_turn(cx, &view).await;
+    cx.run_until_parked();
+    assert_eq!(
+        agents.borrow()[1].settings_set(),
+        [(fake_agent::MODEL.to_owned(), "small".to_owned())],
+        "set before its first line"
+    );
+    assert_eq!(
+        waited.await.unwrap(),
+        Ok(Waited {
+            said: Some("echo: go".to_owned()),
+            ..Waited::default()
+        })
+    );
+    assert_eq!(
+        names(cx, &workspace),
+        listed(&[("Cox", &["hello", "Try it small"])]),
+        "named by its title, not its first line"
+    );
+
+    let huge = open("Try it huge", "huge").await.unwrap().unwrap();
+    let waited = wait(huge.number);
+    let view = view_at(cx, &workspace, 2);
+    wait_for_turn(cx, &view).await;
+    cx.run_until_parked();
+    assert_eq!(agents.borrow()[2].settings_set(), []);
+    let unoffered = "The agent offers no model `huge` (it offers Large, Small): the chat runs \
+        with Large.";
+    assert_eq!(
+        waited.await.unwrap(),
+        Ok(Waited {
+            said: Some("echo: go".to_owned()),
+            unoffered: Some(unoffered.to_owned()),
+            ..Waited::default()
+        })
+    );
+    assert!(
+        entries(cx, &view).contains(&Entry::Note(unoffered.to_owned())),
+        "the human reads it too"
+    );
 }
 
 #[gpui::test]
