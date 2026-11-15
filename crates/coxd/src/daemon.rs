@@ -1241,18 +1241,16 @@ impl Daemon {
         // The first project is Cox's own chats', in none.
         let in_project = slot.project != 0;
         let Spawned { agent, stage } = self.spawns.chat(cwd, start, &agent, relay, in_project);
-        let also = stage
-            .map(|mut stage| {
-                let internal = self.internal.clone();
-                vec![spawn(async move {
-                    while let Some(request) = stage.recv().await {
-                        if internal.send(Internal::Stage { key, request }).is_err() {
-                            break;
-                        }
+        let also = stage.map_or_default(|mut stage| {
+            let internal = self.internal.clone();
+            vec![spawn(async move {
+                while let Some(request) = stage.recv().await {
+                    if internal.send(Internal::Stage { key, request }).is_err() {
+                        break;
                     }
-                })]
-            })
-            .unwrap_or_default();
+                }
+            })]
+        });
         if let Some(chat) = self.slot_mut(key).and_then(|slot| slot.chat.as_mut()) {
             chat.attach(agent, generation, also);
         }
@@ -2074,17 +2072,13 @@ impl Daemon {
                 }
             }
             ChatRequest::Whereabouts { answer } => {
-                let whereabouts = self
-                    .slot(key)
-                    .map(|slot| Whereabouts {
-                        project: self.projects[slot.project].name.clone(),
-                        // The first is Cox's own, in the home.
-                        folder: (slot.project != 0)
-                            .then(|| self.projects[slot.project].folder.clone()),
-                        chat: slot.name.clone(),
-                        kept: slot.kept.map(|kept| kept.to_string()),
-                    })
-                    .unwrap_or_default();
+                let whereabouts = self.slot(key).map_or_default(|slot| Whereabouts {
+                    project: self.projects[slot.project].name.clone(),
+                    // The first is Cox's own, in the home.
+                    folder: (slot.project != 0).then(|| self.projects[slot.project].folder.clone()),
+                    chat: slot.name.clone(),
+                    kept: slot.kept.map(|kept| kept.to_string()),
+                });
                 answer.send(whereabouts).ok();
             }
         }
@@ -2269,8 +2263,7 @@ impl Daemon {
         };
         let from = chat
             .agents()
-            .map(|agents| agents.of(Some(chat.agent_id())).name)
-            .unwrap_or_default();
+            .map_or_default(|agents| agents.of(Some(chat.agent_id())).name);
         tracing::info!(agent = %to, "the chat switches to another agent");
         let again = Again {
             cwd,

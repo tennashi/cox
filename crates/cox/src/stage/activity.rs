@@ -250,11 +250,10 @@ fn kept_sources(
                 "says": format!(
                     "kept in {}{}{}",
                     source["topic"].as_str().unwrap_or_default(),
-                    source["chat"].as_str().map(|chat| format!(" by {chat}")).unwrap_or_default(),
+                    source["chat"].as_str().map_or_default(|chat| format!(" by {chat}")),
                     project
                         .filter(|_| home)
-                        .map(|project| format!(" in {project}"))
-                        .unwrap_or_default()
+                        .map_or_default(|project| format!(" in {project}"))
                 ),
                 "href": format!("cox://wiki/#{shelf}{}", source["name"].as_str().unwrap_or_default()),
             }));

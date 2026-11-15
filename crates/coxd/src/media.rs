@@ -64,8 +64,7 @@ pub fn keep(path: &Path, folder: Option<&Path>) -> Result<Shown, String> {
     let extension = path
         .extension()
         .and_then(|extension| extension.to_str())
-        .map(str::to_ascii_lowercase)
-        .unwrap_or_default();
+        .map_or_default(str::to_ascii_lowercase);
     let Some(&(extension, kind, _)) = KINDS.iter().find(|(known, _, _)| *known == extension) else {
         let known: Vec<&str> = KINDS.iter().map(|(known, _, _)| *known).collect();
         return Err(format!(

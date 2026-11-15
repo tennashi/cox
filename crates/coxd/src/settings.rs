@@ -110,11 +110,10 @@ impl SearchEngine {
         url::Url::parse(&self.0.replace("%s", "words"))
             .ok()
             .and_then(|url| url.host_str().map(str::to_owned))
-            .map(|host| {
+            .map_or_default(|host| {
                 host.strip_prefix("www.")
                     .map_or_else(|| host.clone(), str::to_owned)
             })
-            .unwrap_or_default()
     }
 
     /// The address, with `%s` where the words go.

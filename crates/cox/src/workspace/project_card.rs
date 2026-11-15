@@ -591,8 +591,7 @@ impl ProjectCard {
                 "Name input holding {:?}{}",
                 self.name.read(cx).text(),
                 why_not_renamed(&self.standing, self.typed_name(cx))
-                    .map(|why| format!(": {why}"))
-                    .unwrap_or_default()
+                    .map_or_default(|why| format!(": {why}"))
             )))
             .chain(std::iter::once(format!(
                 "About input holding {:?}",

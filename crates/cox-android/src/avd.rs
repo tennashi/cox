@@ -50,7 +50,7 @@ pub fn home_from(env: impl Fn(&str) -> Option<OsString>) -> Option<PathBuf> {
 /// The virtual devices in the AVDs' folder, by name.
 #[must_use]
 pub fn all() -> Vec<Avd> {
-    home().map(|home| in_folder(&home)).unwrap_or_default()
+    home().map_or_default(|home| in_folder(&home))
 }
 
 /// The virtual devices in `home`, by name.

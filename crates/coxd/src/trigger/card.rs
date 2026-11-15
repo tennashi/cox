@@ -50,7 +50,7 @@ impl Draft {
     /// The card of `trigger`, as its file has it.
     #[must_use]
     pub fn of(trigger: &Trigger) -> Self {
-        let cron = trigger.cron().map(ToString::to_string).unwrap_or_default();
+        let cron = trigger.cron().map_or_default(ToString::to_string);
         let (by, allow, reject, project) = match &trigger.by {
             By::Shell => ("shell", Vec::new(), Vec::new(), None),
             By::This => ("this", Vec::new(), Vec::new(), None),

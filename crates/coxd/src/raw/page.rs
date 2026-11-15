@@ -139,7 +139,6 @@ pub async fn read(url: &str) -> Result<Page, String> {
 
 /// Reads the page at `url`, as the reader, and says what it read, or why
 /// not, as a line of JSON on standard output.
-#[must_use]
 pub fn run(url: &str) -> ExitCode {
     let read = match fetch(url).and_then(|fetched| page(&fetched)) {
         Ok(page) => Read::Page(page),

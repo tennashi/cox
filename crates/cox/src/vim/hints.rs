@@ -254,17 +254,15 @@ fn targets(part: Option<Part>, window: &Window) -> (Vec<Target>, Vec<Rc<dyn Page
             .map(|(_, mark)| mark.clone())
             .collect()
     });
-    let within: Vec<Bounds<Pixels>> = part
-        .map(|part| {
-            marks
-                .iter()
-                .filter_map(|mark| match mark {
-                    Mark::Part(marked, bounds) if *marked == part => Some(*bounds),
-                    _ => None,
-                })
-                .collect()
-        })
-        .unwrap_or_default();
+    let within: Vec<Bounds<Pixels>> = part.map_or_default(|part| {
+        marks
+            .iter()
+            .filter_map(|mark| match mark {
+                Mark::Part(marked, bounds) if *marked == part => Some(*bounds),
+                _ => None,
+            })
+            .collect()
+    });
     let mut targets = Vec::new();
     for (at, mark) in marks.iter().enumerate() {
         let Mark::Spot(bounds, take) = mark else {

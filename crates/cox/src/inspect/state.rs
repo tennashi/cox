@@ -452,8 +452,7 @@ fn describe_entry(entry: &Entry) -> String {
                 .collect();
             let failed = failed
                 .as_ref()
-                .map(|failed| format!("; the last failed: {failed}"))
-                .unwrap_or_default();
+                .map_or_default(|failed| format!("; the last failed: {failed}"));
             let chosen = chosen.map_or("none yet".to_owned(), |chosen| (chosen + 1).to_string());
             format!("login: {}; chosen: {chosen}{failed}", options.join(", "))
         }
@@ -529,12 +528,10 @@ fn describe_entry(entry: &Entry) -> String {
                     let within = commit
                         .repository
                         .as_deref()
-                        .map(|name| format!(" in {name}"))
-                        .unwrap_or_default();
+                        .map_or_default(|name| format!(" in {name}"));
                     let amending = commit
                         .amended_short()
-                        .map(|amended| format!(", amending {amended}"))
-                        .unwrap_or_default();
+                        .map_or_default(|amended| format!(", amending {amended}"));
                     format!(
                         "{} {:?}{within} (+{} -{}){amending}",
                         commit.short(),

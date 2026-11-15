@@ -173,8 +173,7 @@ fn relayed_in(bytes: &[u8], relay: u16) -> std::collections::BTreeSet<u16> {
 pub fn relayed(program: &str, relay: u16) -> std::collections::BTreeSet<u16> {
     run(program, &["serve", "status", "--json"], ASKS)
         .filter(Output::success)
-        .map(|ran| relayed_in(&ran.stdout, relay))
-        .unwrap_or_default()
+        .map_or_default(|ran| relayed_in(&ran.stdout, relay))
 }
 
 /// Has `tailscale serve`, through `program`, serve nothing at its port

@@ -2248,15 +2248,12 @@ mod tests {
             ending("Discard sketch", None, false),
         ];
         let names = |told: &serde_json::Value| -> Vec<String> {
-            told["endings"]
-                .as_array()
-                .map(|endings| {
-                    endings
-                        .iter()
-                        .map(|ending| ending["name"].to_string())
-                        .collect()
-                })
-                .unwrap_or_default()
+            told["endings"].as_array().map_or_default(|endings| {
+                endings
+                    .iter()
+                    .map(|ending| ending["name"].to_string())
+                    .collect()
+            })
         };
         let ends = |from| told_sketching(Some(&Sketching::Ends { from }), &endings);
         assert_eq!(

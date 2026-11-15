@@ -1031,8 +1031,7 @@ fn shape(
     let lines = window
         .text_system()
         .shape_text(text, font_size, runs, wrap_width, None)
-        .map(|lines| lines.into_iter().collect())
-        .unwrap_or_default();
+        .map_or_default(|lines| lines.into_iter().collect());
     Layout { lines, line_height }
 }
 

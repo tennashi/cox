@@ -61,13 +61,12 @@ impl Listing {
                 let command = agent
                     .get("command")
                     .and_then(Value::as_array)
-                    .map(|words| {
+                    .map_or_default(|words| {
                         words
                             .iter()
                             .filter_map(|word| word.as_str().map(str::to_owned))
                             .collect()
-                    })
-                    .unwrap_or_default();
+                    });
                 (name, command)
             })
             .collect()

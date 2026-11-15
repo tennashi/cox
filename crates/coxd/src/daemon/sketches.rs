@@ -48,8 +48,7 @@ impl Daemon {
             .unwrap_or_else(|| self.projects[slot.project].folder.clone());
         let talked = self
             .chat(key)
-            .map(|chat| agent::talked_through(chat.conversation().entries()))
-            .unwrap_or_default();
+            .map_or_default(|chat| agent::talked_through(chat.conversation().entries()));
         let folder = make_sketch(started, &from)?;
         let context = [setup.context.clone(), talked]
             .into_iter()
@@ -236,8 +235,7 @@ impl Daemon {
             .as_ref()
             .ok()
             .and_then(|discarded| discarded.kept.as_ref())
-            .map(ToString::to_string)
-            .unwrap_or_default();
+            .map_or_default(ToString::to_string);
         let (sources, of) = self.sources_of(project);
         let (ended, source) = match discarded.as_ref().map(sketch::Discarded::note) {
             Ok(note) => {
@@ -509,8 +507,7 @@ impl Daemon {
         let project = self.untitled();
         let name = project
             .file_name()
-            .map(|name| name.to_string_lossy().into_owned())
-            .unwrap_or_default();
+            .map_or_default(|name| name.to_string_lossy().into_owned());
         let kept = std::fs::create_dir_all(&project)
             .map_err(|error| format!("Cox cannot make {}: {error}", project.display()))
             .and_then(|()| {
@@ -542,10 +539,7 @@ impl Daemon {
     /// its folder away, for a project made for what it tried to start
     /// with none of it.
     pub(super) fn keep_apart(&self, key: u64, folder: &Path) -> Result<sketch::Discarded, String> {
-        let title = self
-            .slot(key)
-            .map(|slot| slot.name.clone())
-            .unwrap_or_default();
+        let title = self.slot(key).map_or_default(|slot| slot.name.clone());
         let sketches = storage::path(storage::Kept::Sketches)
             .ok_or("Cox cannot tell where to keep what the sketch made")?;
         sketch::discard(Sketch::Empty, folder, &title, &sketches, true)

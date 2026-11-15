@@ -17,7 +17,6 @@ use crate::agents::Agents;
 /// given: the chats, kept where this Cox keeps
 /// what lasts, their agents started as `agents.json` and `settings.json`
 /// say, following them as they change.
-#[must_use]
 pub fn run(data: Option<&Path>) -> ExitCode {
     // First, while coxd has no other thread.
     let environment = crate::login::take_in();

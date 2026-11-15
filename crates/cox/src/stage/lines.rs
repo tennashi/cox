@@ -64,8 +64,7 @@ pub fn told(root: &Path, path: &Path, line: usize) -> Option<serde_json::Value> 
         let text = buffer.line(n - 1);
         let spans = syntax
             .as_ref()
-            .map(|syntax| syntax.highlights(buffer, n - 1, usize::MAX))
-            .unwrap_or_default();
+            .map_or_default(|syntax| syntax.highlights(buffer, n - 1, usize::MAX));
         serde_json::json!(stretches(&text, &spans))
     };
     let within: Vec<serde_json::Value> = match (&buffer, &syntax) {

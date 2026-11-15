@@ -170,19 +170,17 @@ fn list_files(folder: std::path::PathBuf, cx: &mut Context<ChatView>) -> Task<()
 /// stage's "Changes" shows them, first.
 fn changed_first(folder: &Path) -> Vec<String> {
     let all = files::all(folder, MOST_FILES);
-    let mut changed: Vec<String> = changes::read(folder)
-        .map(|diff| {
-            diff.files
-                .iter()
-                .map(|file| diff.top.join(&file.path))
-                .filter(|path| path.is_file())
-                .filter_map(|path| {
-                    let path = path.strip_prefix(folder).ok()?;
-                    Some(path.to_string_lossy().replace('\\', "/"))
-                })
-                .collect()
-        })
-        .unwrap_or_default();
+    let mut changed: Vec<String> = changes::read(folder).map_or_default(|diff| {
+        diff.files
+            .iter()
+            .map(|file| diff.top.join(&file.path))
+            .filter(|path| path.is_file())
+            .filter_map(|path| {
+                let path = path.strip_prefix(folder).ok()?;
+                Some(path.to_string_lossy().replace('\\', "/"))
+            })
+            .collect()
+    });
     changed.retain(|path| all.contains(path));
     let rest: Vec<String> = all
         .into_iter()

@@ -202,8 +202,7 @@ impl Settings {
         let value = request
             .value
             .as_value_id()
-            .map(|value| value.0.to_string())
-            .unwrap_or_default();
+            .map_or_default(|value| value.0.to_string());
         match &*request.config_id.0 {
             MODEL => value.clone_into(&mut self.model),
             MODE => value.clone_into(&mut self.mode),

@@ -69,15 +69,13 @@ impl Known {
                 let package = without_version(package);
                 package.rsplit('/').next().unwrap_or(package).to_owned()
             }
-            None => program(&command)
-                .map(|program| {
-                    Path::new(program)
-                        .file_name()
-                        .map_or(program.to_owned(), |name| {
-                            name.to_string_lossy().into_owned()
-                        })
-                })
-                .unwrap_or_default(),
+            None => program(&command).map_or_default(|program| {
+                Path::new(program)
+                    .file_name()
+                    .map_or(program.to_owned(), |name| {
+                        name.to_string_lossy().into_owned()
+                    })
+            }),
         };
         Self {
             id: name.clone(),
@@ -154,13 +152,12 @@ impl Agents {
         });
         let listed = registry_path()
             .and_then(|path| std::fs::read_to_string(path).ok())
-            .map(|text| {
+            .map_or_default(|text| {
                 registry(&text).unwrap_or_else(|error| {
                     tracing::error!("the registry Cox kept cannot be read: {error:#}");
                     Vec::new()
                 })
-            })
-            .unwrap_or_default();
+            });
         Self::arranged(command, named, own, listed)
     }
 

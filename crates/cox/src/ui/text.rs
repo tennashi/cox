@@ -649,8 +649,7 @@ impl Reading {
     #[must_use]
     pub fn selected_text(&self) -> String {
         self.selection
-            .map(|selection| self.painted.copy(&selection))
-            .unwrap_or_default()
+            .map_or_default(|selection| self.painted.copy(&selection))
     }
 }
 

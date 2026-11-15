@@ -1148,8 +1148,7 @@ fn show_map(
     }
     let changed = changes::read(cwd)
         .ok()
-        .map(|diff| changes::changed_files(&diff))
-        .unwrap_or_default();
+        .map_or_default(|diff| changes::changed_files(&diff));
     let all = map::all_facts(cwd, &map, &changed);
     let facts = |id: &str| all.get(id).cloned();
     ask(
@@ -2222,9 +2221,7 @@ async fn raw_read(
     match arguments.get("source") {
         None | Some(Value::Null) => {
             let topic = topic(arguments)?;
-            let of = topic
-                .map(|topic| format!(" of {topic}"))
-                .unwrap_or_default();
+            let of = topic.map_or_default(|topic| format!(" of {topic}"));
             let lists: Vec<String> = shelves
                 .iter()
                 .filter_map(|shelf| {
