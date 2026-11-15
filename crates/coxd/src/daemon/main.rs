@@ -19,14 +19,21 @@ use crate::agents::Agents;
 /// say, following them as they change.
 pub fn run(data: Option<&Path>) -> ExitCode {
     // First, while coxd has no other thread.
-    let environment = crate::login::take_in();
+    let environment = crate::login::start_from_login_shell();
     if let Some(data) = data {
         crate::storage::keep_in(data);
     }
     crate::logs::init(crate::storage::path(crate::storage::Kept::Logs).as_deref());
     crate::scratch::sweep();
-    if let crate::login::Taken::Failed(why) = environment {
-        tracing::warn!("the agents get launchd's environment, not the login shell's: {why}");
+    match environment {
+        crate::login::Started::AsItIs => {}
+        crate::login::Started::FromShell => {
+            tracing::info!("coxd started from the login shell, with its environment");
+        }
+        crate::login::Started::Failed(why) => tracing::error!(
+            "the agents get launchd's environment, not the login shell's: \
+             coxd could not start from it: {why}"
+        ),
     }
     let Some(socket) = crate::storage::path(crate::storage::Kept::Daemon) else {
         eprintln!("cox: there is no place for coxd's socket");
