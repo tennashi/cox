@@ -188,6 +188,8 @@ pub fn run(settings: Settings) -> ExitCode {
     if std::env::args().any(|arg| arg.starts_with("--type=")) {
         let _ = cox_browser::start(profile.clone());
     }
+    #[cfg(target_os = "macos")]
+    crate::login_item::keep();
     let home_given = settings.home.is_some();
     let home = settings
         .home

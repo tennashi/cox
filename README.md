@@ -50,6 +50,11 @@ blocks it the first time it opens. Close the message, then in System
 Settings, under Privacy & Security, click "Open Anyway". Cox also needs
 Node.js, for `npx`, which starts most agents and the browser tools.
 
+The first time Cox opens, it has `coxd`, which runs the chats, start
+whenever you log in, so that schedules run and your phone reaches Cox
+before you open the window. macOS tells you so, and lists it under Login
+Items in System Settings, where you can turn it off.
+
 To update Cox, run `brew upgrade --cask cox`, then restart the window.
 `coxd` moves to the new version as it does after building from source,
 below.
@@ -77,7 +82,8 @@ cargo xtask install
 ```
 
 This installs Cox to `~/Applications/Cox.app` on macOS, or to
-`~/.local/bin/cox` on Linux, and has `coxd` start when you log in.
+`~/.local/bin/cox` on Linux. On Linux it has `coxd` start when you log
+in; on macOS, Cox does so the first time it opens, as above.
 
 To update Cox, pull the changes and run `cargo xtask install` again, then
 restart the window. `coxd` moves to the new version the next time a
@@ -87,8 +93,7 @@ alone, opens at once beside it, and the chats go on.
 
 To stop `coxd` starting at login:
 
-- macOS: run `launchctl bootout gui/$(id -u)/com.github.tennashi.cox.coxd`,
-  then remove `~/Library/LaunchAgents/com.github.tennashi.cox.coxd.plist`.
+- macOS: turn Cox off under Login Items in System Settings.
 - Linux: run `systemctl --user disable coxd.service`.
 
 ## Getting started

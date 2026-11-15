@@ -182,6 +182,12 @@ fn assemble(sh: &Shell, build: &Build) -> anyhow::Result<PathBuf> {
     )?;
     sh.create_dir(contents.join("MacOS"))?;
     sh.copy_file(&build.cox, contents.join("MacOS").join(APP))?;
+    let agents = contents.join("Library/LaunchAgents");
+    sh.create_dir(&agents)?;
+    sh.write_file(
+        agents.join(format!("{COXD_LABEL}.plist")),
+        bundled_launch_agent(),
+    )?;
     sh.create_dir(contents.join("Resources"))?;
     fs::write(
         contents.join("Resources").join(format!("{APP}.icns")),
@@ -313,21 +319,16 @@ fn install(sh: &Shell, args: &[String]) -> anyhow::Result<()> {
 /// starts the new one itself.
 fn start_at_login(sh: &Shell, home: &Path, installed: &Path) -> anyhow::Result<()> {
     if cfg!(target_os = "macos") {
-        let agents = home.join("Library/LaunchAgents");
-        sh.create_dir(&agents)?;
-        let plist = agents.join(format!("{COXD_LABEL}.plist"));
-        sh.write_file(&plist, launch_agent(installed))?;
-        let uid = cmd!(sh, "id -u").read()?;
-        let loaded = cmd!(sh, "launchctl print gui/{uid}/{COXD_LABEL}")
-            .quiet()
-            .ignore_stdout()
-            .ignore_stderr()
-            .run()
-            .is_ok();
-        if !loaded {
-            cmd!(sh, "launchctl bootstrap gui/{uid} {plist}").run()?;
+        // The app hands the system the launch agent it carries as it opens
+        // (see `cox::login_item`). The one Cox wrote to LaunchAgents before
+        // goes; launchd keeps the coxd it started running till logout.
+        let legacy = home
+            .join("Library/LaunchAgents")
+            .join(format!("{COXD_LABEL}.plist"));
+        if sh.path_exists(&legacy) {
+            sh.remove_path(&legacy)?;
         }
-        println!("coxd starts at login, as {}", plist.display());
+        println!("coxd starts at login once Cox has opened: see Login Items in System Settings");
     } else {
         let units = home.join(".config/systemd/user");
         sh.create_dir(&units)?;
@@ -347,10 +348,10 @@ fn start_at_login(sh: &Shell, home: &Path, installed: &Path) -> anyhow::Result<(
     Ok(())
 }
 
-/// The launch agent that starts coxd, of the Cox at `cox`, as the human
-/// logs in.
-fn launch_agent(cox: &Path) -> String {
-    let cox = escape_xml(&cox.display().to_string());
+/// The launch agent that starts coxd as the human logs in, which the app
+/// carries for the system to take from it (see `cox::login_item`): the
+/// app's own executable, wherever the app is.
+fn bundled_launch_agent() -> String {
     format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -358,13 +359,17 @@ fn launch_agent(cox: &Path) -> String {
 <dict>
 	<key>Label</key>
 	<string>{COXD_LABEL}</string>
+	<key>BundleProgram</key>
+	<string>Contents/MacOS/{APP}</string>
 	<key>ProgramArguments</key>
 	<array>
-		<string>{cox}</string>
+		<string>{APP}</string>
 		<string>--daemon</string>
 	</array>
 	<key>RunAtLoad</key>
 	<true/>
+	<key>AssociatedBundleIdentifiers</key>
+	<string>{BUNDLE_ID}</string>
 </dict>
 </plist>
 "#
@@ -389,13 +394,6 @@ fn user_unit(cox: &Path) -> String {
          [Install]\n\
          WantedBy=default.target\n"
     )
-}
-
-/// `text` as XML holds it.
-fn escape_xml(text: &str) -> String {
-    text.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
 }
 
 /// What `run` is asked for.
@@ -759,8 +757,8 @@ mod tests {
     use xshell::Shell;
 
     use super::{
-        APP, Build, COXD_LABEL, ICNS_IMAGES, ICON, Run, icns, info_plist, launch_agent, replace,
-        user_unit,
+        APP, BUNDLE_ID, Build, COXD_LABEL, ICNS_IMAGES, ICON, Run, bundled_launch_agent, icns,
+        info_plist, replace, user_unit,
     };
 
     /// The property list `text` says, as JSON: a dictionary as an object,
@@ -796,27 +794,14 @@ mod tests {
     }
 
     #[test]
-    fn the_launch_agent_starts_the_installed_coxd_at_login_once() {
-        let agent = plist(&launch_agent(Path::new(
-            "/Users/me/Applications/Cox.app/Contents/MacOS/Cox",
-        )));
+    fn the_app_carries_a_launch_agent_that_starts_its_own_coxd_at_login_once() {
+        let agent = plist(&bundled_launch_agent());
         assert_eq!(agent["Label"], COXD_LABEL);
-        assert_eq!(
-            agent["ProgramArguments"],
-            json!([
-                "/Users/me/Applications/Cox.app/Contents/MacOS/Cox",
-                "--daemon"
-            ])
-        );
+        assert_eq!(agent["BundleProgram"], "Contents/MacOS/Cox");
+        assert_eq!(agent["ProgramArguments"], json!(["Cox", "--daemon"]));
         assert_eq!(agent["RunAtLoad"], true);
+        assert_eq!(agent["AssociatedBundleIdentifiers"], BUNDLE_ID);
         assert_eq!(agent.get("KeepAlive"), None, "coxd is not started again");
-    }
-
-    #[test]
-    fn the_launch_agent_names_a_cox_whose_path_xml_would_read_otherwise() {
-        let cox = "/Users/me/<Tom & Jerry>/Cox.app/Contents/MacOS/Cox";
-        let agent = plist(&launch_agent(Path::new(cox)));
-        assert_eq!(agent["ProgramArguments"][0], cox);
     }
 
     #[test]
