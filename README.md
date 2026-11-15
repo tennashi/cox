@@ -87,7 +87,10 @@ in; on macOS, Cox does so the first time it opens, as above.
 
 To update Cox, pull the changes and run `cargo xtask install` again, then
 restart the window. `coxd` moves to the new version the next time a
-window opens while no chat is at work. Until then, a window whose build
+window opens while no chat is at work. An agent that goes on by itself
+after its turn, as Claude Code does once a task it left running in the
+background ends, counts as at work until it has been quiet for two
+minutes. Until then, a window whose build
 speaks to `coxd` as the running one does, as after a change to the window
 alone, opens at once beside it, and the chats go on.
 

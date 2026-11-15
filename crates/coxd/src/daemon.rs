@@ -1900,7 +1900,8 @@ impl Daemon {
     /// tell what it does on `window` from now on, unless another window
     /// is there, or the window is of another build than the daemon's,
     /// `build`, that speaks otherwise or comes while no chat is at work
-    /// (see [`Hello::answer`]). Answers which of those it is.
+    /// (see [`Hello::answer`]): none takes a turn, and no agent goes on by
+    /// itself (see [`Chat::goes_on`]). Answers which of those it is.
     fn attach(
         &mut self,
         id: u64,
@@ -1911,11 +1912,10 @@ impl Daemon {
         if self.window.is_some() {
             return FromDaemon::Taken;
         }
-        let at_work = self
-            .chats
-            .iter()
-            .chain(&self.archived)
-            .any(|slot| working(slot.state));
+        let now = std::time::Instant::now();
+        let at_work = self.chats.iter().chain(&self.archived).any(|slot| {
+            working(slot.state) || slot.chat.as_ref().is_some_and(|chat| chat.goes_on(now))
+        });
         let answer = hello.answer(build, Some(wire::SPEAKS), at_work);
         if answer == FromDaemon::Busy {
             tracing::warn!("a window of another build waits, since a chat is at work");

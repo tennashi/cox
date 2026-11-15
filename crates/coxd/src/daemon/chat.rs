@@ -11,6 +11,7 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use cox_core::entry::{Attachment, Committed};
 use cox_core::goal;
@@ -128,6 +129,12 @@ struct Running {
     _hears: Vec<Task>,
 }
 
+/// How long after the agent last sent something, as it went on by itself
+/// while no turn ran, it counts as at work still: ACP tells no end of
+/// what an agent does on its own, as `claude-agent-acp` does once a task
+/// it ran in the background ends.
+pub const GOES_ON_QUIET: Duration = Duration::from_mins(2);
+
 pub struct Chat {
     key: u64,
     conversation: Conversation,
@@ -202,6 +209,9 @@ pub struct Chat {
     /// chat works in, and the last commit of each of its repositories then,
     /// to tell the commits the agent makes in the turn.
     turn_heads: Option<(PathBuf, Vec<Head>)>,
+    /// When the agent last sent something as it went on by itself, while
+    /// no turn ran, until a turn ends or the agent closes.
+    went_on: Option<Instant>,
 }
 
 /// A repository of the folder a chat works in, as a turn started.
@@ -258,6 +268,7 @@ impl Chat {
             told: None,
             turn_heads: None,
             places: Places::Cox,
+            went_on: None,
         }
     }
 
@@ -396,6 +407,7 @@ impl Chat {
             }));
         }
         self.starting = false;
+        self.went_on = None;
         self.running = Some(Running {
             commands,
             tools,
@@ -608,6 +620,14 @@ impl Chat {
         }
     }
 
+    /// Whether the agent goes on by itself at `now`, while no turn runs:
+    /// it went on, and sent something within [`GOES_ON_QUIET`].
+    #[must_use]
+    pub fn goes_on(&self, now: Instant) -> bool {
+        self.went_on
+            .is_some_and(|at| now.saturating_duration_since(at) < GOES_ON_QUIET)
+    }
+
     /// Shows what the agent of `generation` told. A turn that ends with a
     /// goal to meet starts the goal's check, or asks its judge, and then
     /// runs the triggers due, of the folder the chat works in, in a
@@ -637,6 +657,11 @@ impl Chat {
         if (closed || matches!(event, AgentEvent::TurnEnded(_))) && !self.conversation.steering() {
             self.show_commits();
         }
+        self.went_on = match &event {
+            AgentEvent::WentOn => Some(Instant::now()),
+            AgentEvent::TurnEnded(_) | AgentEvent::TurnFailed(_) | AgentEvent::Closed(_) => None,
+            _ => self.went_on.map(|_| Instant::now()),
+        };
         let asks = matches!(event, AgentEvent::PermissionRequest { .. });
         let was_checking = self.conversation.state() == State::Checking;
         self.conversation.apply(event);
@@ -2458,6 +2483,24 @@ mod tests {
             talk.chat.gathered_enough(talk.generation - 1);
 
             assert!(talk.chat.conversation().gathering());
+        });
+    }
+
+    #[test]
+    fn the_agent_goes_on_by_itself_until_it_is_quiet_or_its_turn_ends() {
+        on_daemon(async {
+            let mut talk = Talk::new(None);
+            talk.take_a_turn("work");
+            assert!(!talk.chat.goes_on(Instant::now()), "the turn ended");
+
+            talk.hear(AgentEvent::WentOn);
+            talk.hear(AgentEvent::ReplyText("The tests passed.".to_owned()));
+
+            let now = Instant::now();
+            assert!(talk.chat.goes_on(now));
+            assert!(!talk.chat.goes_on(now + GOES_ON_QUIET), "quiet since");
+            talk.hear(AgentEvent::TurnEnded(StopReason::Cancelled));
+            assert!(!talk.chat.goes_on(Instant::now()), "stopped");
         });
     }
 }
