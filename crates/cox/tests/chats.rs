@@ -31,6 +31,7 @@ use coxd::agent::setup::{Policy, Setup};
 use coxd::agents::Agents as Choices;
 use coxd::chat::conversation::{Check, CheckState, Conversation, Entry, Goal, State, WENT_ON};
 use coxd::chat::sketch::Sketch;
+use coxd::settings::Subagents;
 use coxd::workflow;
 use fake_agent::{
     BACKGROUND_FINISHED, BACKGROUND_STARTED, Event, FakeAgent, LogsIn, Resumes, TITLE,
@@ -2738,6 +2739,118 @@ async fn a_new_chat_goes_on_with_its_agents_session_once_cox_starts_again(
     click(cx, "chat-1");
     say(cx, &workspace, "again").await;
     assert_eq!(agents.borrow()[0].resumed(), ["session-1"]);
+}
+
+/// Opens the window like [`open_window_keeping`], the settings saying a
+/// chat's agent runs its subagents as `subagents` says.
+fn open_window_with_subagents(
+    cx: &mut TestAppContext,
+    home: PathBuf,
+    store: KeptStore,
+    subagents: Subagents,
+) -> (Agents, Entity<Workspace>, &mut VisualTestContext) {
+    let fakes = Fakes {
+        subagents,
+        ..Fakes::default()
+    };
+    let agents = fakes.agents.clone();
+    let (workspace, cx) = open_with(cx, home, Kept::At(store.path), fakes);
+    (agents, workspace, cx)
+}
+
+/// The `_meta` Cox asks Claude Code's agent for a session with when the
+/// chat runs its subagents as chats: its own tools for them turned off.
+fn subagents_as_chats() -> serde_json::Value {
+    serde_json::json!({ "claudeCode": { "options": { "disallowedTools": ["Agent", "Task"] } } })
+}
+
+/// The `_meta` of the session a new chat opened while the settings said
+/// `started` of subagents, and of the session it went on with once Cox
+/// started again with the settings saying `now`.
+async fn metas_across_a_restart(
+    cx: &mut TestAppContext,
+    cx_again: &mut TestAppContext,
+    name: &str,
+    started: Subagents,
+    now: Subagents,
+) -> (Vec<serde_json::Value>, Vec<serde_json::Value>) {
+    let store = kept_store(name);
+    let home = scratch::folder(name);
+    let opened = {
+        let (agents, workspace, cx) =
+            open_window_with_subagents(cx, home.clone(), store.clone(), started);
+        cx.simulate_keystrokes("secondary-n");
+        say(cx, &workspace, "hello").await;
+        cx.update(|window, _| window.remove_window());
+        cx.run_until_parked();
+        agents.borrow()[0].metas()
+    };
+
+    let (agents, workspace, cx) = open_window_with_subagents(cx_again, home, store, now);
+    click(cx, "chat-1");
+    say(cx, &workspace, "again").await;
+    let agent = Arc::clone(&agents.borrow()[0]);
+    assert_eq!(agent.resumed(), ["session-1"]);
+    (opened, agent.metas())
+}
+
+#[gpui::test]
+async fn a_chat_started_with_the_agents_subagents_keeps_them_once_the_settings_say_chats(
+    cx: &mut TestAppContext,
+    cx_again: &mut TestAppContext,
+) {
+    let (opened, resumed) = metas_across_a_restart(
+        cx,
+        cx_again,
+        "subagents-agent",
+        Subagents::Agent,
+        Subagents::Chats,
+    )
+    .await;
+    assert_eq!(opened, [serde_json::Value::Null]);
+    assert_eq!(
+        resumed,
+        [serde_json::Value::Null],
+        "Agent stays the agent's"
+    );
+}
+
+#[gpui::test]
+async fn a_chat_started_with_subagents_as_chats_keeps_them_once_the_settings_say_agent(
+    cx: &mut TestAppContext,
+    cx_again: &mut TestAppContext,
+) {
+    let (opened, resumed) = metas_across_a_restart(
+        cx,
+        cx_again,
+        "subagents-chats",
+        Subagents::Chats,
+        Subagents::Agent,
+    )
+    .await;
+    assert_eq!(opened, [subagents_as_chats()]);
+    assert_eq!(resumed, [subagents_as_chats()], "Agent stays off");
+}
+
+#[gpui::test]
+async fn a_chat_kept_before_cox_kept_its_subagents_goes_on_with_the_agents_own(
+    cx: &mut TestAppContext,
+) {
+    let folder = scratch::folder("subagents-before");
+    let (store, _) = kept_chat(&folder, Some("session-1"));
+    let (agents, workspace, cx) = open_window_with_subagents(
+        cx,
+        scratch::folder("subagents-before-home"),
+        store,
+        Subagents::Chats,
+    );
+    show_the_kept_chat(cx);
+
+    say(cx, &workspace, "again").await;
+
+    let agent = Arc::clone(&agents.borrow()[0]);
+    assert_eq!(agent.resumed(), ["session-1"]);
+    assert_eq!(agent.metas(), [serde_json::Value::Null]);
 }
 
 /// The fake agent's settings, set as `model` and `mode` say.

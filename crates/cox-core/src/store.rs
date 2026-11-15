@@ -22,7 +22,7 @@ use crate::settings::Setting;
 use crate::tabs::KeptTabs;
 
 /// The version of the tables below, as `SQLite`'s `user_version` holds it.
-const VERSION: i64 = 16;
+const VERSION: i64 = 17;
 
 const TABLES: &str = "
 CREATE TABLE projects (
@@ -74,7 +74,11 @@ CREATE TABLE chats (
     -- The commands its agent runs when a line starts with `/` and one of
     -- their names, as JSON, as it last told them, for the human to be
     -- offered them while it does not run.
-    commands TEXT
+    commands TEXT,
+    -- Where the agent of its session runs subagents, `agent` or `chats`,
+    -- as the settings said when the session started: NULL for a session
+    -- that started before Cox kept it, which ran them as `agent`.
+    subagents TEXT
 );
 CREATE TABLE entries (
     chat INTEGER NOT NULL REFERENCES chats (id),
@@ -143,6 +147,7 @@ const UPGRADES: &[&str] = &[
     "ALTER TABLE projects ADD COLUMN archived INTEGER NOT NULL DEFAULT 0;",
     "ALTER TABLE projects ADD COLUMN about TEXT;",
     "ALTER TABLE chats ADD COLUMN commands TEXT;",
+    "ALTER TABLE chats ADD COLUMN subagents TEXT;",
 ];
 
 /// How long a write waits for another Cox writing the same database.
@@ -772,6 +777,34 @@ impl Store {
         self.connection.execute(
             "UPDATE chats SET session = ?2 WHERE id = ?1",
             params![chat.0, session],
+        )?;
+        Ok(())
+    }
+
+    /// Where the agent of `chat`'s session runs subagents, as kept, if
+    /// it was.
+    ///
+    /// # Errors
+    ///
+    /// When the database cannot be read.
+    pub fn subagents(&self, chat: ChatId) -> anyhow::Result<Option<String>> {
+        Ok(self.connection.query_row(
+            "SELECT subagents FROM chats WHERE id = ?1",
+            [chat.0],
+            |row| row.get(0),
+        )?)
+    }
+
+    /// Keeps `subagents` as where the agent of `chat`'s session runs
+    /// subagents, for the session it starts.
+    ///
+    /// # Errors
+    ///
+    /// When the database cannot be written.
+    pub fn keep_subagents(&self, chat: ChatId, subagents: &str) -> anyhow::Result<()> {
+        self.connection.execute(
+            "UPDATE chats SET subagents = ?2 WHERE id = ?1",
+            params![chat.0, subagents],
         )?;
         Ok(())
     }
@@ -1426,6 +1459,16 @@ mod tests {
 
         store.keep_session(chat, "session-1").unwrap();
         assert_eq!(store.session(chat).unwrap().as_deref(), Some("session-1"));
+    }
+
+    #[test]
+    fn keeps_where_a_chats_session_runs_subagents() {
+        let store = Store::in_memory().unwrap();
+        let chat = store.add_chat(None, "Chat 1").unwrap();
+        assert_eq!(store.subagents(chat).unwrap(), None);
+
+        store.keep_subagents(chat, "chats").unwrap();
+        assert_eq!(store.subagents(chat).unwrap().as_deref(), Some("chats"));
     }
 
     #[test]

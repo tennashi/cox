@@ -7,7 +7,7 @@
 //! 2. The agent, working in the chat's directory, told of the two MCP
 //!    servers it starts to reach the stage's relay and the server
 //!    ([`crate::agent::spawn_known`], [`Launcher::tools`]), its session
-//!    asked for as the settings say of subagents ([`session_meta`]).
+//!    asked for as the chat runs subagents ([`session_meta`]).
 //!
 //! The window starts the chat's stage, and the relay to it (see
 //! `cox::chat::launcher`).
@@ -44,11 +44,16 @@ impl Spawns for Launcher {
         self.agents.clone()
     }
 
+    fn subagents(&self) -> Subagents {
+        crate::settings::Saved::read().subagents
+    }
+
     /// Starts the agent kept as `agent` working in `cwd`, as `start`
     /// says, with Cox's own tools, and the stage's through the relay on
-    /// `relay`, when given. The chat's setup, if it has one, says which of
-    /// Cox's tools the agent gets, and a chat in no project, as
-    /// `in_project` says, gets none of a project's.
+    /// `relay`, when given, its subagents run as `subagents` says. The
+    /// chat's setup, if it has one, says which of Cox's tools the agent
+    /// gets, and a chat in no project, as `in_project` says, gets none of
+    /// a project's.
     fn chat(
         &self,
         cwd: PathBuf,
@@ -56,17 +61,14 @@ impl Spawns for Launcher {
         agent: &str,
         relay: Option<u16>,
         in_project: bool,
+        subagents: Subagents,
     ) -> Spawned {
         // 1. The server of Cox's own tools, with the `cox` that reaches it.
         let only = start.setup().and_then(|setup| setup.tools.as_deref());
         let server = self.server(&cwd, only, in_project);
         // What the agent gets: the MCP servers it starts to reach both.
         let tools = self.tools(&cwd, relay, server.as_ref());
-        let meta = session_meta(
-            crate::settings::Saved::read().subagents,
-            only,
-            server.is_some(),
-        );
+        let meta = session_meta(subagents, only, server.is_some());
         let (stage, asks, chat_requests) = match server {
             Some((_, server)) => (
                 Some(server.requests),
@@ -152,12 +154,13 @@ impl Launcher {
 }
 
 /// What the session of a chat's agent is asked for with, as its `_meta`:
-/// when its subagents run as chats, as `subagents` says, and it gets
-/// Cox's `agent`, as Cox's tools are `served` to it, those named in
-/// `only` or all of them, Claude Code's own tools for subagents turned
-/// off, `Agent` and `Task`, its name before, for `agent` to take their
-/// place. Other agents leave it be.
-fn session_meta(
+/// when its subagents run as chats, as `subagents`, the chat's, says,
+/// and it gets Cox's `agent`, as Cox's tools are `served` to it, those
+/// named in `only` or all of them, Claude Code's own tools for subagents
+/// turned off, `Agent` and `Task`, its name before, for `agent` to take
+/// their place. Other agents leave it be.
+#[must_use]
+pub fn session_meta(
     subagents: Subagents,
     only: Option<&[String]>,
     served: bool,

@@ -62,7 +62,9 @@ pub struct Saved {
     /// are no URL, file or path are searched for, if the human named an
     /// engine.
     pub search: Option<SearchEngine>,
-    /// Where a chat's agent runs the subagents it hands work to.
+    /// Where a chat's agent runs the subagents it hands work to, for each
+    /// chat whose session starts from now on: a chat keeps what its
+    /// session started with.
     pub subagents: Subagents,
 }
 
@@ -79,6 +81,25 @@ pub enum Subagents {
     /// human sees and can step into: the agent's own tool for them is
     /// turned off, for Cox's `agent` to take its place.
     Chats,
+}
+
+impl Subagents {
+    /// Its name, as `settings.json` and a chat's store say it.
+    #[must_use]
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Agent => "agent",
+            Self::Chats => "chats",
+        }
+    }
+
+    /// The one named `name`, if one is.
+    #[must_use]
+    pub fn named(name: &str) -> Option<Self> {
+        [Self::Agent, Self::Chats]
+            .into_iter()
+            .find(|subagents| subagents.name() == name)
+    }
 }
 
 /// A search engine, as the address of its results with `%s` where the
@@ -288,14 +309,14 @@ impl Saved {
             }
         };
         let subagents = match value.get("subagents") {
-            None | Some(Value::Null) => Subagents::Agent,
-            Some(Value::String(subagents)) if subagents == "agent" => Subagents::Agent,
-            Some(Value::String(subagents)) if subagents == "chats" => Subagents::Chats,
-            Some(_) => {
-                tracing::error!("\"subagents\" is neither \"agent\" nor \"chats\"");
-                Subagents::Agent
-            }
-        };
+            None | Some(Value::Null) => Some(Subagents::Agent),
+            Some(Value::String(name)) => Subagents::named(name),
+            Some(_) => None,
+        }
+        .unwrap_or_else(|| {
+            tracing::error!("\"subagents\" is neither \"agent\" nor \"chats\"");
+            Subagents::Agent
+        });
         Ok(Self {
             home,
             workflow,

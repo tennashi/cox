@@ -36,6 +36,8 @@ pub mod push;
 mod sketches;
 pub mod wire;
 
+pub use launcher::session_meta;
+
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
@@ -56,6 +58,7 @@ use crate::agents::Agents;
 use crate::chat::conversation::{Content, Conversation, Entry, Gathered, Patch, State};
 use crate::chat::judge::{Heard, Starts};
 use crate::chat::sketch::{self, Sketch};
+use crate::settings::Subagents;
 use crate::storage;
 use crate::terminal::run_unseen;
 use crate::trigger::By;
@@ -90,11 +93,16 @@ pub trait Spawns {
     /// starts with.
     fn agents(&self) -> Agents;
 
+    /// Where the settings say a chat's agent runs its subagents now, which
+    /// a chat whose session starts afresh keeps.
+    fn subagents(&self) -> Subagents;
+
     /// Starts the agent kept as `agent`, of a chat working in `cwd`, an
     /// absolute path, as `start` says, its browser tools reaching the
     /// chat's stage through the relay on `relay`, when given, and gives it
     /// Cox's own tools, unless the chat's setup says otherwise, but those
-    /// of a project when the chat is in none, as `in_project` says.
+    /// of a project when the chat is in none, as `in_project` says, its
+    /// subagents run as `subagents` says.
     fn chat(
         &self,
         cwd: PathBuf,
@@ -102,6 +110,7 @@ pub trait Spawns {
         agent: &str,
         relay: Option<u16>,
         in_project: bool,
+        subagents: Subagents,
     ) -> Spawned;
 
     /// What starts an agent with no chat, as the judge of a goal, of the
@@ -1267,7 +1276,10 @@ impl Daemon {
         let agent = chat.agent_id().to_owned();
         // The first project is Cox's own chats', in none.
         let in_project = slot.project != 0;
-        let Spawned { agent, stage } = self.spawns.chat(cwd, start, &agent, relay, in_project);
+        let subagents = self.subagents_of(slot.kept, &start);
+        let Spawned { agent, stage } = self
+            .spawns
+            .chat(cwd, start, &agent, relay, in_project, subagents);
         let also = stage.map_or_default(|mut stage| {
             let internal = self.internal.clone();
             vec![spawn(async move {
@@ -1281,6 +1293,40 @@ impl Daemon {
         if let Some(chat) = self.slot_mut(key).and_then(|slot| slot.chat.as_mut()) {
             chat.attach(agent, generation, also);
         }
+    }
+
+    /// Where the agent of the chat kept as `kept`, starting as `start`
+    /// says, runs its subagents: as its session did, when it goes on with
+    /// one, so that a change to the settings leaves its tools as they
+    /// were, or else as the settings say now, which the chat keeps for
+    /// the session it starts.
+    fn subagents_of(&self, kept: Option<ChatId>, start: &Start) -> Subagents {
+        let resumes = matches!(
+            start,
+            Start::Again {
+                session: Some(_),
+                ..
+            }
+        );
+        if let Some(kept) = kept.filter(|_| resumes) {
+            return match self.store.subagents(kept) {
+                Ok(subagents) => subagents
+                    .as_deref()
+                    .and_then(Subagents::named)
+                    .unwrap_or_default(),
+                Err(error) => {
+                    tracing::error!("the chat's subagents cannot be read: {error:#}");
+                    Subagents::default()
+                }
+            };
+        }
+        let subagents = self.spawns.subagents();
+        if let Some(kept) = kept
+            && let Err(error) = self.store.keep_subagents(kept, subagents.name())
+        {
+            tracing::error!("the chat's subagents are not kept: {error:#}");
+        }
+        subagents
     }
 
     /// Does what the window says the human did.
@@ -2663,7 +2709,19 @@ mod tests {
             Agents::new(Vec::new(), Vec::new(), Vec::new())
         }
 
-        fn chat(&self, _: PathBuf, _: Start, _: &str, _: Option<u16>, _: bool) -> Spawned {
+        fn subagents(&self) -> Subagents {
+            Subagents::Agent
+        }
+
+        fn chat(
+            &self,
+            _: PathBuf,
+            _: Start,
+            _: &str,
+            _: Option<u16>,
+            _: bool,
+            _: Subagents,
+        ) -> Spawned {
             unreachable!("no chat's agent starts")
         }
 
