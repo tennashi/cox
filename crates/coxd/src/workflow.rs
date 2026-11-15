@@ -2,9 +2,10 @@
 //! sketch: as it starts, as a sketch an agent opened is open, and before
 //! it is discarded; and as the human asks it to keep what the chat
 //! learned in their wiki (see [`crate::wiki`]), and to merge what it made,
-//! and as it asks an agent to
-//! draw a project's icon (see [`crate::project_icon`]). Each is the human's to say, since how they work with
-//! sketches is theirs: a file of their workflow's folder (see
+//! and as it asks an agent to draw a project's icon (see
+//! [`crate::project_icon`]), and as it tells an agent the reports of the
+//! subagents it ran and did not wait for. Each is the human's to say,
+//! since how they work with sketches is theirs: a file of their workflow's folder (see
 //! [`crate::settings::workflow`]), as `sketch/start.md`, or else Cox's own,
 //! in `workflow/` beside this file. A file says where Cox puts what it
 //! knows then with a name in braces, as `{folder}`, and a name a text
@@ -19,6 +20,7 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
+use crate::agent::mcp::Waited;
 use crate::chat::sketch::Sketch as From;
 
 /// A text Cox says at a turn of the human's workflow.
@@ -71,15 +73,67 @@ pub const ICON_GENERATE: Text = Text {
     own: include_str!("workflow/icon/generate.md"),
 };
 
+/// What the agent that ran subagents is told, in a line of its own, of
+/// those it did not wait for that came to something: `{reports}`, each as
+/// [`SUBAGENT_ENDED`] or [`SUBAGENT_ASKS`] says.
+pub const SUBAGENT_REPORTS: Text = Text {
+    name: "subagent/reports.md",
+    own: include_str!("workflow/subagent/reports.md"),
+};
+
+/// A subagent's report, in [`SUBAGENT_REPORTS`], once it ended its turn:
+/// its chat's `{number}` and `{name}`, and what it last `{said}`.
+pub const SUBAGENT_ENDED: Text = Text {
+    name: "subagent/ended.md",
+    own: include_str!("workflow/subagent/ended.md"),
+};
+
+/// A subagent's report, in [`SUBAGENT_REPORTS`], as it waits for the human
+/// to answer what it `{asking}`, beside what [`SUBAGENT_ENDED`] says.
+pub const SUBAGENT_ASKS: Text = Text {
+    name: "subagent/asks.md",
+    own: include_str!("workflow/subagent/asks.md"),
+};
+
+/// How much of what a subagent last said its report in
+/// [`SUBAGENT_REPORTS`] holds, in characters, from the start.
+pub const REPORT_LENGTH: usize = 2000;
+
 /// The texts Cox has of its own, by where the human keeps theirs.
-const OWN: [&Text; 6] = [
+const OWN: [&Text; 9] = [
     &SKETCH_START,
     &SKETCH_OPENED,
     &SKETCH_DISCARD,
     &WIKI_SAVE,
     &CLOSE_MERGE,
     &ICON_GENERATE,
+    &SUBAGENT_REPORTS,
+    &SUBAGENT_ENDED,
+    &SUBAGENT_ASKS,
 ];
+
+/// The report of the subagent in the chat `number`, named `name`, that
+/// stands as `stands`, as [`SUBAGENT_REPORTS`] holds it: what it last said
+/// cut to [`REPORT_LENGTH`].
+#[must_use]
+pub fn subagent_report(number: u64, name: &str, stands: &Waited) -> String {
+    let said = match stands.said.as_deref() {
+        None => "(It said nothing.)".to_owned(),
+        Some(said) => match said.char_indices().nth(REPORT_LENGTH) {
+            Some((end, _)) => format!("{}\u{2026}", said[..end].trim_end()),
+            None => said.to_owned(),
+        },
+    };
+    let number = number.to_string();
+    let mut values = vec![("number", number.as_str()), ("name", name), ("said", &said)];
+    match stands.asking.as_deref() {
+        Some(asking) => {
+            values.push(("asking", asking));
+            SUBAGENT_ASKS.say(&values)
+        }
+        None => SUBAGENT_ENDED.say(&values),
+    }
+}
 
 /// The text the human keeps as `name` in their workflow, or else Cox's
 /// own of that name, with `values` in place of the names they stand for;
