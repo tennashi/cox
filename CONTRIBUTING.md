@@ -159,6 +159,20 @@ focus or not. It reaches the Cox whose data folder is this `cox`'s, or
 To give an agent these tools, set up `cox --mcp <data folder>/run/inspect.sock`
 as an MCP server, as in Claude Code's `.mcp.json`.
 
+### Beside the human, on a Mac
+
+```sh
+cargo xtask run --behind
+```
+
+opens Cox's window behind the other apps' windows, without taking the
+keyboard, and without a Dock icon, so that an agent can drive it with
+`--inspect` while the human works at the same Mac. On macOS, `--inspect`
+sends keys and clicks to the window from inside, so the screen's pointer
+and keyboard stay the human's, and its screenshot is of the window alone,
+drawn afresh even while other windows cover it. `click` takes the points
+the screenshot shows, its title bar included.
+
 ### Logs
 
 Each run's log is a file of JSON lines in `logs` in the data folder, such

@@ -69,10 +69,12 @@ alacritty_terminal = "0.26.0"
 # The system's notifications, and the Dock's badge: see `src/notices/macos.rs`.
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6.5"
-objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSApplication", "NSDockTile", "NSEvent", "NSResponder", "NSTextInputContext", "NSView", "NSWindow"] }
-objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSString", "NSUserNotification"] }
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSApplication", "NSDockTile", "NSEvent", "NSGraphicsContext", "NSResponder", "NSRunningApplication", "NSTextInputContext", "NSView", "NSWindow"] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSGeometry", "NSProcessInfo", "NSString", "NSUserNotification"] }
 # Where a display is, for a picture of the window: see `src/ui/screen.rs`.
 objc2-core-graphics = "0.3.2"
+# The window's NSWindow, behind gpui's: see `src/ui/screen.rs`.
+raw-window-handle = "0.6.2"
 
 [dev-dependencies]
 # Git run under the tests as under cox-git's own: see its `src/git.rs`.

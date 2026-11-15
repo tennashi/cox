@@ -38,7 +38,7 @@ Tasks:
             Build Cox for release and install it apart from target/:
             ~/Applications/Cox.app on macOS, ~/.local/bin/cox on Linux,
             with coxd started at login, by launchd or systemd
-    run [--headless | --linux] [--data <dir>] [<scenario> | -- <agent command>...]
+    run [--headless | --linux | --behind] [--data <dir>] [<scenario> | -- <agent command>...]
             Build Cox and run it with cox-fake-agent playing <scenario>,
             the fake agent's tour unless given, or with <agent command>.
             It keeps what lasts in <dir>, or afresh in target/debug/cox-run.
@@ -46,7 +46,9 @@ Tasks:
             with no screen; `cox --inspect` asks it how it stands.
             --linux runs it so in a Linux container, through Docker, from
             any machine; <dir> and <scenario> are then the container's,
-            which sees the workspace at /src
+            which sees the workspace at /src. --behind opens the window
+            behind the other apps' windows, without the keyboard's focus
+            and, on macOS, without a Dock icon
     setup   Install the pinned development tools that `ci` needs
     help    Show this message
 ";
@@ -401,6 +403,7 @@ fn escape_xml(text: &str) -> String {
 struct Run {
     headless: bool,
     linux: bool,
+    behind: bool,
     data: Option<PathBuf>,
     /// The scenario the fake agent plays, when no agent is given.
     scenario: Option<PathBuf>,
@@ -416,6 +419,7 @@ impl Run {
             match arg.as_str() {
                 "--headless" => run.headless = true,
                 "--linux" => run.linux = true,
+                "--behind" => run.behind = true,
                 "--data" => {
                     run.data = Some(args.next().context("--data names a directory")?.into());
                 }
@@ -515,7 +519,8 @@ fn run(sh: &Shell, args: &[String]) -> anyhow::Result<()> {
     if let Some(display) = &display {
         println!("It runs on DISPLAY={}", display.name);
     }
-    let mut cox = cmd!(sh, "{cox} --data {data} {agent...}");
+    let behind = asked.behind.then_some("--behind");
+    let mut cox = cmd!(sh, "{cox} --data {data} {behind...} {agent...}");
     if let Some(display) = &display {
         cox = cox.env("DISPLAY", &display.name);
     }
@@ -971,11 +976,17 @@ mod tests {
             Run {
                 headless: true,
                 linux: false,
+                behind: false,
                 data: Some("d".into()),
                 scenario: Some("s.json".into()),
                 agent: Vec::new(),
             }
         );
+    }
+
+    #[test]
+    fn run_takes_behind() {
+        assert!(parse(&["--behind"]).unwrap().behind);
     }
 
     #[test]

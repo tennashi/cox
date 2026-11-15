@@ -38,7 +38,7 @@ use coxd::agents::Agents;
 actions!(cox, [Quit]);
 
 pub const USAGE: &str = "\
-Usage: cox [--stage <url>] [--home <dir>] [--data <dir>] [<agent command> [args...]]
+Usage: cox [--stage <url>] [--home <dir>] [--data <dir>] [--behind] [<agent command> [args...]]
        cox [--data <dir>] --daemon
        cox [--data <dir>] --inspect [<tool> [<arguments>...]]
        cox [--data <dir>] --phone-link
@@ -97,6 +97,10 @@ pub struct Settings {
     /// agent of `agents.json` the settings name (see
     /// [`coxd::settings::agent`]).
     pub command: Vec<String>,
+    /// Whether the window opens behind the other apps' windows, without
+    /// taking the keyboard, and on macOS without a Dock icon: for an agent
+    /// that drives it with `--inspect` while the human works.
+    pub behind: bool,
 }
 
 impl Mode {
@@ -143,6 +147,7 @@ impl Settings {
         let mut stage = crate::stage::links::ACTIVITY_URL.to_owned();
         let mut home = None;
         let mut data = None;
+        let mut behind = false;
         loop {
             match args.peek().map(String::as_str) {
                 Some("--stage") => {
@@ -157,6 +162,10 @@ impl Settings {
                     args.next();
                     data = args.next().map(PathBuf::from).or(data);
                 }
+                Some("--behind") => {
+                    args.next();
+                    behind = true;
+                }
                 _ => break,
             }
         }
@@ -165,6 +174,7 @@ impl Settings {
             home,
             data,
             command: args.collect(),
+            behind,
         }
     }
 }
@@ -199,6 +209,7 @@ pub fn run(settings: Settings) -> ExitCode {
     // 3. coxd, which runs the chats, in a process of its own.
     let hello = coxd::daemon::wire::Hello::new(settings.home, settings.command);
     let data = settings.data;
+    let behind = settings.behind;
     let connected = coxd::storage::path(coxd::storage::Kept::Daemon)
         .ok_or_else(|| anyhow::anyhow!("there is no place for coxd's socket"))
         .and_then(|socket| {
@@ -251,6 +262,7 @@ pub fn run(settings: Settings) -> ExitCode {
                 home_given,
                 stages: Rc::new(stages),
                 agents: agents.clone(),
+                behind,
             };
             let window = open_window(workspace, cx);
             crate::settings::window::follow(window, agents, cx);
@@ -394,6 +406,7 @@ struct Opened {
     home_given: bool,
     stages: Rc<CefStages>,
     agents: Agents,
+    behind: bool,
 }
 
 /// Opens the window, with no chat in it, showing the chats of the daemon
@@ -406,12 +419,18 @@ fn open_window(opened: Opened, cx: &mut App) -> WindowHandle<Workspace> {
         home_given,
         stages,
         agents,
+        behind,
     } = opened;
+    #[cfg(target_os = "macos")]
+    if behind {
+        no_dock_icon();
+    }
     let bounds = Bounds::centered(None, size(px(1400.), px(860.)), cx);
     let window = cx
         .open_window(
             WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
+                focus: !behind,
                 ..Default::default()
             },
             |window, cx| {
@@ -433,12 +452,28 @@ fn open_window(opened: Opened, cx: &mut App) -> WindowHandle<Workspace> {
     window
         .update(cx, |workspace, window, cx| {
             window.focus(&workspace.focus_handle(cx));
+            #[cfg(target_os = "macos")]
+            if behind && let Some(window) = crate::ui::screen::ns_window(window) {
+                window.orderBack(None);
+            }
         })
         .expect("the window is open");
     cx.on_window_closed(|cx| cx.quit()).detach();
     tell_of_chats(window, cx);
-    cx.activate(true);
+    if !behind {
+        cx.activate(true);
+    }
     window
+}
+
+/// Keeps Cox out of the Dock and the app switcher, as an accessory app.
+#[cfg(target_os = "macos")]
+fn no_dock_icon() {
+    use objc2_app_kit::{NSApplication, NSApplicationActivationPolicy};
+    if let Some(main_thread) = objc2::MainThreadMarker::new() {
+        NSApplication::sharedApplication(main_thread)
+            .setActivationPolicy(NSApplicationActivationPolicy::Accessory);
+    }
 }
 
 /// Tells the human of the chats in `window` with the system's
@@ -493,6 +528,7 @@ mod tests {
                 home: Some(PathBuf::from("/tmp/cox")),
                 data: Some(PathBuf::from("/tmp/cox-data")),
                 command: vec!["node".to_owned(), "agent.mjs".to_owned()],
+                behind: false,
             })
         );
     }
@@ -522,6 +558,15 @@ mod tests {
     }
 
     #[test]
+    fn the_window_opens_in_front_unless_asked_to_open_behind() {
+        assert!(!not_asked().behind);
+        match parse(&["--data", "/tmp/d", "--behind", "node"]) {
+            Mode::App(settings) => assert!(settings.behind),
+            mode => panic!("the app is not started: {mode:?}"),
+        }
+    }
+
+    #[test]
     fn without_a_command_the_app_starts_the_agent_the_settings_name() {
         assert_eq!(
             parse(&[]),
@@ -530,6 +575,7 @@ mod tests {
                 home: None,
                 data: None,
                 command: Vec::new(),
+                behind: false,
             })
         );
     }
