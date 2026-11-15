@@ -321,12 +321,27 @@ fn start_at_login(sh: &Shell, home: &Path, installed: &Path) -> anyhow::Result<(
     if cfg!(target_os = "macos") {
         // The app hands the system the launch agent it carries as it opens
         // (see `cox::login_item`). The one Cox wrote to LaunchAgents before
-        // goes; launchd keeps the coxd it started running till logout.
+        // goes.
         let legacy = home
             .join("Library/LaunchAgents")
             .join(format!("{COXD_LABEL}.plist"));
         if sh.path_exists(&legacy) {
             sh.remove_path(&legacy)?;
+        }
+        // Unloaded too while it runs nothing, as when the window started
+        // coxd, so that the agent the app hands the system does not meet a
+        // job of the same name; while its coxd runs, it goes at logout.
+        let uid = cmd!(sh, "id -u").read()?;
+        let job = format!("gui/{uid}/{COXD_LABEL}");
+        if let Ok(printed) = cmd!(sh, "launchctl print {job}")
+            .quiet()
+            .ignore_stderr()
+            .read()
+            && !printed
+                .lines()
+                .any(|line| line.trim_start().starts_with("pid = "))
+        {
+            cmd!(sh, "launchctl bootout {job}").run()?;
         }
         println!("coxd starts at login once Cox has opened: see Login Items in System Settings");
     } else {
