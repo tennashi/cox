@@ -16,8 +16,16 @@ use std::time::Duration;
 
 use crate::process::run_with_deadline;
 
-/// How long the shell has to start and say its environment.
-const PATIENCE: Duration = Duration::from_secs(5);
+/// How long the shell has to start and say its environment to the
+/// window, which the human waits on to open.
+pub const WINDOW_PATIENCE: Duration = Duration::from_secs(5);
+
+/// How long the shell has to start and say its environment to coxd,
+/// which launchd starts as the human logs in, while the Mac is still busy
+/// starting everything else and a shell can take longer than
+/// [`WINDOW_PATIENCE`]. A coxd that gives up starts every agent until it
+/// stops without the shell's `PATH`, so none of them is found.
+pub const DAEMON_PATIENCE: Duration = Duration::from_secs(60);
 
 /// What the shell writes ahead of its environment, to tell it from what
 /// its profile writes.
@@ -39,17 +47,17 @@ pub enum Taken {
 }
 
 /// Takes in the environment of the human's login shell, when the system
-/// opened Cox.
+/// opened Cox, giving the shell `patience` to say it.
 ///
 /// It sets the process's environment, so it has to run before any other
 /// thread starts.
 #[must_use]
-pub fn take_in() -> Taken {
+pub fn take_in(patience: Duration) -> Taken {
     if !opened_by_the_system() {
         return Taken::NotNeeded;
     }
     let shell = shell();
-    match environment_of(&shell) {
+    match environment_of(&shell, patience) {
         Ok(environment) => {
             let count = environment.len();
             for (name, value) in environment {
@@ -92,8 +100,12 @@ fn shell() -> PathBuf {
 
 /// The environment `shell` has as a login shell, and an interactive one,
 /// which reads the profiles the human's terminal does, without the
-/// variables it sets of itself.
-fn environment_of(shell: &std::path::Path) -> Result<Vec<(OsString, OsString)>, String> {
+/// variables it sets of itself, or an error if it does not say it within
+/// `patience`.
+fn environment_of(
+    shell: &std::path::Path,
+    patience: Duration,
+) -> Result<Vec<(OsString, OsString)>, String> {
     // Its threads touch no environment, and a shell that never ends does
     // not keep Cox from opening.
     let output = run_with_deadline(
@@ -101,12 +113,12 @@ fn environment_of(shell: &std::path::Path) -> Result<Vec<(OsString, OsString)>, 
             .args(["-l", "-i", "-c"])
             .arg(format!("printf '\\0{MARK}\\0'; exec /usr/bin/env -0")),
         None,
-        PATIENCE,
+        patience,
         |_| {},
     )
     .map_err(|error| error.to_string())?;
     let Some(status) = output.status else {
-        return Err(format!("it said nothing in {} seconds", PATIENCE.as_secs()));
+        return Err(format!("it said nothing in {} seconds", patience.as_secs()));
     };
     if !status.success() {
         return Err(format!("it ended with {status}"));
@@ -159,7 +171,7 @@ mod tests {
 
     #[test]
     fn a_login_shell_says_its_environment() {
-        let environment = environment_of(std::path::Path::new("/bin/sh")).unwrap();
+        let environment = environment_of(std::path::Path::new("/bin/sh"), WINDOW_PATIENCE).unwrap();
         assert!(environment.iter().any(|(name, _)| name == "PATH"));
         assert!(environment.iter().all(|(name, _)| name != "PWD"));
     }

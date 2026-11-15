@@ -35,7 +35,7 @@ fn main() -> ExitCode {
     match Mode::parse(std::env::args().skip(1)) {
         Mode::App(settings) => {
             // First, while Cox has no other thread.
-            let environment = coxd::login::take_in();
+            let environment = coxd::login::take_in(coxd::login::WINDOW_PATIENCE);
             if let Some(data) = &settings.data {
                 coxd::storage::keep_in(data);
             }

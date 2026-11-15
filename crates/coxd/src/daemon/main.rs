@@ -19,7 +19,7 @@ use crate::agents::Agents;
 /// say, following them as they change.
 pub fn run(data: Option<&Path>) -> ExitCode {
     // First, while coxd has no other thread.
-    let environment = crate::login::take_in();
+    let environment = crate::login::take_in(crate::login::DAEMON_PATIENCE);
     if let Some(data) = data {
         crate::storage::keep_in(data);
     }
