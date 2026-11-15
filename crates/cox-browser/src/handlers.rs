@@ -217,14 +217,12 @@ fn create(new: NewBrowser) {
 }
 
 wrap_dev_tools_message_observer! {
-    struct TargetObserver {
+    struct CallObserver {
         shared: SharedRef,
-        target: Arc<watch::Sender<Option<String>>>,
     }
 
     impl DevToolsMessageObserver {
-        /// The answer to a call of the stage's (see [`crate::keyboard`]),
-        /// or to `Target.getTargetInfo`, which names the page's target.
+        /// The answer to a call of the stage's (see [`crate::keyboard`]).
         fn on_dev_tools_method_result(
             &self,
             _browser: Option<&mut cef::Browser>,
@@ -232,26 +230,31 @@ wrap_dev_tools_message_observer! {
             success: c_int,
             result: Option<&[u8]>,
         ) {
-            if message_id != crate::keyboard::TARGET_INFO {
-                let reply = lock(&self.shared).calls.take(message_id);
-                if let Some(reply) = reply {
-                    reply(
-                        result
-                            .filter(|_| success == 1)
-                            .and_then(|result| serde_json::from_slice(result).ok()),
-                    );
-                }
-                return;
+            let reply = lock(&self.shared).calls.take(message_id);
+            if let Some(reply) = reply {
+                reply(
+                    result
+                        .filter(|_| success == 1)
+                        .and_then(|result| serde_json::from_slice(result).ok()),
+                );
             }
-            let target = result
-                .filter(|_| success == 1)
-                .and_then(|result| serde_json::from_slice::<serde_json::Value>(result).ok())
-                .and_then(|result| result["targetInfo"]["targetId"].as_str().map(str::to_owned));
-            if let Some(target) = target {
-                self.target.send_replace(Some(target));
-            } else {
-                tracing::error!("CEF did not name the page's target, so its agent cannot reach it");
-            }
+        }
+    }
+}
+
+/// What learns the page's target from the answer to
+/// `Target.getTargetInfo`, and tells `target`.
+fn learn_target(
+    target: Arc<watch::Sender<Option<String>>>,
+) -> impl FnOnce(Option<serde_json::Value>) + Send + 'static {
+    move |result| {
+        let named = result
+            .as_ref()
+            .and_then(|result| result["targetInfo"]["targetId"].as_str());
+        if let Some(named) = named {
+            target.send_replace(Some(named.to_owned()));
+        } else {
+            tracing::error!("CEF did not name the page's target, so its agent cannot reach it");
         }
     }
 }
@@ -682,18 +685,18 @@ wrap_life_span_handler! {
                     host.notify_screen_info_changed();
                     host.was_resized();
                     host.set_focus(1);
-                    let mut observer =
-                        TargetObserver::new(Arc::clone(&self.shared), Arc::clone(&self.target));
+                    let mut observer = CallObserver::new(Arc::clone(&self.shared));
                     devtools = host.add_dev_tools_message_observer(Some(&mut observer));
-                    host.execute_dev_tools_method(
-                        crate::keyboard::TARGET_INFO,
-                        Some(&CefString::from("Target.getTargetInfo")),
-                        None,
-                    );
                 }
                 let mut shared = lock(&self.shared);
                 shared.devtools = devtools;
                 drop(shared);
+                crate::keyboard::call(
+                    &self.shared,
+                    "Target.getTargetInfo",
+                    &serde_json::json!({}),
+                    learn_target(Arc::clone(&self.target)),
+                );
                 let _ = self.events.send(Event::Created);
             }
         }
@@ -842,5 +845,24 @@ wrap_render_handler! {
             });
             lock(&self.shared).caret = caret;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_page_learns_its_target_from_the_answer_under_its_call_s_id() {
+        let (target, learned) = watch::channel(None);
+        let mut calls = crate::keyboard::Calls::default();
+        let id = calls.add(Box::new(learn_target(Arc::new(target))));
+        // CEF answers a call of id 0 under a number of its own.
+        assert_ne!(id, 0);
+        let reply = calls.take(id).expect("the call waits under its id");
+        reply(Some(
+            serde_json::json!({"targetInfo": {"targetId": "T1", "type": "page"}}),
+        ));
+        assert_eq!(learned.borrow().as_deref(), Some("T1"));
     }
 }
