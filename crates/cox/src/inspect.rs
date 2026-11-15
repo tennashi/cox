@@ -54,6 +54,10 @@ const CLICK: &str = "click";
 const ACTION: &str = "action";
 const FRAMES: &str = "frames";
 
+/// How long a screenshot waits for the window to draw itself anew.
+#[cfg(not(target_os = "macos"))]
+const DRAWING: std::time::Duration = std::time::Duration::from_secs(10);
+
 /// What a tool asks of the window.
 enum Inquiry {
     /// How Cox stands, in words, with the conversation of the chat that
@@ -64,6 +68,10 @@ enum Inquiry {
     },
     /// Where the window is on the screen.
     Window { answer: oneshot::Sender<Placed> },
+    /// Where the window is on the screen, once it has drawn itself anew
+    /// and shown what it drew.
+    #[cfg(not(target_os = "macos"))]
+    Drawn { answer: oneshot::Sender<Placed> },
     /// Keystrokes, as the human's; answers whether each was handled.
     Keys {
         keystrokes: Vec<Keystroke>,
@@ -174,9 +182,16 @@ fn answer(inquiry: Inquiry, known: &Known, root: &AnyView, window: &mut Window, 
             let _ = answer.send(told);
         }
         Inquiry::Window { answer } => {
-            let _ = answer.send(Placed {
-                bounds: crate::ui::screen::window_bounds(window, cx),
-                scale: window.scale_factor(),
+            let _ = answer.send(placed(window, cx));
+        }
+        #[cfg(not(target_os = "macos"))]
+        Inquiry::Drawn { answer } => {
+            // The frame after the next comes once the next one is shown.
+            window.refresh();
+            window.on_next_frame(move |window, _| {
+                window.on_next_frame(move |window, cx| {
+                    let _ = answer.send(placed(window, cx));
+                });
             });
         }
         Inquiry::Keys { keystrokes, answer } => {
@@ -193,6 +208,13 @@ fn answer(inquiry: Inquiry, known: &Known, root: &AnyView, window: &mut Window, 
         Inquiry::Action { name, answer } => {
             let _ = answer.send(act(&name, window, cx));
         }
+    }
+}
+
+fn placed(window: &Window, cx: &App) -> Placed {
+    Placed {
+        bounds: crate::ui::screen::window_bounds(window, cx),
+        scale: window.scale_factor(),
     }
 }
 
@@ -378,7 +400,28 @@ impl Inspector {
     /// Captures the window, as the screen shows it, and answers it as an
     /// image.
     async fn screenshot(&self) -> Result<Result<String, String>, (i64, String)> {
+        #[cfg(target_os = "macos")]
         let placed = self.ask(|answer| Inquiry::Window { answer }).await?;
+        #[cfg(not(target_os = "macos"))]
+        let placed = {
+            let woken = tokio::task::spawn_blocking(crate::ui::screen::wake)
+                .await
+                .map_err(|error| (mcp::INTERNAL_ERROR, error.to_string()))?;
+            if let Err(error) = woken {
+                return Ok(Err(error));
+            }
+            // A software renderer takes seconds to draw its first frame.
+            let drawn = self.ask(|answer| Inquiry::Drawn { answer });
+            match tokio::time::timeout(DRAWING, drawn).await {
+                Ok(placed) => placed?,
+                Err(_) => {
+                    return Ok(Err(format!(
+                        "the window drew nothing in {} s",
+                        DRAWING.as_secs()
+                    )));
+                }
+            }
+        };
         let captured = tokio::task::spawn_blocking(move || {
             crate::ui::screen::capture(placed.bounds, placed.scale)
         })

@@ -4,8 +4,6 @@
 
 #[cfg(target_os = "macos")]
 use std::fs;
-#[cfg(not(target_os = "macos"))]
-use std::thread;
 
 use gpui::{App, Bounds, Pixels, Window};
 
@@ -74,6 +72,29 @@ pub fn capture(bounds: Bounds<Pixels>, _scale: f32) -> Result<Vec<u8>, String> {
     png
 }
 
+/// Moves the pointer a pixel and back, through `xdotool`. On Xvfb, gpui
+/// draws no frame at all until input comes, and draws on from then.
+///
+/// # Errors
+///
+/// When `xdotool` cannot move the pointer.
+#[cfg(not(target_os = "macos"))]
+pub fn wake() -> Result<(), String> {
+    for step in ["1", "-1"] {
+        let ran = std::process::Command::new("xdotool")
+            .args(["mousemove_relative", "--sync", "--", step, "0"])
+            .output()
+            .map_err(|error| format!("cannot run xdotool: {error}"))?;
+        if !ran.status.success() {
+            return Err(format!(
+                "xdotool failed: {}",
+                String::from_utf8_lossy(&ran.stderr).trim()
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// The screen as it shows `bounds`, in its coordinates, in points, as a
 /// PNG, `scale` pixels a point: on X11, through `import`, of
 /// `ImageMagick`.
@@ -83,15 +104,6 @@ pub fn capture(bounds: Bounds<Pixels>, _scale: f32) -> Result<Vec<u8>, String> {
 /// When the screen cannot be captured.
 #[cfg(not(target_os = "macos"))]
 pub fn capture(bounds: Bounds<Pixels>, scale: f32) -> Result<Vec<u8>, String> {
-    // On a display drawn in memory, as Xvfb's, what the window drew
-    // shows only once the pointer has moved: a pixel and back does, and
-    // the window has drawn again by the time it is captured.
-    for step in ["1", "-1"] {
-        let _ = std::process::Command::new("xdotool")
-            .args(["mousemove_relative", "--sync", "--", step, "0"])
-            .output();
-    }
-    thread::sleep(std::time::Duration::from_millis(200));
     let pixels = |points: Pixels| (f32::from(points) * scale).round();
     let area = format!(
         "{}x{}+{}+{}",
