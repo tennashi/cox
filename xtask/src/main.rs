@@ -3,6 +3,7 @@
 mod flaky;
 mod identity;
 mod lint_tests;
+mod linux;
 
 use std::path::{Path, PathBuf};
 use std::{env, fs};
@@ -37,12 +38,15 @@ Tasks:
             Build Cox for release and install it apart from target/:
             ~/Applications/Cox.app on macOS, ~/.local/bin/cox on Linux,
             with coxd started at login, by launchd or systemd
-    run [--headless] [--data <dir>] [<scenario> | -- <agent command>...]
+    run [--headless | --linux] [--data <dir>] [<scenario> | -- <agent command>...]
             Build Cox and run it with cox-fake-agent playing <scenario>,
             the fake agent's tour unless given, or with <agent command>.
             It keeps what lasts in <dir>, or afresh in target/debug/cox-run.
             --headless runs it on a display of its own (Xvfb, on Linux),
-            with no screen; `cox --inspect` asks it how it stands
+            with no screen; `cox --inspect` asks it how it stands.
+            --linux runs it so in a Linux container, through Docker, from
+            any machine; <dir> and <scenario> are then the container's,
+            which sees the workspace at /src
     setup   Install the pinned development tools that `ci` needs
     help    Show this message
 ";
@@ -396,6 +400,7 @@ fn escape_xml(text: &str) -> String {
 #[derive(Debug, Default, PartialEq, Eq)]
 struct Run {
     headless: bool,
+    linux: bool,
     data: Option<PathBuf>,
     /// The scenario the fake agent plays, when no agent is given.
     scenario: Option<PathBuf>,
@@ -410,6 +415,7 @@ impl Run {
         while let Some(arg) = args.next() {
             match arg.as_str() {
                 "--headless" => run.headless = true,
+                "--linux" => run.linux = true,
                 "--data" => {
                     run.data = Some(args.next().context("--data names a directory")?.into());
                 }
@@ -434,6 +440,20 @@ impl Run {
 /// Builds Cox and runs it as `args` ask (see [`USAGE`]) until it quits.
 fn run(sh: &Shell, args: &[String]) -> anyhow::Result<()> {
     let asked = Run::parse(args)?;
+    if asked.linux {
+        let (own, agent) = args.split_at(
+            args.iter()
+                .position(|arg| arg == "--")
+                .unwrap_or(args.len()),
+        );
+        let passed: Vec<String> = own
+            .iter()
+            .filter(|&arg| arg != "--linux" && arg != "--headless")
+            .chain(agent)
+            .cloned()
+            .collect();
+        return linux::run(sh, &workspace_root(), &passed);
+    }
     if asked.headless && !cfg!(target_os = "linux") {
         bail!("--headless runs Cox on Xvfb, which is for Linux");
     }
@@ -950,11 +970,17 @@ mod tests {
             parse(&["--headless", "--data", "d", "s.json"]).unwrap(),
             Run {
                 headless: true,
+                linux: false,
                 data: Some("d".into()),
                 scenario: Some("s.json".into()),
                 agent: Vec::new(),
             }
         );
+    }
+
+    #[test]
+    fn run_takes_linux() {
+        assert!(parse(&["--linux", "s.json"]).unwrap().linux);
     }
 
     #[test]
