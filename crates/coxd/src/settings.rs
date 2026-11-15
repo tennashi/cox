@@ -18,7 +18,9 @@
 //! the human writes in it themselves, and whether the keys work as in
 //! Vim, as `{"vim": true}`, and the engine the
 //! words typed in the stage's + menu are searched with, as `{"search":
-//! "https://duckduckgo.com/?q=%s"}` (see [`SearchEngine`]).
+//! "https://duckduckgo.com/?q=%s"}` (see [`SearchEngine`]), and where a
+//! chat's agent runs its subagents, as `{"subagents": "chats"}` (see
+//! [`Subagents`]).
 //!
 //! The window reads the file again as it changes, as when the human
 //! edits it while Cox runs (see `cox::settings::window`).
@@ -60,6 +62,23 @@ pub struct Saved {
     /// are no URL, file or path are searched for, if the human named an
     /// engine.
     pub search: Option<SearchEngine>,
+    /// Where a chat's agent runs the subagents it hands work to.
+    pub subagents: Subagents,
+}
+
+/// Where a chat's agent runs the subagents it hands work to, as
+/// `settings.json` says: `{"subagents": "agent"}`, the default, or
+/// `{"subagents": "chats"}`.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum Subagents {
+    /// Where the agent runs them itself, with its own tool for them, as
+    /// Claude Code's `Agent`, out of the human's sight.
+    #[default]
+    Agent,
+    /// In chats of their own, under the chat that runs them, which the
+    /// human sees and can step into: the agent's own tool for them is
+    /// turned off, for Cox's `agent` to take its place.
+    Chats,
 }
 
 /// A search engine, as the address of its results with `%s` where the
@@ -268,6 +287,15 @@ impl Saved {
                 None
             }
         };
+        let subagents = match value.get("subagents") {
+            None | Some(Value::Null) => Subagents::Agent,
+            Some(Value::String(subagents)) if subagents == "agent" => Subagents::Agent,
+            Some(Value::String(subagents)) if subagents == "chats" => Subagents::Chats,
+            Some(_) => {
+                tracing::error!("\"subagents\" is neither \"agent\" nor \"chats\"");
+                Subagents::Agent
+            }
+        };
         Ok(Self {
             home,
             workflow,
@@ -277,6 +305,7 @@ impl Saved {
             agent,
             vim,
             search,
+            subagents,
         })
     }
 }
@@ -538,7 +567,7 @@ pub fn folder_of(text: &str, user: Option<&Path>) -> Result<PathBuf, &'static st
 mod tests {
     use std::path::{Path, PathBuf};
 
-    use super::{Saved, SearchEngine, Translation, folder_of, keep_home_in, keep_in};
+    use super::{Saved, SearchEngine, Subagents, Translation, folder_of, keep_home_in, keep_in};
     use crate::testing::TempDir;
 
     #[test]
@@ -625,6 +654,24 @@ mod tests {
         assert_eq!(saved.home, Some(PathBuf::from("/work")));
         assert_eq!(saved.workflow, None);
         assert_eq!(Saved::parse(br#"{"workflow": 3}"#).unwrap().workflow, None);
+    }
+
+    #[test]
+    fn subagents_run_as_chats_only_when_the_human_says_chats() {
+        assert_eq!(
+            Saved::parse(br#"{"subagents": "chats"}"#)
+                .unwrap()
+                .subagents,
+            Subagents::Chats
+        );
+        for bytes in [
+            &b"{}"[..],
+            br#"{"subagents": "agent"}"#,
+            br#"{"subagents": "tabs"}"#,
+            br#"{"subagents": true}"#,
+        ] {
+            assert_eq!(Saved::parse(bytes).unwrap().subagents, Subagents::Agent);
+        }
     }
 
     #[test]

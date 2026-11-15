@@ -163,6 +163,7 @@ impl Spawns for FakeSpawns {
             move |_| Ok(agent.connect()),
             cwd,
             fakes.mcp_servers.clone(),
+            None,
             start,
         );
         // The chat's commands run in a shell here, or else go through the
@@ -193,7 +194,7 @@ impl Spawns for FakeSpawns {
         Rc::new(move |cwd, start| {
             let agent = Arc::new(FakeAgent::default());
             agents.borrow_mut().push(Arc::clone(&agent));
-            coxd::agent::spawn(move |_| Ok(agent.connect()), cwd, Vec::new(), start)
+            coxd::agent::spawn(move |_| Ok(agent.connect()), cwd, Vec::new(), None, start)
         })
     }
 }

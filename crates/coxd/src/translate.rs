@@ -430,7 +430,7 @@ impl Worker {
                 instructions: None,
                 setup: Some(setup()),
             };
-            let agent = crate::agent::spawn_known(known, self.cwd.clone(), Vec::new(), start);
+            let agent = crate::agent::spawn_known(known, self.cwd.clone(), Vec::new(), None, start);
             self.agent = Some((named.map(str::to_owned), agent));
         }
         let until = Instant::now() + self.gives_up_after;

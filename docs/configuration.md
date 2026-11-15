@@ -58,7 +58,8 @@ Every key is optional. Paths may be absolute or start with `~`.
   },
   "phone": {"port": 7421, "tailscale": true},
   "vim": true,
-  "search": "https://duckduckgo.com/?q=%s"
+  "search": "https://duckduckgo.com/?q=%s",
+  "subagents": "chats"
 }
 ```
 
@@ -77,6 +78,7 @@ Every key is optional. Paths may be absolute or start with `~`.
 | `phone.tailscale` | `false` stops `coxd` from running `tailscale serve` for the page and the pages the relay passes on, and `true` has a Cox that is not installed run it. | `true` for an installed Cox, `false` for any other |
 | `vim` | `true` makes the keys work as in Vim. See [Vim's keys](#vims-keys). | `false` |
 | `search` | The search engine: the address of its results, from `http://` or `https://`, with `%s` where the words go. Cox searches with it for the words typed in a page's address line, as a browser does (a `?` first searches for whatever follows), and after Vim's `t`, `:open` or `:tabopen`. One without `%s` is not used. | `https://www.google.com/search?q=%s` |
+| `subagents` | Where a chat's agent runs the subagents it hands work to. `"chats"` runs each in a chat of its own, under the chat that runs it, which you see and can step into: Cox starts Claude Code's sessions with its own `Agent` and `Task` tools turned off, so that it, and a skill that spawns subagents, uses Cox's `agent` tool in their place, with the same arguments. Other agents read no such option and keep their own. `"agent"` leaves the subagents to the agent, out of sight. | `"agent"` |
 
 The settings card (Cmd-, or Ctrl-,) sets `agent`, `home`, `workflow`,
 `wiki`, `translation`, `vim` and `search` for you, and leaves the rest of the file
