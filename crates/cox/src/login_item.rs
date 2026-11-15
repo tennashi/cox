@@ -22,19 +22,17 @@ pub fn keep() {
     // how it stands and to register.
     let service = unsafe { SMAppService::agentServiceWithPlistName(&NSString::from_str(PLIST)) };
     match unsafe { service.status() } {
-        SMAppServiceStatus::NotRegistered => match unsafe { service.registerAndReturnError() } {
+        SMAppServiceStatus::Enabled => {}
+        SMAppServiceStatus::RequiresApproval => {
+            tracing::info!("coxd does not start at login: it is off in Login Items");
+        }
+        // Not registered yet, which the system tells as not found, too.
+        _ => match unsafe { service.registerAndReturnError() } {
             Ok(()) => tracing::info!("coxd starts at login from now on"),
             Err(error) => tracing::warn!(
                 "coxd does not start at login: the system did not take its launch agent: {}",
                 error.localizedDescription()
             ),
         },
-        SMAppServiceStatus::RequiresApproval => {
-            tracing::info!("coxd does not start at login: it is off in Login Items");
-        }
-        SMAppServiceStatus::NotFound => {
-            tracing::warn!("coxd does not start at login: the app carries no {PLIST}");
-        }
-        _ => {}
     }
 }
