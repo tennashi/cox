@@ -38,6 +38,8 @@ pub mod app;
 pub mod busy;
 pub mod chat;
 pub mod inspect;
+#[cfg(target_os = "macos")]
+pub mod login_item;
 pub mod notices;
 pub mod settings;
 pub mod stage;
