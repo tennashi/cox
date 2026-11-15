@@ -3090,4 +3090,186 @@ mod tests {
 
         assert_eq!(at_work, [State::Busy, State::Stopping, State::Checking]);
     }
+
+    /// The ends of a chat's agent the test plays: what it is sent, kept
+    /// for the chat to send to, and where it tells what it does.
+    struct Played {
+        _commands: UnboundedReceiver<crate::agent::Command>,
+        events: UnboundedSender<AgentEvent>,
+    }
+
+    /// Agents the test plays, each kept as it starts.
+    #[derive(Default)]
+    struct PlayedAgents(std::cell::RefCell<Vec<Played>>);
+
+    impl Spawns for PlayedAgents {
+        fn agents(&self) -> Agents {
+            Agents::new(vec!["played".to_owned()], Vec::new(), Vec::new())
+        }
+
+        fn subagents(&self) -> Subagents {
+            Subagents::Agent
+        }
+
+        fn chat(
+            &self,
+            cwd: PathBuf,
+            _: Start,
+            _: &str,
+            _: Option<u16>,
+            _: bool,
+            _: Subagents,
+        ) -> Spawned {
+            let (commands, commands_got) = unbounded_channel();
+            let (events_sent, events) = unbounded_channel();
+            self.0.borrow_mut().push(Played {
+                _commands: commands_got,
+                events: events_sent,
+            });
+            Spawned {
+                agent: Agent {
+                    commands,
+                    events,
+                    instructions: Vec::new(),
+                    setup: None,
+                    cwd,
+                    tools: None,
+                    chat_requests: None,
+                    thread: crate::agent::AgentThread::none(),
+                },
+                stage: None,
+            }
+        }
+
+        fn starts(&self, _: &str) -> Starts {
+            Rc::new(|_, _| unreachable!("no judge starts"))
+        }
+    }
+
+    /// A daemon whose chats' agents `agents` plays, run as coxd runs it,
+    /// with no window yet, and what its chats' tasks tell it.
+    fn played_daemon(
+        home: &Path,
+        agents: &Rc<PlayedAgents>,
+    ) -> (Daemon, UnboundedReceiver<Internal>) {
+        let (internal, heard) = unbounded_channel();
+        let spawns: Rc<dyn Spawns> = agents.clone();
+        let daemon = Daemon::new(
+            home.to_path_buf(),
+            false,
+            Rc::new(Store::in_memory().unwrap()),
+            spawns,
+            internal,
+        );
+        (daemon, heard)
+    }
+
+    /// Has the daemon hear what its chats' tasks told it by now, and
+    /// settle, as its loop does.
+    async fn pump(daemon: &mut Daemon, heard: &mut UnboundedReceiver<Internal>) {
+        for _ in 0..10 {
+            tokio::task::yield_now().await;
+        }
+        while let Ok(event) = heard.try_recv() {
+            daemon.hear(event);
+        }
+        daemon.settle();
+    }
+
+    /// A window of the build `build`, which speaks as `speaks` says, comes
+    /// as the connection `id`, and is answered.
+    fn window_comes(daemon: &mut Daemon, id: u64, build: Option<Build>, speaks: u64) -> FromDaemon {
+        let hello = Hello {
+            build,
+            speaks: Some(speaks),
+            ..Hello::default()
+        };
+        let (window, _told) = unbounded_channel();
+        daemon.attach(id, hello, window, Build::now())
+    }
+
+    /// A build other than the test's own.
+    fn another_build() -> Option<Build> {
+        serde_json::from_value(serde_json::json!({
+            "size": 1,
+            "modified": {"secs_since_epoch": 0, "nanos_since_epoch": 0},
+        }))
+        .unwrap()
+    }
+
+    fn on_daemon(test: impl Future<Output = ()>) {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .unwrap();
+        tokio::task::LocalSet::new().block_on(&runtime, test);
+    }
+
+    /// A chat whose agent works, as `works` has it do, in a daemon whose
+    /// window then went, and the answers a window of another build that
+    /// speaks otherwise, and one that speaks alike, get.
+    fn answers_once_the_window_went(
+        works: impl FnOnce(&mut Daemon, u64, &Played),
+    ) -> [FromDaemon; 2] {
+        let mut answers = None;
+        on_daemon(async {
+            let home = TempDir::new();
+            storage::keep_on_this_thread(Some(home.join("data")));
+            let agents = Rc::new(PlayedAgents::default());
+            let (mut daemon, mut heard) = played_daemon(&home, &agents);
+            daemon.act(ToDaemon::NewChat { folder: None });
+            pump(&mut daemon, &mut heard).await;
+            let key = daemon.chats.last().unwrap().key;
+            assert_eq!(agents.0.borrow().len(), 1, "the chat's agent started");
+            assert_eq!(
+                window_comes(&mut daemon, 1, Build::now(), wire::SPEAKS),
+                FromDaemon::Joined
+            );
+
+            works(&mut daemon, key, &agents.0.borrow()[0]);
+            pump(&mut daemon, &mut heard).await;
+            daemon.hear(Internal::Detach { id: 1 });
+            pump(&mut daemon, &mut heard).await;
+
+            let unlike = window_comes(&mut daemon, 2, another_build(), wire::SPEAKS + 1);
+            let alike = window_comes(&mut daemon, 3, another_build(), wire::SPEAKS);
+            answers = Some([unlike, alike]);
+        });
+        answers.unwrap()
+    }
+
+    #[test]
+    fn a_window_of_another_build_waits_for_a_turn_that_runs_after_the_window_went() {
+        let answers = answers_once_the_window_went(|daemon, key, _| {
+            daemon.act(ToDaemon::Submit {
+                key,
+                text: "work".to_owned(),
+                attached: Vec::new(),
+            });
+        });
+
+        assert_eq!(answers, [FromDaemon::Busy, FromDaemon::Joined]);
+    }
+
+    #[test]
+    fn a_window_of_another_build_waits_for_an_agent_that_goes_on_by_itself() {
+        let answers = answers_once_the_window_went(|daemon, key, agent| {
+            daemon.act(ToDaemon::Submit {
+                key,
+                text: "work".to_owned(),
+                attached: Vec::new(),
+            });
+            agent
+                .events
+                .send(AgentEvent::TurnEnded(cox_acp::StopReason::EndTurn))
+                .unwrap();
+            agent.events.send(AgentEvent::WentOn).unwrap();
+            agent
+                .events
+                .send(AgentEvent::ReplyText("The tests passed.".to_owned()))
+                .unwrap();
+        });
+
+        assert_eq!(answers, [FromDaemon::Busy, FromDaemon::Joined]);
+    }
 }
