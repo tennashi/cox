@@ -123,15 +123,12 @@ impl From<Listed> for Hint {
     }
 }
 
-/// The id of `Target.getTargetInfo`, the one call made as the page is
-/// created, which the calls of [`Calls`] never take.
-pub(super) const TARGET_INFO: i32 = 0;
-
 /// What a call answers with: its result, or `None` when it failed.
 type Reply = Box<dyn FnOnce(Option<Value>) + Send>;
 
 /// The stage's `DevTools` calls to a page that wait for their answers,
-/// by their ids, past [`TARGET_INFO`].
+/// by their ids, past 0: CEF numbers a call of id 0 itself, and answers
+/// it under that number.
 #[derive(Default)]
 pub(super) struct Calls {
     last: i32,
@@ -139,8 +136,8 @@ pub(super) struct Calls {
 }
 
 impl Calls {
-    fn add(&mut self, reply: Reply) -> i32 {
-        self.last = self.last.checked_add(1).unwrap_or(TARGET_INFO + 1);
+    pub(super) fn add(&mut self, reply: Reply) -> i32 {
+        self.last = self.last.checked_add(1).unwrap_or(1);
         self.waiting.insert(self.last, reply);
         self.last
     }
@@ -162,7 +159,7 @@ impl Calls {
 
 /// Calls `method` with `params` in the page, and hands its result to
 /// `reply` once it comes, on CEF's UI thread.
-fn call(
+pub(super) fn call(
     shared: &SharedRef,
     method: &str,
     params: &Value,
