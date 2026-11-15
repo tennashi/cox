@@ -102,7 +102,7 @@ jobs:
           fi
           agent="$HOME/Library/LaunchAgents/com.github.tennashi.cox.coxd.plist"
           plutil -p "$agent"
-          plutil -extract ProgramArguments.0 raw "$agent" | grep -qxF "$cox" || {
+          plutil -extract ProgramArguments.3 raw "$agent" | grep -qxF "$cox" || {
             echo "::error::the launch agent does not start the installed Cox"
             exit 1
           }

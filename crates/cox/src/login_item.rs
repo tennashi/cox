@@ -5,12 +5,13 @@
 //! Settings, under General, Login Items, and can turn it off there; Cox
 //! leaves it off then.
 //!
-//! Not the agent `SMAppService` registers: launchd holds such an agent to
-//! the signature it was registered with, and Cox's certificate, not one of
-//! Apple's, names no team, so the signature is the executable's hash, which
-//! every update changes. launchd then ends coxd at login, for its code
-//! signature (`OS_REASON_CODESIGNING`). An agent in `~/Library/LaunchAgents`
-//! starts whatever is at its path.
+//! The agent starts `/bin/sh`, which starts Cox in its place. At login,
+//! launchd holds a background item to the signature its program had when
+//! the system first saw it, and Cox's certificate, not one of Apple's,
+//! names no team, so that signature is Cox's hash, which every update
+//! changes: launchd would end coxd at login, for its code signature
+//! (`OS_REASON_CODESIGNING`). It holds only the program it starts, though,
+//! not what that program starts in its place, and `/bin/sh` is Apple's.
 
 use std::path::Path;
 
@@ -68,6 +69,8 @@ fn turned_off_in_login_items() -> bool {
 
 /// The launch agent that starts coxd, of the Cox at `cox`, as the human
 /// logs in, and only then: coxd, once ended, is started by the window.
+/// The shell is handed Cox's path as `$0`, so that no path needs quoting
+/// in its script.
 fn launch_agent(cox: &Path) -> String {
     let cox = cox
         .display()
@@ -84,8 +87,10 @@ fn launch_agent(cox: &Path) -> String {
 	<string>{LABEL}</string>
 	<key>ProgramArguments</key>
 	<array>
+		<string>/bin/sh</string>
+		<string>-c</string>
+		<string>exec "$0" --daemon</string>
 		<string>{cox}</string>
-		<string>--daemon</string>
 	</array>
 	<key>RunAtLoad</key>
 	<true/>
@@ -108,7 +113,7 @@ mod tests {
         let agent = launch_agent(Path::new("/Applications/Cox.app/Contents/MacOS/Cox"));
         assert!(agent.contains("<string>com.github.tennashi.cox.coxd</string>"));
         assert!(agent.contains(
-            "<string>/Applications/Cox.app/Contents/MacOS/Cox</string>\n\t\t<string>--daemon</string>"
+            "<string>/bin/sh</string>\n\t\t<string>-c</string>\n\t\t<string>exec \"$0\" --daemon</string>\n\t\t<string>/Applications/Cox.app/Contents/MacOS/Cox</string>"
         ));
         assert!(agent.contains("<key>RunAtLoad</key>\n\t<true/>"));
         assert!(!agent.contains("KeepAlive"), "coxd is not started again");
