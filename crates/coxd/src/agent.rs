@@ -328,17 +328,13 @@ pub fn spawn<T: Transport + Send + 'static>(
     start: Start,
 ) -> Agent {
     let source = match &start {
-        Start::New { instructions, .. } => instructions
-            .as_ref()
-            .map(Instructions::paths)
-            .unwrap_or_default(),
+        Start::New { instructions, .. } => {
+            instructions.as_ref().map_or_default(Instructions::paths)
+        }
         Start::Again { .. } => Vec::new(),
     };
     let setup = start.setup().cloned();
-    let policy = setup
-        .as_ref()
-        .map(|setup| setup.policy.clone())
-        .unwrap_or_default();
+    let policy = setup.as_ref().map_or_default(|setup| setup.policy.clone());
     let (commands, received) = unbounded_channel();
     let (sent, events) = unbounded_channel();
     let (stop, stopped) = oneshot::channel();
@@ -687,10 +683,7 @@ fn opened(start: Start, resumed: bool) -> (Opened, Vec<String>) {
             };
             let how = Opened::Retold {
                 lost,
-                instructions: instructions
-                    .as_ref()
-                    .map(Instructions::paths)
-                    .unwrap_or_default(),
+                instructions: instructions.as_ref().map_or_default(Instructions::paths),
                 context: setup.as_ref().and_then(|setup| setup.context.clone()),
             };
             let mut ahead = told(instructions, setup.as_ref());

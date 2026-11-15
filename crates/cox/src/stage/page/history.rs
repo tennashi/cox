@@ -258,7 +258,7 @@ impl Global for Shared {}
 fn shared(cx: &mut App) -> &mut Shared {
     if !cx.has_global::<Shared>() {
         let file = storage::path(storage::Kept::History);
-        let history = file.as_deref().map(History::read).unwrap_or_default();
+        let history = file.as_deref().map_or_default(History::read);
         cx.set_global(Shared {
             history,
             file,

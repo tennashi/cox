@@ -461,8 +461,7 @@ impl ChatView {
         let line = self
             .conversation
             .goal()
-            .map(|goal| goal.what().input())
-            .unwrap_or_default();
+            .map_or_default(|goal| goal.what().input());
         self.open_goal_input(&line, None, window, cx);
     }
 

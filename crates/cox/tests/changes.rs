@@ -262,16 +262,13 @@ fn lists_the_commits_and_shows_what_one_changed_and_the_turn_it_was_made_in(
         .detach();
     });
     let subjects = changes.read_with(cx, |changes, _| {
-        changes
-            .history()
-            .map(|history| {
-                history
-                    .commits
-                    .iter()
-                    .map(|commit| commit.subject.clone())
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default()
+        changes.history().map_or_default(|history| {
+            history
+                .commits
+                .iter()
+                .map(|commit| commit.subject.clone())
+                .collect::<Vec<_>>()
+        })
     });
     assert_eq!(subjects, ["B", "Two"]);
     // A sketch shows everything it changed at first.

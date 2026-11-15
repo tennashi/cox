@@ -1358,7 +1358,7 @@ impl PermissionRequest {
         let known = Known {
             title: fields.title.clone(),
             kind: fields.kind.map(ToolKind::from),
-            locations: fields.locations.clone().map(paths).unwrap_or_default(),
+            locations: fields.locations.clone().map_or_default(paths),
         };
         Self {
             request: Box::new(request),

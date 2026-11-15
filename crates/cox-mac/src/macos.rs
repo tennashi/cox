@@ -143,10 +143,7 @@ fn listed(window: &SCWindow, own: i32) -> Option<Window> {
             id: window.windowID(),
             pid,
             app: app.applicationName().to_string(),
-            title: window
-                .title()
-                .map(|title| title.to_string())
-                .unwrap_or_default(),
+            title: window.title().map_or_default(|title| title.to_string()),
             frame,
         })
     }

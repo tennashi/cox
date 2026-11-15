@@ -110,8 +110,7 @@ impl Reader {
                 let items = params
                     .and_then(|params| params.get("items"))
                     .and_then(Value::as_array)
-                    .map(Vec::as_slice)
-                    .unwrap_or_default();
+                    .map_or_default(Vec::as_slice);
                 Ok(items
                     .iter()
                     .map(|item| {

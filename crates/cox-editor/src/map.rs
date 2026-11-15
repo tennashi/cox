@@ -235,8 +235,7 @@ fn said(path: &Path) -> String {
     std::fs::read_to_string(path)
         .ok()
         .and_then(|text| serde_json::from_str::<Says>(&text).ok())
-        .map(|says| says.says)
-        .unwrap_or_default()
+        .map_or_default(|says| says.says)
 }
 
 /// The map of the project in `root` named `name`, or its first (see
@@ -365,17 +364,13 @@ fn roll<'a>(
     if path.contains(&id) {
         return HashSet::new();
     }
-    let mut files: HashSet<PathBuf> = own
-        .get(id)
-        .map(|(_, files)| files.clone())
-        .unwrap_or_default();
+    let mut files: HashSet<PathBuf> = own.get(id).map_or_default(|(_, files)| files.clone());
     let inside: Vec<&'a str> = map
         .parts
         .get(id)
         .and_then(|part| part.tier.as_deref())
         .and_then(|tier| map.tier(tier))
-        .map(|tier| tier.parts().collect())
-        .unwrap_or_default();
+        .map_or_default(|tier| tier.parts().collect());
     if !inside.is_empty() {
         path.push(id);
         for within in inside {

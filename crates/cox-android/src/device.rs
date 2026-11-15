@@ -637,10 +637,7 @@ async fn wait(child: Option<&mut tokio::process::Child>) -> String {
 
 /// How the emulator ended, and the last of what it printed.
 fn said(printed: &Mutex<Vec<String>>, ended: &str) -> String {
-    let lines = printed
-        .lock()
-        .map(|lines| lines.join("\n"))
-        .unwrap_or_default();
+    let lines = printed.lock().map_or_default(|lines| lines.join("\n"));
     if lines.is_empty() {
         format!(" ({ended})")
     } else {

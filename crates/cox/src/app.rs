@@ -180,7 +180,6 @@ impl Settings {
 }
 
 /// Runs the app as `settings` say, until the human quits it.
-#[must_use]
 pub fn run(settings: Settings) -> ExitCode {
     let profile = coxd::storage::path(coxd::storage::Kept::Stage);
     // On Linux, CEF's helper processes run this same executable with

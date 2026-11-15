@@ -286,9 +286,7 @@ fn free_port() -> u16 {
 fn ask_the_page(port: u16, path: &str, cookie: Option<&str>) -> String {
     let mut stream = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
     stream.set_read_timeout(Some(waits::GIVEN_UP)).unwrap();
-    let cookie = cookie
-        .map(|cookie| format!("Cookie: {cookie}\r\n"))
-        .unwrap_or_default();
+    let cookie = cookie.map_or_default(|cookie| format!("Cookie: {cookie}\r\n"));
     write!(
         stream,
         "GET {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n{cookie}\r\n"

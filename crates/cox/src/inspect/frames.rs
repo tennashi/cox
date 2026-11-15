@@ -34,10 +34,7 @@ pub fn tell(over: Duration, busy: &[Busy], pages: &[(String, KeptUp)]) -> String
         );
         let now = std::time::Instant::now();
         for busy in busy {
-            let with = busy
-                .with
-                .map(|with| format!(", with {with}"))
-                .unwrap_or_default();
+            let with = busy.with.map_or_default(|with| format!(", with {with}"));
             let _ = writeln!(
                 told,
                 "  {} ago, for {}{with}",

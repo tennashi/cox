@@ -446,7 +446,7 @@ wrap_request_handler! {
             if !crate::scheme::is_served(&url) {
                 return None;
             }
-            let initiator = request_initiator.map(ToString::to_string).unwrap_or_default();
+            let initiator = request_initiator.map_or_default(ToString::to_string);
             let handler =
                 crate::scheme::handler(Arc::clone(serve), &initiator, request.resource_type());
             if handler.is_none() {
@@ -585,7 +585,7 @@ wrap_display_handler! {
             title: Option<&CefString>,
         ) {
             lock(&self.shared).navigation.title =
-                title.map(ToString::to_string).unwrap_or_default();
+                title.map_or_default(ToString::to_string);
             let _ = self.events.send(Event::Navigated);
         }
 
@@ -597,12 +597,11 @@ wrap_display_handler! {
             icon_urls: Option<&mut cef::CefStringList>,
         ) {
             let urls = icon_urls
-                .map(|urls| {
+                .map_or_default(|urls| {
                     let urls: *mut cef::sys::_cef_string_list_t = urls.into();
                     // Borrowed from CEF, which frees it.
                     cef::CefStringList::from(urls).into_iter().collect()
-                })
-                .unwrap_or_default();
+                });
             tracing::debug!(?urls, "the page names its icons");
             let next = lock(&self.shared).favicons.named(urls);
             favicon::follow(&self.shared, &self.events, next);
@@ -637,7 +636,7 @@ wrap_life_span_handler! {
             _extra_info: Option<&mut Option<cef::DictionaryValue>>,
             _no_javascript_access: Option<&mut c_int>,
         ) -> c_int {
-            let url = target_url.map(ToString::to_string).unwrap_or_default();
+            let url = target_url.map_or_default(ToString::to_string);
             // `window.open()` with no address opens a blank page for
             // the script to fill, which a tab of the stage cannot be.
             if !url.is_empty() {

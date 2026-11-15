@@ -183,7 +183,7 @@ pub(super) fn symbols(value: &Value) -> Vec<Symbol> {
                 detail,
                 range,
                 selection,
-                children: value.get("children").map(symbols).unwrap_or_default(),
+                children: value.get("children").map_or_default(symbols),
             })
         })
         .collect()
@@ -228,8 +228,7 @@ pub(super) fn calls(value: &Value) -> Vec<Call> {
                 from: value
                     .get("fromRanges")
                     .and_then(Value::as_array)
-                    .map(|ranges| ranges.iter().filter_map(range).collect())
-                    .unwrap_or_default(),
+                    .map_or_default(|ranges| ranges.iter().filter_map(range).collect()),
             })
         })
         .collect()
@@ -255,19 +254,17 @@ pub(super) fn tokens(value: &Value, legend: &Value) -> Vec<Token> {
         legend
             .get(key)
             .and_then(Value::as_array)
-            .map(|names| names.iter().filter_map(Value::as_str).collect())
-            .unwrap_or_default()
+            .map_or_default(|names| names.iter().filter_map(Value::as_str).collect())
     };
     let (kinds, modifiers) = (names("tokenTypes"), names("tokenModifiers"));
     let data: Vec<u32> = value
         .get("data")
         .and_then(Value::as_array)
-        .map(|data| {
+        .map_or_default(|data| {
             data.iter()
                 .filter_map(|number| u32::try_from(number.as_u64()?).ok())
                 .collect()
-        })
-        .unwrap_or_default();
+        });
     let mut found = Vec::new();
     let (mut line, mut character) = (0, 0);
     for &[line_delta, start, length, kind, bits] in data.as_chunks::<5>().0 {

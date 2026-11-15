@@ -373,7 +373,7 @@ impl Changes {
                 .background_executor()
                 .spawn(async move {
                     let read = read_pick(&folder, &reading);
-                    let looks = read.as_ref().map(looks).unwrap_or_default();
+                    let looks = read.as_ref().map_or_default(looks);
                     (read, looks)
                 })
                 .await;
@@ -432,8 +432,7 @@ impl Changes {
         self.rows = self
             .shown_diff()
             .and_then(|read| read.as_ref().ok())
-            .map(rows)
-            .unwrap_or_default();
+            .map_or_default(rows);
         let top = self.list.logical_scroll_top();
         self.list.splice(0..self.list.item_count(), self.rows.len());
         if stay && !self.rows.is_empty() {
@@ -1142,8 +1141,7 @@ fn version_row(
     let said = version
         .turn
         .as_ref()
-        .map(|turn| format!("“{}”", turn.line))
-        .unwrap_or_default();
+        .map_or_default(|turn| format!("“{}”", turn.line));
     div()
         .id(SharedString::from(selector.clone()))
         .debug_selector(move || selector)
@@ -1376,8 +1374,7 @@ fn file_colors(file: &File) -> Vec<Spans> {
             let (buffer, syntax) = if is_new { &new } else { &old };
             syntax
                 .as_ref()
-                .map(|syntax| syntax.highlights(buffer, at, usize::MAX))
-                .unwrap_or_default()
+                .map_or_default(|syntax| syntax.highlights(buffer, at, usize::MAX))
         })
         .collect()
 }
@@ -1424,7 +1421,7 @@ fn follow(cx: &mut Context<Changes>) -> Task<()> {
                     .spawn(async move {
                         let looks = read
                             .iter()
-                            .map(|shown| shown.read.as_ref().map(looks).unwrap_or_default())
+                            .map(|shown| shown.read.as_ref().map_or_default(looks))
                             .collect();
                         (read, looks)
                     })
@@ -1693,8 +1690,7 @@ fn stretch_row(
         .text
         .strip_prefix("@@ ")
         .and_then(|rest| rest.split_once(" @@"))
-        .map(|(_, within)| drawn(within.trim()))
-        .unwrap_or_default();
+        .map_or_default(|(_, within)| drawn(within.trim()));
     let left_out = !(first && line.at <= 1);
     if !left_out && within.is_empty() {
         // Nothing above it, and nothing it is within: a little room under

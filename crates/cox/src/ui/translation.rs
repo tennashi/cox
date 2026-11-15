@@ -199,8 +199,7 @@ impl TranslationCard {
         let way = self
             .way
             .as_ref()
-            .map(|way| format!("{} to {}", way.from, way.to))
-            .unwrap_or_default();
+            .map_or_default(|way| format!("{} to {}", way.from, way.to));
         let at = match (&self.translated, &self.so_far) {
             (None, None) => "translating".to_owned(),
             (None, Some(so_far)) => format!("translating, so far {so_far:?}"),

@@ -516,8 +516,7 @@ impl AgentsSection {
     fn render_adding(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let listed: Vec<Known> = cx
             .try_global::<AppAgents>()
-            .map(|agents| agents.0.all())
-            .unwrap_or_default()
+            .map_or_default(|agents| agents.0.all())
             .into_iter()
             .filter(|known| known.listed && known.download.is_none())
             .filter(|known| {

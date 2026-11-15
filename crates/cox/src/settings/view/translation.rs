@@ -106,9 +106,7 @@ impl TranslationSection {
             Some(_) => By::Command,
             None => By::Agent(Some(text("agent")).filter(|agent| !agent.is_empty())),
         };
-        let command = command
-            .map(|command| line::joined(&command))
-            .unwrap_or_default();
+        let command = command.map_or_default(|command| line::joined(&command));
         self.language
             .update(cx, |input, cx| input.set_text(&language, cx));
         self.command
@@ -161,14 +159,13 @@ impl TranslationSection {
         let command = self.command.read(cx).text().trim().to_owned();
         let kept_command = kept("command")
             .and_then(Value::as_array)
-            .map(|words| {
+            .map_or_default(|words| {
                 let words: Vec<String> = words
                     .iter()
                     .filter_map(|word| word.as_str().map(str::to_owned))
                     .collect();
                 line::joined(&words)
-            })
-            .unwrap_or_default();
+            });
         let by_command = self.by == By::Command;
         if language == kept_language && (!by_command || command == kept_command) {
             return;
@@ -246,8 +243,7 @@ impl TranslationSection {
     fn agents(&self, cx: &App) -> Vec<String> {
         let mut names: Vec<String> = cx
             .try_global::<AppAgents>()
-            .map(|agents| agents.0.all())
-            .unwrap_or_default()
+            .map_or_default(|agents| agents.0.all())
             .into_iter()
             .filter(|known| !known.listed && !known.command.is_empty())
             .map(|known| known.name)

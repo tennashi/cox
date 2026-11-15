@@ -391,8 +391,7 @@ fn read(
     let flow = flow::read(logs, call)?;
     let changed: HashMap<PathBuf, (usize, usize)> = changes::read(root)
         .ok()
-        .map(|diff| changed_files(&diff))
-        .unwrap_or_default();
+        .map_or_default(|diff| changed_files(&diff));
     let sources = flow
         .steps
         .iter()

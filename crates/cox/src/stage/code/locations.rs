@@ -305,7 +305,7 @@ fn file_row(path: &Path) -> gpui::AnyElement {
     let name = path
         .file_name()
         .map_or_else(String::new, |name| name.to_string_lossy().into_owned());
-    let folder = path.parent().map(shortened).unwrap_or_default();
+    let folder = path.parent().map_or_default(shortened);
     div()
         .w_full()
         .flex()

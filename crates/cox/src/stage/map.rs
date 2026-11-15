@@ -64,10 +64,7 @@ pub fn told(root: &Path, name: Option<&str>) -> serde_json::Value {
         json["since"] = serde_json::Value::String(diff.since.said());
         json["changed_files"] = serde_json::json!(diff.files.len());
     }
-    let changed = diff
-        .as_ref()
-        .map(changes::changed_files)
-        .unwrap_or_default();
+    let changed = diff.as_ref().map_or_default(changes::changed_files);
     let facts: serde_json::Map<String, serde_json::Value> = map::all_facts(root, &map, &changed)
         .into_iter()
         .map(|(id, facts)| (id, serde_json::to_value(facts).unwrap_or_default()))
