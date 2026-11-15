@@ -291,6 +291,29 @@ enum Ends {
     Summing,
 }
 
+/// Whose a chat is: who reads what it comes to once its turn ends.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Whose {
+    /// The human's: a turn that ends waits for them, until they look.
+    Human,
+    /// The agent's of the chat of this key, which opened it and hears
+    /// how it stands (see [`Daemon::wait_chat`]). The human still hears
+    /// of what it asks them.
+    Agent(u64),
+}
+
+impl Whose {
+    /// Whose a chat opened from the chat `parent`, if one opened it, set
+    /// up as `setup`, is: the agent's that opened it, unless it is a
+    /// sketch, which the human ends.
+    fn opened(parent: Option<u64>, setup: Option<&Setup>) -> Self {
+        match parent {
+            Some(parent) if setup.is_none_or(|setup| setup.sketch.is_none()) => Self::Agent(parent),
+            _ => Self::Human,
+        }
+    }
+}
+
 /// A chat in the list, and, once it is read or opened, the chat itself.
 struct Slot {
     key: u64,
@@ -310,6 +333,8 @@ struct Slot {
     asks: bool,
     goal: Option<Goal>,
     parent: Option<u64>,
+    /// Whose it is; a line the human sends it makes it theirs.
+    whose: Whose,
     setup: Option<Setup>,
     /// The folder it works in, when it is not its project's, as one that
     /// opened before another folder of the project became the project's.
@@ -649,6 +674,7 @@ impl Daemon {
                 asks: false,
                 goal: chat.goal,
                 parent,
+                whose: Whose::opened(parent, setup.as_ref()),
                 setup,
                 folder: chat.folder,
                 ending: None,
@@ -1159,6 +1185,7 @@ impl Daemon {
             asks: false,
             goal: None,
             parent: from.map(|(parent, _)| parent),
+            whose: Whose::opened(from.map(|(parent, _)| parent), setup.as_ref()),
             setup: setup.clone(),
             folder,
             ending: None,
@@ -1532,11 +1559,14 @@ impl Daemon {
             .unwrap_or_else(|| format!("Nothing was said in chat {number} yet.")))
     }
 
-    /// The human sent `text` in the chat `key`: a closed chat's agent
-    /// starts again first, if it can.
+    /// The human sent `text` in the chat `key`, which makes it theirs: a
+    /// closed chat's agent starts again first, if it can.
     fn submit(&mut self, key: u64, text: &str, attached: Vec<Attachment>) {
         if text.trim().is_empty() {
             return;
+        }
+        if let Some(slot) = self.slot_mut(key) {
+            slot.whose = Whose::Human;
         }
         let Some(chat) = self.chat(key) else {
             return;
@@ -2412,13 +2442,14 @@ impl Daemon {
         }
     }
 
-    /// Follows how each chat stands now: a turn that ends while it is not
-    /// shown leaves it unread, and what it is about names it, unless a name
-    /// that lasts more has. A chat that comes to wait for the human, ends
-    /// a turn, or whose agent changed the plan the human left it to, tells
-    /// the window, for it to tell the human unless they look at it. What waits for a chat that is not at work hears how it
-    /// stands, and a sketch the human ends goes on to its end. Answers
-    /// whether a sketch went on, which may change other chats.
+    /// Follows how each chat stands now: a turn that ends in a chat of the
+    /// human's while it is not shown leaves it unread, and what it is
+    /// about names it, unless a name that lasts more has. A chat that comes
+    /// to wait for the human, ends a turn of theirs, or whose agent changed
+    /// the plan the human left it to, tells the window, for it to tell the
+    /// human unless they look at it. What waits for a chat that is not at
+    /// work hears how it stands, and a sketch the human ends goes on to its
+    /// end. Answers whether a sketch went on, which may change other chats.
     fn review(&mut self) -> bool {
         let mut news = Vec::new();
         let mut stands = Vec::new();
@@ -2431,7 +2462,7 @@ impl Daemon {
             };
             let conversation = chat.conversation();
             let state = conversation.state();
-            let ended = working(slot.state) && !working(state);
+            let ended = working(slot.state) && !working(state) && slot.whose == Whose::Human;
             if ended && shown != Some(slot.key) {
                 slot.unread = true;
             }

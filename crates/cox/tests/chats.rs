@@ -3867,6 +3867,122 @@ async fn a_chat_an_agent_opens_is_kept_under_its_chat_set_up_the_same(cx: &mut T
     );
 }
 
+/// Has the agent of the first chat of Cox's own open a chat under it on
+/// `text`, set up as none, and answers the key it goes by, once it is
+/// listed.
+async fn opened_on(
+    cx: &mut VisualTestContext,
+    workspace: &Entity<Workspace>,
+    asks: &Asks,
+    text: &str,
+) -> u64 {
+    let (answer, opened) = tokio::sync::oneshot::channel();
+    asks.borrow()[0]
+        .send(ChatRequest::OpenChat {
+            text: text.to_owned(),
+            setup: Setup::default(),
+            goal: None,
+            sketch: None,
+            answer,
+        })
+        .unwrap();
+    let key = opened.await.unwrap().unwrap().number;
+    settle_on(cx, workspace).await;
+    key
+}
+
+/// Whether the chat `key` of Cox's own is marked unread.
+fn unread(cx: &mut VisualTestContext, workspace: &Entity<Workspace>, key: u64) -> bool {
+    settled(cx, workspace);
+    workspace.read_with(cx, |workspace, _| {
+        workspace
+            .chats(0)
+            .find(|chat| chat.key() == key)
+            .expect("the chat is listed")
+            .is_unread()
+    })
+}
+
+#[gpui::test]
+async fn a_chat_an_agent_opens_waits_for_the_human_only_when_it_asks_them(cx: &mut TestAppContext) {
+    let home = scratch::folder("child-waits");
+    let store = kept_store("child-waits-kept");
+    let (_agents, asks, workspace, cx) = open_window_asking(cx, home, store, Resumes::Resume);
+    let recorded = Rc::new(Recorded::default());
+    let notices = Rc::clone(&recorded);
+    cx.update(|window, cx| {
+        cx.set_global(AppNotices(notices));
+        window.activate_window();
+    });
+    cx.run_until_parked();
+    let told = || recorded.0.borrow_mut().drain(..).collect::<Vec<_>>();
+    cx.simulate_keystrokes("secondary-n");
+    say(cx, &workspace, "hello").await;
+    cx.simulate_keystrokes("secondary-n");
+    say(cx, &workspace, "second").await;
+    told();
+
+    // One ends its turn, which its parent's agent reads; the other asks
+    // the human.
+    let ended = opened_on(cx, &workspace, &asks, "hello").await;
+    let asking = opened_on(cx, &workspace, &asks, "permission").await;
+    let ended_view = workspace.update(cx, |workspace, cx| workspace.watch(ended, cx).unwrap());
+    wait_for_turn(cx, &ended_view).await;
+    let asking_view = workspace.update(cx, |workspace, cx| workspace.watch(asking, cx).unwrap());
+    wait_until(cx, &asking_view, |conversation| {
+        conversation.state() == State::Asking && !conversation.gathering()
+    })
+    .await;
+    settle_on(cx, &workspace).await;
+
+    assert!(!unread(cx, &workspace, ended), "not the human's to read");
+    let told = told();
+    let notices: Vec<_> = told
+        .iter()
+        .filter_map(|told| match told {
+            Told::Notice(key, _, body) => Some((*key, body.as_str())),
+            Told::Badge(_) => None,
+        })
+        .collect();
+    assert_eq!(
+        notices,
+        [(asking, "Asks you: Edit x.txt")],
+        "the human hears of what it asks them, and not of the turn that ended"
+    );
+    assert_eq!(told.last(), Some(&Told::Badge(1)), "{told:?}");
+}
+
+#[gpui::test]
+async fn a_chat_an_agent_opens_is_the_humans_once_they_send_it_a_line(cx: &mut TestAppContext) {
+    let home = scratch::folder("child-taken");
+    let store = kept_store("child-taken-kept");
+    let (agents, asks, workspace, cx) = open_window_asking(cx, home, store, Resumes::Resume);
+    cx.simulate_keystrokes("secondary-n");
+    say(cx, &workspace, "hello").await;
+    cx.simulate_keystrokes("secondary-n");
+    say(cx, &workspace, "second").await;
+    let child = opened_on(cx, &workspace, &asks, "hello").await;
+    let view = workspace.update(cx, |workspace, cx| workspace.watch(child, cx).unwrap());
+    wait_for_turn(cx, &view).await;
+    assert!(!unread(cx, &workspace, child));
+
+    // The human sends it a line, and looks at another chat while the
+    // turn runs.
+    click(cx, "chat-2");
+    assert_eq!(shown(cx, &workspace), view);
+    cx.simulate_input("slowly");
+    cx.simulate_keystrokes("enter");
+    click(cx, "chat-3");
+    let agent = Arc::clone(&agents.borrow()[2]);
+    settle_until(cx, |_| agent.did(&Event::Held)).await;
+    agent.go_on();
+    wait_for_turn(cx, &view).await;
+    assert!(
+        unread(cx, &workspace, child),
+        "the turn's end waits for the human"
+    );
+}
+
 #[gpui::test]
 async fn a_chat_opened_by_a_chat_is_allowed_no_more_than_it(cx: &mut TestAppContext) {
     let home = scratch::folder("bounded-home");
@@ -3988,6 +4104,16 @@ async fn open_sketch(
     assert!(folder.starts_with(&sketches), "{}", folder.display());
     settle_on(cx, workspace).await;
     folder
+}
+
+#[gpui::test]
+async fn a_sketch_an_agent_opens_waits_for_the_human_once_its_turn_ends(cx: &mut TestAppContext) {
+    let (sketched, cx) = sketched(cx, "sketch-waits").await;
+    let workspace = &sketched.workspace;
+    let key = workspace.read_with(cx, |workspace, _| workspace.chats(0).nth(1).unwrap().key());
+    let view = workspace.update(cx, |workspace, cx| workspace.watch(key, cx).unwrap());
+    wait_for_turn(cx, &view).await;
+    assert!(unread(cx, workspace, key), "the human ends a sketch");
 }
 
 #[gpui::test]

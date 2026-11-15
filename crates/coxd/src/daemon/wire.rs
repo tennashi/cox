@@ -63,7 +63,8 @@ pub struct ChatRow {
     /// Whether a line sent to it, closed, starts its agent again.
     pub again: bool,
     pub state: State,
-    /// Whether a turn ended that the human has not seen.
+    /// Whether a turn of the human's ended that they have not seen; a
+    /// turn of a chat an agent opened is that agent's to read.
     pub unread: bool,
     pub goal: Option<Goal>,
     /// The chat whose agent opened it, by its key.
