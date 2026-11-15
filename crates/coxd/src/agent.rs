@@ -135,6 +135,11 @@ pub enum AgentEvent {
     /// as one in a turn does, and a [`Command::Cancel`] then ends as a
     /// turn stopped does, with an [`AgentEvent::TurnEnded`].
     WentOn,
+    /// Work the agent runs apart from its turns, `id`, started, or ended
+    /// when no longer `running`: a command or a subagent it left running
+    /// in the background, or a turn it took by itself (see
+    /// [`cox_acp::Task`]). It may run on after the turn that started it.
+    Task { id: String, running: bool },
     /// The turn ended.
     TurnEnded(StopReason),
     /// The agent answered the prompt with an error.
@@ -1027,6 +1032,10 @@ fn update_event(update: Update) -> Result<AgentEvent, cox_acp::PermissionRequest
             content: call.content.map(shown),
             result: call.result.map(ended),
         },
+        Update::Task(task) => AgentEvent::Task {
+            id: task.id,
+            running: task.running,
+        },
         Update::PermissionRequest(request) => return Err(request),
     })
 }
@@ -1069,7 +1078,9 @@ async fn between_turns(
         tokio::select! {
             command = commands.recv() => return Ok(command),
             Some(update) = session.next_unprompted() => {
-                if !std::mem::replace(went_on, true) {
+                // A task the agent left running that ends is not yet the
+                // agent going on: what it sends after is.
+                if !matches!(update, Update::Task(_)) && !std::mem::replace(went_on, true) {
                     let _ = events.send(AgentEvent::WentOn);
                 }
                 unprompted(session, update, policy, settings, commands, events).await?;

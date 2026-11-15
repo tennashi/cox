@@ -35,7 +35,7 @@ use agent_client_protocol::schema::v1::{
 };
 use agent_client_protocol::schema::{MaybeUndefined, ProtocolVersion};
 use agent_client_protocol::{
-    AcpAgent, Agent, Client, ConnectTo, ConnectionTo, ErrorCode, LineDirection,
+    AcpAgent, Agent, Client, ConnectTo, ConnectionTo, ErrorCode, Handled, LineDirection,
     RequestCancellationHandle, Responder, UntypedMessage,
 };
 use anyhow::Context;
@@ -144,6 +144,23 @@ pub async fn connect<T>(
     Client
         .builder()
         .name("cox")
+        .on_receive_notification(
+            async |notification: UntypedMessage, cx| {
+                // ACP's schema has no async task updates, so they come
+                // ahead of it; the rest goes on to it.
+                match async_task(&notification) {
+                    Some(told) => {
+                        deliver(&updates, Received::Update(Update::Task(told)));
+                        Ok(Handled::Yes)
+                    }
+                    None => Ok(Handled::No {
+                        message: (notification, cx),
+                        retry: false,
+                    }),
+                }
+            },
+            agent_client_protocol::on_receive_notification!(),
+        )
         .on_receive_notification(
             async |notification: SessionNotification, _cx| {
                 // News of the session comes between turns too.
@@ -261,7 +278,9 @@ async fn start(
     opening: Opening,
     login: &impl AsyncFn(Vec<LoginMethod>, Option<String>) -> anyhow::Result<Login>,
 ) -> anyhow::Result<Started> {
-    let capabilities = ClientCapabilities::new().auth(AuthCapabilities::new().terminal(true));
+    let capabilities = ClientCapabilities::new()
+        .auth(AuthCapabilities::new().terminal(true))
+        .meta(async_tasks_capability());
     let initialized = cx
         .send_request(InitializeRequest::new(ProtocolVersion::V1).client_capabilities(capabilities))
         .block_task()
@@ -591,6 +610,43 @@ fn translate(update: SessionUpdate) -> Option<Received> {
         }),
         _ => None,
     }
+}
+
+/// The `_meta` of the capabilities Cox declares as the connection
+/// starts, asking for async task updates: `claude-agent-acp` sends them
+/// to a client that declares `asyncTasks` in the `JetBrains` AIR extension
+/// of version 1 (`clientSupportsAirCapability`), and other agents leave
+/// it be.
+fn async_tasks_capability() -> Meta {
+    let meta = serde_json::json!({
+        "jetbrains": { "air": { "version": 1, "capabilities": ["asyncTasks"] } }
+    });
+    let serde_json::Value::Object(meta) = meta else {
+        unreachable!("the capability is an object");
+    };
+    meta
+}
+
+/// The async task `notification` tells of, when it is a `session/update`
+/// of `claude-agent-acp`'s async tasks: `async_task_spawned` starts a
+/// task, and `async_task_state_update` tells its state, of which
+/// `completed`, `failed` and `stopped` end it. Progress tells nothing of
+/// whether it runs, so it is left out, as is anything malformed.
+fn async_task(notification: &UntypedMessage) -> Option<Task> {
+    if notification.method != "session/update" {
+        return None;
+    }
+    let update = notification.params.get("update")?;
+    let id = update.get("asyncTaskId")?.as_str()?.to_owned();
+    let running = match update.get("sessionUpdate")?.as_str()? {
+        "async_task_spawned" => true,
+        "async_task_state_update" => !matches!(
+            update.get("state")?.as_str()?,
+            "completed" | "failed" | "stopped"
+        ),
+        _ => return None,
+    };
+    Some(Task { id, running })
 }
 
 /// The paths of the files a tool call works on.
@@ -1203,6 +1259,23 @@ pub enum Update {
     /// A tool call the agent made started, was retitled, changed what it
     /// shows, or ended.
     ToolCall(ToolCall),
+    /// Work the agent runs apart from its turns, such as a command it
+    /// left running in the background, or a turn it took by itself,
+    /// started or ended.
+    Task(Task),
+}
+
+/// Work the agent runs apart from its turns, as `claude-agent-acp` tells
+/// of it to a client that asks for its async tasks: a command or a
+/// subagent left running in the background, or a turn Claude Code took
+/// by itself while no prompt ran.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Task {
+    /// The same for every update of one task.
+    pub id: String,
+    /// Whether the task runs still: it ends once completed, failed or
+    /// stopped.
+    pub running: bool,
 }
 
 /// A tool call the agent made, as it stands.

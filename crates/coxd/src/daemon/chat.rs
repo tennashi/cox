@@ -9,8 +9,9 @@
 //! chat's key and the generation of its agent, so that what an agent
 //! stopped since says is let be.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use cox_core::entry::{Attachment, Committed};
 use cox_core::goal;
@@ -128,6 +129,81 @@ struct Running {
     _hears: Vec<Task>,
 }
 
+/// How long after the agent last sent something, as it went on by itself
+/// while no turn ran, it counts as at work still, with no tool call open
+/// and no task running: ACP tells no end of what an agent does on its
+/// own, so this covers the gaps between those, as when it streams text
+/// between two tool calls.
+pub const GOES_ON_QUIET: Duration = Duration::from_mins(2);
+
+/// What a chat's agent does apart from the turns Cox asks of it, as it
+/// tells it: once a task it left running in the background ends,
+/// `claude-agent-acp` goes on by itself, with no prompt to answer.
+#[derive(Debug, Default)]
+struct ByItself {
+    /// The tool calls the agent reported that have not ended, until its
+    /// turn ends: one runs however long it is silent.
+    tools: HashSet<String>,
+    /// The tasks the agent told of that run, until each ends (see
+    /// [`AgentEvent::Task`]), which may be long after the turn that
+    /// started it.
+    tasks: HashSet<String>,
+    /// When the agent last sent something as it went on by itself, while
+    /// no turn ran, until a turn ends.
+    went_on: Option<Instant>,
+}
+
+impl ByItself {
+    /// Takes in `event`, which the agent sent at `now`.
+    fn hear(&mut self, event: &AgentEvent, now: Instant) {
+        match event {
+            AgentEvent::ToolCall {
+                id, result: None, ..
+            } => {
+                self.tools.insert(id.clone());
+            }
+            AgentEvent::ToolCall {
+                id,
+                result: Some(_),
+                ..
+            } => {
+                self.tools.remove(id);
+            }
+            AgentEvent::Task { id, running: true } => {
+                self.tasks.insert(id.clone());
+            }
+            AgentEvent::Task { id, running: false } => {
+                self.tasks.remove(id);
+            }
+            AgentEvent::TurnEnded(_) | AgentEvent::TurnFailed(_) => {
+                self.tools.clear();
+                self.went_on = None;
+                return;
+            }
+            AgentEvent::Closed(_) => {
+                *self = Self::default();
+                return;
+            }
+            AgentEvent::WentOn => self.went_on = Some(now),
+            _ => {}
+        }
+        if let Some(went_on) = &mut self.went_on {
+            *went_on = now;
+        }
+    }
+
+    /// Whether the agent is at work at `now`: a tool call it reported has
+    /// not ended, a task it told of runs, or it went on by itself and sent
+    /// something within [`GOES_ON_QUIET`].
+    fn at_work(&self, now: Instant) -> bool {
+        !self.tools.is_empty()
+            || !self.tasks.is_empty()
+            || self
+                .went_on
+                .is_some_and(|at| now.saturating_duration_since(at) < GOES_ON_QUIET)
+    }
+}
+
 pub struct Chat {
     key: u64,
     conversation: Conversation,
@@ -202,6 +278,8 @@ pub struct Chat {
     /// chat works in, and the last commit of each of its repositories then,
     /// to tell the commits the agent makes in the turn.
     turn_heads: Option<(PathBuf, Vec<Head>)>,
+    /// What the agent does apart from its turns, until it closes.
+    by_itself: ByItself,
 }
 
 /// A repository of the folder a chat works in, as a turn started.
@@ -258,6 +336,7 @@ impl Chat {
             told: None,
             turn_heads: None,
             places: Places::Cox,
+            by_itself: ByItself::default(),
         }
     }
 
@@ -396,6 +475,7 @@ impl Chat {
             }));
         }
         self.starting = false;
+        self.by_itself = ByItself::default();
         self.running = Some(Running {
             commands,
             tools,
@@ -608,6 +688,16 @@ impl Chat {
         }
     }
 
+    /// Whether the agent is at work by itself at `now`, apart from a turn
+    /// Cox asked of it: a tool call it reported has not ended, a task it
+    /// told of runs, such as a command it left running in the background
+    /// or a turn it took by itself, or it went on by itself and sent
+    /// something within [`GOES_ON_QUIET`].
+    #[must_use]
+    pub fn goes_on(&self, now: Instant) -> bool {
+        self.by_itself.at_work(now)
+    }
+
     /// Shows what the agent of `generation` told. A turn that ends with a
     /// goal to meet starts the goal's check, or asks its judge, and then
     /// runs the triggers due, of the folder the chat works in, in a
@@ -637,6 +727,7 @@ impl Chat {
         if (closed || matches!(event, AgentEvent::TurnEnded(_))) && !self.conversation.steering() {
             self.show_commits();
         }
+        self.by_itself.hear(&event, Instant::now());
         let asks = matches!(event, AgentEvent::PermissionRequest { .. });
         let was_checking = self.conversation.state() == State::Checking;
         self.conversation.apply(event);
@@ -2458,6 +2549,24 @@ mod tests {
             talk.chat.gathered_enough(talk.generation - 1);
 
             assert!(talk.chat.conversation().gathering());
+        });
+    }
+
+    #[test]
+    fn the_agent_goes_on_by_itself_until_it_is_quiet_or_its_turn_ends() {
+        on_daemon(async {
+            let mut talk = Talk::new(None);
+            talk.take_a_turn("work");
+            assert!(!talk.chat.goes_on(Instant::now()), "the turn ended");
+
+            talk.hear(AgentEvent::WentOn);
+            talk.hear(AgentEvent::ReplyText("The tests passed.".to_owned()));
+
+            let now = Instant::now();
+            assert!(talk.chat.goes_on(now));
+            assert!(!talk.chat.goes_on(now + GOES_ON_QUIET), "quiet since");
+            talk.hear(AgentEvent::TurnEnded(StopReason::Cancelled));
+            assert!(!talk.chat.goes_on(Instant::now()), "stopped");
         });
     }
 }

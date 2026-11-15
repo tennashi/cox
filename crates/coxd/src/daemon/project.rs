@@ -5,12 +5,13 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use std::time::Instant;
 
 use cox_core::entry::Answer;
 use cox_core::store::ProjectId;
 
+use super::Daemon;
 use super::wire::FromDaemon;
-use super::{Daemon, working};
 use crate::chat::conversation::{Entry, Proposed, State};
 use crate::chat::sketch::{self, Sketch};
 use crate::storage;
@@ -471,10 +472,10 @@ impl Daemon {
                         .ok_or("the sketch has ended")?,
                 ),
             };
-            let at_work = self
-                .family(key)
-                .into_iter()
-                .any(|key| self.slot(key).is_some_and(|slot| working(slot.state)));
+            let at_work = self.family(key).into_iter().any(|key| {
+                self.slot(key)
+                    .is_some_and(|slot| slot.at_work(Instant::now()))
+            });
             if at_work {
                 return Err(
                     "A chat that moves into the project is at work: make it once the turn ends."
@@ -613,7 +614,7 @@ impl Daemon {
         self.chats
             .iter()
             .chain(&self.archived)
-            .any(|slot| slot.project == index && working(slot.state))
+            .any(|slot| slot.project == index && slot.at_work(Instant::now()))
     }
 
     /// Has the project at `index`, whose folder is now `folder`, work

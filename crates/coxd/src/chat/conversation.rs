@@ -1498,6 +1498,9 @@ impl Conversation {
             }
             AgentEvent::Steered => self.steering = self.steering.saturating_sub(1),
             AgentEvent::WentOn => self.push(Entry::Note(WENT_ON.to_owned())),
+            // The chat keeps which tasks run, for coxd's updates: the
+            // conversation shows none.
+            AgentEvent::Task { .. } => {}
             AgentEvent::Opened { how, steers, .. } => {
                 self.steers = steers;
                 self.opened(how);
