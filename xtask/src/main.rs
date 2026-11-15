@@ -112,8 +112,6 @@ fn setup(sh: &Shell) -> anyhow::Result<()> {
 /// helpers from the executable's name, so the three agree.
 const APP: &str = "Cox";
 const BUNDLE_ID: &str = "com.github.tennashi.cox";
-/// What launchd knows coxd by, as `launchctl print gui/$UID/<label>`.
-const COXD_LABEL: &str = "com.github.tennashi.cox.coxd";
 /// What systemd knows coxd by, as `systemctl --user status <unit>`.
 const COXD_UNIT: &str = "coxd.service";
 /// What CEF appends to the app's name for each kind of helper process,
@@ -182,12 +180,6 @@ fn assemble(sh: &Shell, build: &Build) -> anyhow::Result<PathBuf> {
     )?;
     sh.create_dir(contents.join("MacOS"))?;
     sh.copy_file(&build.cox, contents.join("MacOS").join(APP))?;
-    let agents = contents.join("Library/LaunchAgents");
-    sh.create_dir(&agents)?;
-    sh.write_file(
-        agents.join(format!("{COXD_LABEL}.plist")),
-        bundled_launch_agent(),
-    )?;
     sh.create_dir(contents.join("Resources"))?;
     fs::write(
         contents.join("Resources").join(format!("{APP}.icns")),
@@ -312,83 +304,31 @@ fn install(sh: &Shell, args: &[String]) -> anyhow::Result<()> {
 
 /// Has coxd, as the Cox at `installed` runs it, start as the human logs
 /// in, so that the chats and the schedules run without a window having
-/// opened first: a launch agent on macOS, which launchd loads now too,
-/// starting coxd unless one runs already, and a user unit of systemd on
-/// Linux, which starts at the next login. Neither starts coxd again when
-/// it stops, as when a window has an outdated one stop, since the window
-/// starts the new one itself.
+/// opened first: on Linux, a user unit of systemd, which starts at the
+/// next login, and does not start coxd again when it stops, as when a
+/// window has an outdated one stop, since the window starts the new one
+/// itself. On macOS, the app writes its launch agent as it opens.
 fn start_at_login(sh: &Shell, home: &Path, installed: &Path) -> anyhow::Result<()> {
     if cfg!(target_os = "macos") {
-        // The app hands the system the launch agent it carries as it opens
-        // (see `cox::login_item`). The one Cox wrote to LaunchAgents before
-        // goes.
-        let legacy = home
-            .join("Library/LaunchAgents")
-            .join(format!("{COXD_LABEL}.plist"));
-        if sh.path_exists(&legacy) {
-            sh.remove_path(&legacy)?;
-        }
-        // Unloaded too while it runs nothing, as when the window started
-        // coxd, so that the agent the app hands the system does not meet a
-        // job of the same name; while its coxd runs, it goes at logout.
-        let uid = cmd!(sh, "id -u").read()?;
-        let job = format!("gui/{uid}/{COXD_LABEL}");
-        if let Ok(printed) = cmd!(sh, "launchctl print {job}")
-            .quiet()
-            .ignore_stderr()
-            .read()
-            && !printed
-                .lines()
-                .any(|line| line.trim_start().starts_with("pid = "))
-        {
-            cmd!(sh, "launchctl bootout {job}").run()?;
-        }
+        // The app writes its launch agent as it opens (see `cox::login_item`).
         println!("coxd starts at login once Cox has opened: see Login Items in System Settings");
-    } else {
-        let units = home.join(".config/systemd/user");
-        sh.create_dir(&units)?;
-        let unit = units.join(COXD_UNIT);
-        sh.write_file(&unit, user_unit(installed))?;
-        let enabled = cmd!(sh, "systemctl --user daemon-reload")
-            .run()
-            .and_then(|()| cmd!(sh, "systemctl --user enable {COXD_UNIT}").run());
-        match enabled {
-            Ok(()) => println!("coxd starts at login, as {}", unit.display()),
-            Err(error) => println!(
-                "coxd does not start at login, as systemd's user manager did not take {}: {error}",
-                unit.display()
-            ),
-        }
+        return Ok(());
+    }
+    let units = home.join(".config/systemd/user");
+    sh.create_dir(&units)?;
+    let unit = units.join(COXD_UNIT);
+    sh.write_file(&unit, user_unit(installed))?;
+    let enabled = cmd!(sh, "systemctl --user daemon-reload")
+        .run()
+        .and_then(|()| cmd!(sh, "systemctl --user enable {COXD_UNIT}").run());
+    match enabled {
+        Ok(()) => println!("coxd starts at login, as {}", unit.display()),
+        Err(error) => println!(
+            "coxd does not start at login, as systemd's user manager did not take {}: {error}",
+            unit.display()
+        ),
     }
     Ok(())
-}
-
-/// The launch agent that starts coxd as the human logs in, which the app
-/// carries for the system to take from it (see `cox::login_item`): the
-/// app's own executable, wherever the app is.
-fn bundled_launch_agent() -> String {
-    format!(
-        r#"<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-	<key>Label</key>
-	<string>{COXD_LABEL}</string>
-	<key>BundleProgram</key>
-	<string>Contents/MacOS/{APP}</string>
-	<key>ProgramArguments</key>
-	<array>
-		<string>{APP}</string>
-		<string>--daemon</string>
-	</array>
-	<key>RunAtLoad</key>
-	<true/>
-	<key>AssociatedBundleIdentifiers</key>
-	<string>{BUNDLE_ID}</string>
-</dict>
-</plist>
-"#
-    )
 }
 
 /// The unit of systemd's user manager that starts coxd, of the Cox at
@@ -768,13 +708,10 @@ fn info_plist(name: &str, identifier: &str, helper: bool) -> String {
 mod tests {
     use std::path::Path;
 
-    use serde_json::{Map, Value, json};
+    use serde_json::{Map, Value};
     use xshell::Shell;
 
-    use super::{
-        APP, BUNDLE_ID, Build, COXD_LABEL, ICNS_IMAGES, ICON, Run, bundled_launch_agent, icns,
-        info_plist, replace, user_unit,
-    };
+    use super::{APP, Build, ICNS_IMAGES, ICON, Run, icns, info_plist, replace, user_unit};
 
     /// The property list `text` says, as JSON: a dictionary as an object,
     /// an array as an array, a string as a string, and true and false.
@@ -806,17 +743,6 @@ mod tests {
         let root = document.root_element();
         assert_eq!(root.tag_name().name(), "plist");
         value(root.children().find(roxmltree::Node::is_element).unwrap())
-    }
-
-    #[test]
-    fn the_app_carries_a_launch_agent_that_starts_its_own_coxd_at_login_once() {
-        let agent = plist(&bundled_launch_agent());
-        assert_eq!(agent["Label"], COXD_LABEL);
-        assert_eq!(agent["BundleProgram"], "Contents/MacOS/Cox");
-        assert_eq!(agent["ProgramArguments"], json!(["Cox", "--daemon"]));
-        assert_eq!(agent["RunAtLoad"], true);
-        assert_eq!(agent["AssociatedBundleIdentifiers"], BUNDLE_ID);
-        assert_eq!(agent.get("KeepAlive"), None, "coxd is not started again");
     }
 
     #[test]

@@ -100,7 +100,12 @@ jobs:
             grep -h 'login' "$data"/logs/*.jsonl || true
             exit 1
           fi
-          launchctl print "gui/$(id -u)/com.github.tennashi.cox.coxd" | head -n 20 || true
+          agent="$HOME/Library/LaunchAgents/com.github.tennashi.cox.coxd.plist"
+          plutil -p "$agent"
+          plutil -extract ProgramArguments.0 raw "$agent" | grep -qxF "$cox" || {
+            echo "::error::the launch agent does not start the installed Cox"
+            exit 1
+          }
           echo "coxd processes: $(pgrep -f 'Cox --daemon' | wc -l)"
       - name: Take a screenshot of the installed Cox
         continue-on-error: true
