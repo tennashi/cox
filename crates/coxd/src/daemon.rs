@@ -42,6 +42,7 @@ use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use std::time::Instant;
 
 use cox_core::entry::Attachment;
 use cox_core::goal::Goal;
@@ -354,6 +355,14 @@ struct Slot {
 }
 
 impl Slot {
+    /// Whether the chat is at work at `now`: in a turn, or with its agent
+    /// at work by itself apart from one (see [`Chat::goes_on`]). Stopping
+    /// coxd, closing its agent, or sending it another line then would cut
+    /// it off.
+    fn at_work(&self, now: Instant) -> bool {
+        working(self.state) || self.chat.as_ref().is_some_and(|chat| chat.goes_on(now))
+    }
+
     /// The chat named `name` as `named` says, keeping it in `store`.
     fn name_as(&mut self, name: &str, named: Named, store: &Store) {
         name.clone_into(&mut self.name);
@@ -1749,7 +1758,7 @@ impl Daemon {
                 build,
                 answer,
             } => {
-                let taken = self.attach(id, hello, window, build);
+                let taken = self.attach(id, hello, window, build, Instant::now());
                 answer.send(taken).ok();
             }
             Internal::Detach { id } => {
@@ -1855,7 +1864,7 @@ impl Daemon {
                 .scheduled
                 .get(&id)
                 .and_then(|&key| self.slot(key))
-                .is_some_and(|slot| working(slot.state));
+                .is_some_and(|slot| slot.at_work(Instant::now()));
             let last = ran.last(&id);
             if at_work || !cron.due(last, now) {
                 continue;
@@ -1900,22 +1909,24 @@ impl Daemon {
     /// tell what it does on `window` from now on, unless another window
     /// is there, or the window is of another build than the daemon's,
     /// `build`, that speaks otherwise or comes while no chat is at work
-    /// (see [`Hello::answer`]): none takes a turn, and no agent goes on by
-    /// itself (see [`Chat::goes_on`]). Answers which of those it is.
+    /// at `now` (see [`Hello::answer`] and [`Slot::at_work`]). Answers
+    /// which of those it is.
     fn attach(
         &mut self,
         id: u64,
         hello: Hello,
         window: UnboundedSender<FromDaemon>,
         build: Option<Build>,
+        now: Instant,
     ) -> FromDaemon {
         if self.window.is_some() {
             return FromDaemon::Taken;
         }
-        let now = std::time::Instant::now();
-        let at_work = self.chats.iter().chain(&self.archived).any(|slot| {
-            working(slot.state) || slot.chat.as_ref().is_some_and(|chat| chat.goes_on(now))
-        });
+        let at_work = self
+            .chats
+            .iter()
+            .chain(&self.archived)
+            .any(|slot| slot.at_work(now));
         let answer = hello.answer(build, Some(wire::SPEAKS), at_work);
         if answer == FromDaemon::Busy {
             tracing::warn!("a window of another build waits, since a chat is at work");
@@ -2217,7 +2228,7 @@ impl Daemon {
             .chats
             .iter()
             .find(|slot| slot.key == key)
-            .is_some_and(|slot| !working(slot.state) && merges(slot.setup.as_ref()));
+            .is_some_and(|slot| !slot.at_work(Instant::now()) && merges(slot.setup.as_ref()));
         if merges {
             let line = workflow::CLOSE_MERGE.say(&[]);
             self.start_again(key);
@@ -2331,15 +2342,15 @@ impl Daemon {
         Ok(told)
     }
 
-    /// Switches the chat `key` to the agent kept as `id`, unless a turn
-    /// runs: closes it, its agent stopped, keeps the agent as the chat's,
+    /// Switches the chat `key` to the agent kept as `id`, unless the chat
+    /// is at work (see [`Slot::at_work`]): closes it, its agent stopped, keeps the agent as the chat's,
     /// and starts the agent at once, which goes on from the conversation
     /// so far, told it as a session that cannot be resumed is.
     fn switch_agent(&mut self, key: u64, id: &str) {
         let Some(slot) = self.slot(key) else {
             return;
         };
-        let Some(kept) = slot.kept.filter(|_| !working(slot.state)) else {
+        let Some(kept) = slot.kept.filter(|_| !slot.at_work(Instant::now())) else {
             return;
         };
         let cwd = self.cwd(slot);
@@ -2698,6 +2709,11 @@ pub fn at_work(state: State) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
+    use cox_core::entry::ToolCallResult;
+
+    use super::chat::GOES_ON_QUIET;
     use super::*;
     use crate::testing::TempDir;
 
@@ -3177,15 +3193,21 @@ mod tests {
     }
 
     /// A window of the build `build`, which speaks as `speaks` says, comes
-    /// as the connection `id`, and is answered.
-    fn window_comes(daemon: &mut Daemon, id: u64, build: Option<Build>, speaks: u64) -> FromDaemon {
+    /// as the connection `id`, `later` from now, and is answered.
+    fn window_comes(
+        daemon: &mut Daemon,
+        id: u64,
+        build: Option<Build>,
+        speaks: u64,
+        later: Duration,
+    ) -> FromDaemon {
         let hello = Hello {
             build,
             speaks: Some(speaks),
             ..Hello::default()
         };
         let (window, _told) = unbounded_channel();
-        daemon.attach(id, hello, window, Build::now())
+        daemon.attach(id, hello, window, Build::now(), Instant::now() + later)
     }
 
     /// A build other than the test's own.
@@ -3207,8 +3229,9 @@ mod tests {
 
     /// A chat whose agent works, as `works` has it do, in a daemon whose
     /// window then went, and the answers a window of another build that
-    /// speaks otherwise, and one that speaks alike, get.
+    /// speaks otherwise, and one that speaks alike, get, `later` from then.
     fn answers_once_the_window_went(
+        later: Duration,
         works: impl FnOnce(&mut Daemon, u64, &Played),
     ) -> [FromDaemon; 2] {
         let mut answers = None;
@@ -3222,7 +3245,7 @@ mod tests {
             let key = daemon.chats.last().unwrap().key;
             assert_eq!(agents.0.borrow().len(), 1, "the chat's agent started");
             assert_eq!(
-                window_comes(&mut daemon, 1, Build::now(), wire::SPEAKS),
+                window_comes(&mut daemon, 1, Build::now(), wire::SPEAKS, Duration::ZERO),
                 FromDaemon::Joined
             );
 
@@ -3231,8 +3254,8 @@ mod tests {
             daemon.hear(Internal::Detach { id: 1 });
             pump(&mut daemon, &mut heard).await;
 
-            let unlike = window_comes(&mut daemon, 2, another_build(), wire::SPEAKS + 1);
-            let alike = window_comes(&mut daemon, 3, another_build(), wire::SPEAKS);
+            let unlike = window_comes(&mut daemon, 2, another_build(), wire::SPEAKS + 1, later);
+            let alike = window_comes(&mut daemon, 3, another_build(), wire::SPEAKS, later);
             answers = Some([unlike, alike]);
         });
         answers.unwrap()
@@ -3240,7 +3263,7 @@ mod tests {
 
     #[test]
     fn a_window_of_another_build_waits_for_a_turn_that_runs_after_the_window_went() {
-        let answers = answers_once_the_window_went(|daemon, key, _| {
+        let answers = answers_once_the_window_went(Duration::ZERO, |daemon, key, _| {
             daemon.act(ToDaemon::Submit {
                 key,
                 text: "work".to_owned(),
@@ -3253,7 +3276,7 @@ mod tests {
 
     #[test]
     fn a_window_of_another_build_waits_for_an_agent_that_goes_on_by_itself() {
-        let answers = answers_once_the_window_went(|daemon, key, agent| {
+        let answers = answers_once_the_window_went(Duration::ZERO, |daemon, key, agent| {
             daemon.act(ToDaemon::Submit {
                 key,
                 text: "work".to_owned(),
@@ -3271,5 +3294,94 @@ mod tests {
         });
 
         assert_eq!(answers, [FromDaemon::Busy, FromDaemon::Joined]);
+    }
+
+    /// Has the agent `agent` tell `events`, as it sends them.
+    fn tells(agent: &Played, events: impl IntoIterator<Item = AgentEvent>) {
+        for event in events {
+            agent.events.send(event).unwrap();
+        }
+    }
+
+    /// Has the human send the chat `key` a line, which starts a turn.
+    fn submit(daemon: &mut Daemon, key: u64) {
+        daemon.act(ToDaemon::Submit {
+            key,
+            text: "work".to_owned(),
+            attached: Vec::new(),
+        });
+    }
+
+    /// A tool call the agent made, `id`, started, or ended as `result`.
+    fn tool_call(id: &str, result: Option<ToolCallResult>) -> AgentEvent {
+        AgentEvent::ToolCall {
+            id: id.to_owned(),
+            title: Some("gh pr checks --watch".to_owned()),
+            content: None,
+            result,
+        }
+    }
+
+    /// Longer than an agent going on by itself may be quiet.
+    const QUIET: Duration = GOES_ON_QUIET.saturating_add(Duration::from_secs(1));
+
+    #[test]
+    fn a_window_of_another_build_waits_for_a_tool_call_an_agent_goes_on_with_however_quiet() {
+        let answers = answers_once_the_window_went(QUIET, |daemon, key, agent| {
+            submit(daemon, key);
+            tells(
+                agent,
+                [
+                    AgentEvent::TurnEnded(cox_acp::StopReason::EndTurn),
+                    AgentEvent::WentOn,
+                    tool_call("watch", None),
+                ],
+            );
+        });
+
+        assert_eq!(answers, [FromDaemon::Busy, FromDaemon::Joined]);
+    }
+
+    #[test]
+    fn a_window_of_another_build_waits_for_a_task_that_runs_after_the_turn_ended() {
+        let answers = answers_once_the_window_went(QUIET, |daemon, key, agent| {
+            submit(daemon, key);
+            tells(
+                agent,
+                [
+                    AgentEvent::Task {
+                        id: "ci".to_owned(),
+                        running: true,
+                    },
+                    AgentEvent::TurnEnded(cox_acp::StopReason::EndTurn),
+                ],
+            );
+        });
+
+        assert_eq!(answers, [FromDaemon::Busy, FromDaemon::Joined]);
+    }
+
+    #[test]
+    fn a_window_of_another_build_moves_coxd_on_once_the_tool_call_and_the_task_ended() {
+        let answers = answers_once_the_window_went(QUIET, |daemon, key, agent| {
+            submit(daemon, key);
+            let task = |running| AgentEvent::Task {
+                id: "ci".to_owned(),
+                running,
+            };
+            tells(
+                agent,
+                [
+                    task(true),
+                    AgentEvent::TurnEnded(cox_acp::StopReason::EndTurn),
+                    AgentEvent::WentOn,
+                    tool_call("watch", None),
+                    tool_call("watch", Some(ToolCallResult::Completed)),
+                    task(false),
+                ],
+            );
+        });
+
+        assert_eq!(answers, [FromDaemon::Outdated, FromDaemon::Outdated]);
     }
 }
