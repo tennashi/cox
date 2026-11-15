@@ -1247,8 +1247,10 @@ mod tests {
     fn shell_server(capabilities: &Value) -> Server {
         let body = json!({ "jsonrpc": "2.0", "id": 1, "result": { "capabilities": capabilities } })
             .to_string();
+        // It answers once asked, as a server does: an answer read before the
+        // client waits for it would be dropped, and the client wait forever.
         let script = format!(
-            "printf 'Content-Length: {}\\r\\n\\r\\n%s' '{body}'; cat > /dev/null",
+            "IFS= read -r _; printf 'Content-Length: {}\\r\\n\\r\\n%s' '{body}'; cat > /dev/null",
             body.len()
         );
         Server {
