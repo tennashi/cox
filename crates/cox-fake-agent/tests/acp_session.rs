@@ -53,9 +53,12 @@ impl Played {
     ) -> anyhow::Result<T> {
         within(cox_acp::connect(
             self.agent(),
-            self.folder.path().to_owned(),
-            Vec::new(),
-            None,
+            cox_acp::Opening {
+                cwd: self.folder.path().to_owned(),
+                mcp_servers: Vec::new(),
+                resume: None,
+                meta: None,
+            },
             |_| {},
             async |_, _| anyhow::bail!("the test logs in no way"),
             talk,
@@ -115,9 +118,12 @@ async fn an_agent_that_cannot_resume_a_session_opens_a_new_one() {
     let played = Played::new(&json!({ "turns": [] }));
     let (id, resumed) = within(cox_acp::connect(
         played.agent(),
-        played.folder.path().to_owned(),
-        Vec::new(),
-        Some("an-old-session".to_owned()),
+        cox_acp::Opening {
+            cwd: played.folder.path().to_owned(),
+            mcp_servers: Vec::new(),
+            resume: Some("an-old-session".to_owned()),
+            meta: None,
+        },
         |_| {},
         async |_, _| anyhow::bail!("no login"),
         async |session| Ok((session.id(), session.resumed())),
@@ -198,9 +204,12 @@ async fn talk_hearing<T>(
 ) -> anyhow::Result<T> {
     within(cox_acp::connect(
         played.agent(),
-        played.folder.path().to_owned(),
-        Vec::new(),
-        None,
+        cox_acp::Opening {
+            cwd: played.folder.path().to_owned(),
+            mcp_servers: Vec::new(),
+            resume: None,
+            meta: None,
+        },
         |news| heard.lock().unwrap().push(news),
         async |_, _| anyhow::bail!("no login"),
         talk,
@@ -708,9 +717,12 @@ done"#;
     };
     let updates = within(cox_acp::connect(
         played.agent(),
-        played.folder.path().to_owned(),
-        vec![tools],
-        None,
+        cox_acp::Opening {
+            cwd: played.folder.path().to_owned(),
+            mcp_servers: vec![tools],
+            resume: None,
+            meta: None,
+        },
         |_| {},
         async |_, _| anyhow::bail!("no login"),
         async |mut session| Ok(all(&mut session.send([text("call it")])).await),
@@ -739,9 +751,12 @@ async fn logging_in(played: &Played, asked: &Asked, ways: &[Login]) -> anyhow::R
     let ways = Mutex::new(ways.iter().cloned());
     within(cox_acp::connect(
         played.agent(),
-        played.folder.path().to_owned(),
-        Vec::new(),
-        None,
+        cox_acp::Opening {
+            cwd: played.folder.path().to_owned(),
+            mcp_servers: Vec::new(),
+            resume: None,
+            meta: None,
+        },
         |_| {},
         async |offered, failed| {
             asked.lock().unwrap().push((offered, failed));
@@ -837,9 +852,12 @@ async fn logging_in_in_a_terminal_runs_the_agents_command_with_the_ways_argument
     let asked = Asked::default();
     let opened = within(cox_acp::connect(
         played.agent(),
-        played.folder.path().to_owned(),
-        Vec::new(),
-        None,
+        cox_acp::Opening {
+            cwd: played.folder.path().to_owned(),
+            mcp_servers: Vec::new(),
+            resume: None,
+            meta: None,
+        },
         |_| {},
         async |offered: Vec<LoginMethod>, failed| {
             asked.lock().unwrap().push((offered.clone(), failed));
@@ -891,9 +909,12 @@ async fn an_agent_that_goes_before_a_session_opens_opens_none() {
     let folder = TempDir::new().unwrap();
     let opened = within(cox_acp::connect(
         agent,
-        folder.path().to_owned(),
-        Vec::new(),
-        None,
+        cox_acp::Opening {
+            cwd: folder.path().to_owned(),
+            mcp_servers: Vec::new(),
+            resume: None,
+            meta: None,
+        },
         |_| {},
         async |_, _| anyhow::bail!("no login"),
         async |session| Ok(session.id()),
@@ -934,9 +955,12 @@ done"#;
     let folder = TempDir::new().unwrap();
     let ended = within(cox_acp::connect(
         agent,
-        folder.path().to_owned(),
-        Vec::new(),
-        None,
+        cox_acp::Opening {
+            cwd: folder.path().to_owned(),
+            mcp_servers: Vec::new(),
+            resume: None,
+            meta: None,
+        },
         |_| {},
         async |_, _| anyhow::bail!("no login"),
         async |mut session| Ok(session.send([text("go")]).end().await.is_err()),
