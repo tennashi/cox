@@ -306,10 +306,10 @@ enum Ends {
 enum Whose {
     /// The human's: a turn that ends waits for them, until they look.
     Human,
-    /// The agent's of the chat of this key, which opened it and hears
-    /// how it stands (see [`Daemon::wait_chat`]). The human still hears
-    /// of what it asks them.
-    Agent(u64),
+    /// The agent's of the chat `parent`, which opened it and hears how it
+    /// stands, as `report` says. The human still hears of what it asks
+    /// them.
+    Agent { parent: u64, report: Report },
 }
 
 impl Whose {
@@ -318,10 +318,52 @@ impl Whose {
     /// sketch, which the human ends.
     fn opened(parent: Option<u64>, setup: Option<&Setup>) -> Self {
         match parent {
-            Some(parent) if setup.is_none_or(|setup| setup.sketch.is_none()) => Self::Agent(parent),
+            Some(parent) if setup.is_none_or(|setup| setup.sketch.is_none()) => Self::Agent {
+                parent,
+                report: Report::Working,
+            },
             _ => Self::Human,
         }
     }
+}
+
+/// Whether the agent that opened a chat heard what the chat came to last:
+/// its report, once it ended its turn, or what it asks the human.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Report {
+    /// It is at work, or has not come to anything yet.
+    Working,
+    /// It came to something the agent has not heard: Cox tells the agent
+    /// in the human's place once the agent's own turn is not running
+    /// (see [`Daemon::tell_reports`]).
+    Pending,
+    /// The agent heard it, from Cox or from `agent_report`.
+    Heard,
+}
+
+impl Report {
+    /// The report of a chat that stood as `was` and stands as `now`: one
+    /// that goes back to work has none, and one that stops working has
+    /// one pending.
+    fn as_it_goes(self, was: State, now: State) -> Self {
+        match (at_work(was), at_work(now)) {
+            (_, true) => Self::Working,
+            (true, false) => Self::Pending,
+            (false, false) => self,
+        }
+    }
+}
+
+/// When the agent of the chat that opened subagents can hear their
+/// reports.
+enum Hears {
+    /// Now: it waits for a line, or its closed chat starts again on one.
+    Now,
+    /// Once its turn ends.
+    Later,
+    /// Never: its chat is archived, gone, or closed for good, so that the
+    /// subagents are the human's.
+    Never,
 }
 
 /// A chat in the list, and, once it is read or opened, the chat itself.
@@ -2263,7 +2305,127 @@ impl Daemon {
             self.waiting.push((key, answer));
         } else {
             answer.send(Ok(chat.stands())).ok();
+            self.heard(key);
         }
+    }
+
+    /// Marks the report of the chat `key` heard by the agent that opened
+    /// it, so that Cox does not tell it again.
+    fn heard(&mut self, key: u64) {
+        if let Some(Slot {
+            whose: Whose::Agent { report, .. },
+            ..
+        }) = self.slot_mut(key)
+            && *report == Report::Pending
+        {
+            *report = Report::Heard;
+        }
+    }
+
+    /// Tells the agent of each chat that opened subagents, in the human's
+    /// place, the reports it has not heard, in one line once its turn is
+    /// not running, and gives the human the subagents of a chat whose
+    /// agent never hears them. Answers whether it told any agent.
+    fn tell_reports(&mut self) -> bool {
+        let mut pending: Vec<(u64, Vec<u64>)> = Vec::new();
+        for slot in self.chats.iter().chain(&self.archived) {
+            if let Whose::Agent {
+                parent,
+                report: Report::Pending,
+            } = slot.whose
+            {
+                match pending.iter_mut().find(|(of, _)| *of == parent) {
+                    Some((_, children)) => children.push(slot.key),
+                    None => pending.push((parent, vec![slot.key])),
+                }
+            }
+        }
+        let mut told = false;
+        for (parent, children) in pending {
+            match self.hears(parent) {
+                Hears::Now => {
+                    let reports: Vec<String> = children
+                        .iter()
+                        .filter_map(|&child| {
+                            let name = self.slot(child)?.name.clone();
+                            let stands = self.chat(child)?.stands();
+                            Some(workflow::subagent_report(child, &name, &stands))
+                        })
+                        .collect();
+                    let line =
+                        workflow::SUBAGENT_REPORTS.say(&[("reports", &reports.join("\n\n"))]);
+                    self.go_on(parent, &line);
+                    for child in children {
+                        self.heard(child);
+                    }
+                    told = true;
+                }
+                Hears::Later => {}
+                Hears::Never => self.orphan(parent),
+            }
+        }
+        told
+    }
+
+    /// When the agent of the chat `key` can hear the reports of the
+    /// subagents it opened.
+    fn hears(&mut self, key: u64) -> Hears {
+        if !self.chats.iter().any(|slot| slot.key == key) {
+            return Hears::Never;
+        }
+        let Some(chat) = self.chat(key) else {
+            return Hears::Never;
+        };
+        match chat.conversation().state() {
+            State::Idle => Hears::Now,
+            State::Closed if chat.starts_again() => Hears::Now,
+            State::Closed => Hears::Never,
+            State::Busy | State::Asking | State::Stopping | State::Checking => Hears::Later,
+        }
+    }
+
+    /// Gives the human the chats the agent of the chat `parent` opened,
+    /// as no agent is left to hear of them: one whose report it had not
+    /// heard waits for the human, as a turn of theirs that ended would.
+    fn orphan(&mut self, parent: u64) {
+        let shown = self.shown;
+        let mut news = Vec::new();
+        for slot in self.chats.iter_mut().chain(&mut self.archived) {
+            let Whose::Agent { parent: of, report } = slot.whose else {
+                continue;
+            };
+            if of != parent {
+                continue;
+            }
+            slot.whose = Whose::Human;
+            if report != Report::Pending {
+                continue;
+            }
+            if shown != Some(slot.key) {
+                slot.unread = true;
+            }
+            let said = slot
+                .chat
+                .as_ref()
+                .and_then(|chat| chat.conversation().last_said())
+                .unwrap_or("The turn ended.");
+            news.push(FromDaemon::News {
+                key: slot.key,
+                name: slot.name.clone(),
+                body: said.to_owned(),
+            });
+        }
+        for message in news {
+            self.tell_news(message);
+        }
+    }
+
+    /// Tells the window, the phones, and, while the human is away, their
+    /// phones' notifications, of what a chat came to.
+    fn tell_news(&mut self, message: FromDaemon) {
+        self.push(&message);
+        self.tell_phones(&message);
+        self.tell(message);
     }
 
     /// Opens a chat under the chat `key`, in its project, set up as
@@ -2400,7 +2562,8 @@ impl Daemon {
     }
 
     /// Takes the chat `key` out of the list, to "Archived" at its foot, or
-    /// brings it back. Its agent, if it runs, goes on.
+    /// brings it back. Its agent, if it runs, goes on, but the chats it
+    /// opened are the human's from then on (see [`Self::tell_reports`]).
     fn archive(&mut self, key: u64, archived: bool) {
         let slot = if archived {
             let Some(index) = self.chats.iter().position(|slot| slot.key == key) else {
@@ -2525,8 +2688,10 @@ impl Daemon {
     /// to wait for the human, ends a turn of theirs, or whose agent changed
     /// the plan the human left it to, tells the window, for it to tell the
     /// human unless they look at it. What waits for a chat that is not at
-    /// work hears how it stands, and a sketch the human ends goes on to its
-    /// end. Answers whether a sketch went on, which may change other chats.
+    /// work hears how it stands, an agent hears the reports of the chats it
+    /// opened that it did not wait for (see [`Self::tell_reports`]), and a
+    /// sketch the human ends goes on to its end. Answers whether an agent
+    /// was told or a sketch went on, which may change other chats.
     fn review(&mut self) -> bool {
         let mut news = Vec::new();
         let mut stands = Vec::new();
@@ -2540,6 +2705,9 @@ impl Daemon {
             let conversation = chat.conversation();
             let state = conversation.state();
             let ended = working(slot.state) && !working(state) && slot.whose == Whose::Human;
+            if let Whose::Agent { report, .. } = &mut slot.whose {
+                *report = report.as_it_goes(slot.state, state);
+            }
             if ended && shown != Some(slot.key) {
                 slot.unread = true;
             }
@@ -2605,18 +2773,21 @@ impl Daemon {
             }
         }
         for message in news {
-            self.push(&message);
-            self.tell_phones(&message);
-            self.tell(message);
+            self.tell_news(message);
         }
         for (key, stands) in stands {
+            let mut heard = false;
             for (_, answer) in self.waiting.extract_if(.., |(waited, _)| *waited == key) {
-                answer.send(Ok(stands.clone())).ok();
+                heard |= answer.send(Ok(stands.clone())).is_ok();
+            }
+            if heard {
+                self.heard(key);
             }
         }
+        let told = self.tell_reports();
         // A sketch the human ends is summed up once its turn ends, and
         // ends once that is done.
-        let went_on = !ends.is_empty();
+        let went_on = told || !ends.is_empty();
         for (key, sketch_ends) in ends {
             match sketch_ends {
                 Ends::Waiting => self.sum_up(key),
@@ -3110,7 +3281,7 @@ mod tests {
     /// The ends of a chat's agent the test plays: what it is sent, kept
     /// for the chat to send to, and where it tells what it does.
     struct Played {
-        _commands: UnboundedReceiver<crate::agent::Command>,
+        commands: UnboundedReceiver<crate::agent::Command>,
         events: UnboundedSender<AgentEvent>,
     }
 
@@ -3139,7 +3310,7 @@ mod tests {
             let (commands, commands_got) = unbounded_channel();
             let (events_sent, events) = unbounded_channel();
             self.0.borrow_mut().push(Played {
-                _commands: commands_got,
+                commands: commands_got,
                 events: events_sent,
             });
             Spawned {
@@ -3383,5 +3554,276 @@ mod tests {
         });
 
         assert_eq!(answers, [FromDaemon::Outdated, FromDaemon::Outdated]);
+    }
+
+    /// A chat the human works in, with no turn running, whose agent ran
+    /// the subagents `titles` in the background, each at work on its first
+    /// line, in a daemon whose agents the test plays: the chat's agent
+    /// first, then the subagents'.
+    struct Opener {
+        daemon: Daemon,
+        heard: UnboundedReceiver<Internal>,
+        agents: Rc<PlayedAgents>,
+        key: u64,
+        subagents: Vec<u64>,
+        _home: TempDir,
+    }
+
+    impl Opener {
+        async fn new(titles: &[&str]) -> Self {
+            let home = TempDir::new();
+            storage::keep_on_this_thread(Some(home.join("data")));
+            let agents = Rc::new(PlayedAgents::default());
+            let (mut daemon, mut heard) = played_daemon(&home, &agents);
+            daemon.act(ToDaemon::NewChat { folder: None });
+            pump(&mut daemon, &mut heard).await;
+            let key = daemon.chats.last().unwrap().key;
+            let mut subagents = Vec::new();
+            for title in titles {
+                let (answer, mut opened) = oneshot::channel();
+                daemon.asked(
+                    key,
+                    ChatRequest::OpenChat {
+                        text: "look".to_owned(),
+                        title: Some((*title).to_owned()),
+                        setup: Setup::default(),
+                        model: None,
+                        goal: None,
+                        sketch: None,
+                        answer,
+                    },
+                );
+                subagents.push(opened.try_recv().unwrap().unwrap().number);
+            }
+            let mut opener = Self {
+                daemon,
+                heard,
+                agents,
+                key,
+                subagents,
+                _home: home,
+            };
+            opener.pump().await;
+            opener
+        }
+
+        async fn pump(&mut self) {
+            pump(&mut self.daemon, &mut self.heard).await;
+        }
+
+        /// The agent of the chat, or of its subagent `index`.
+        fn agent(&self, index: Option<usize>) -> std::cell::Ref<'_, Played> {
+            std::cell::Ref::map(self.agents.0.borrow(), |agents| {
+                &agents[index.map_or(0, |index| index + 1)]
+            })
+        }
+
+        /// Has the subagent `index` end its turn, saying `said`.
+        fn ends(&self, index: usize, said: &str) {
+            tells(
+                &self.agent(Some(index)),
+                [
+                    AgentEvent::ReplyText(said.to_owned()),
+                    AgentEvent::TurnEnded(cox_acp::StopReason::EndTurn),
+                ],
+            );
+        }
+
+        /// The lines the chat's agent was sent since last asked.
+        fn prompts(&self) -> Vec<String> {
+            let mut agents = self.agents.0.borrow_mut();
+            let mut prompts = Vec::new();
+            while let Ok(command) = agents[0].commands.try_recv() {
+                if let crate::agent::Command::Prompt(prompt) = command {
+                    prompts.push(prompt.text);
+                }
+            }
+            prompts
+        }
+
+        /// Asks how the subagent `index` stands, as `agent_report` does.
+        fn wait(&mut self, index: usize) -> oneshot::Receiver<Result<Waited, String>> {
+            let (answer, waited) = oneshot::channel();
+            self.daemon
+                .wait_chat(self.key, self.subagents[index], answer);
+            waited
+        }
+    }
+
+    /// What the chat's agent is told of a subagent `number`, "Look", that
+    /// ended its turn saying "Found it.", per the requirement.
+    fn found_it(number: u64) -> String {
+        format!("Subagent {number}, \"Look\", ended its turn. It last said:\n\nFound it.")
+    }
+
+    #[test]
+    fn a_subagent_that_ends_while_its_opener_waits_starts_a_turn_of_the_opener_on_its_report() {
+        on_daemon(async {
+            let mut opener = Opener::new(&["Look"]).await;
+            opener.prompts();
+
+            opener.ends(0, "Found it.");
+            opener.pump().await;
+
+            let prompts = opener.prompts();
+            assert_eq!(prompts.len(), 1, "{prompts:?}");
+            let number = opener.subagents[0];
+            assert!(prompts[0].starts_with(&found_it(number)), "{prompts:?}");
+            assert!(prompts[0].contains("agent_report"), "{prompts:?}");
+            assert_eq!(
+                opener
+                    .daemon
+                    .chat(opener.key)
+                    .unwrap()
+                    .conversation()
+                    .state(),
+                State::Busy
+            );
+            // agent_report still answers it, and nothing is told twice.
+            let waited = opener.wait(0).await.unwrap().unwrap();
+            assert_eq!(waited.said.as_deref(), Some("Found it."));
+            tells(
+                &opener.agent(None),
+                [AgentEvent::TurnEnded(cox_acp::StopReason::EndTurn)],
+            );
+            opener.pump().await;
+            assert_eq!(opener.prompts(), Vec::<String>::new());
+        });
+    }
+
+    #[test]
+    fn an_opener_at_work_hears_a_subagent_s_report_once_its_turn_ends() {
+        on_daemon(async {
+            let mut opener = Opener::new(&["Look"]).await;
+            submit(&mut opener.daemon, opener.key);
+            opener.pump().await;
+            assert_eq!(opener.prompts(), ["work"]);
+
+            opener.ends(0, "Found it.");
+            opener.pump().await;
+            assert_eq!(opener.prompts(), Vec::<String>::new(), "not into its turn");
+
+            tells(
+                &opener.agent(None),
+                [AgentEvent::TurnEnded(cox_acp::StopReason::EndTurn)],
+            );
+            opener.pump().await;
+            let prompts = opener.prompts();
+            assert_eq!(prompts.len(), 1, "{prompts:?}");
+            assert!(
+                prompts[0].starts_with(&found_it(opener.subagents[0])),
+                "{prompts:?}"
+            );
+        });
+    }
+
+    #[test]
+    fn subagents_that_end_together_are_told_in_one_line() {
+        on_daemon(async {
+            let mut opener = Opener::new(&["Look", "Fix"]).await;
+            opener.prompts();
+
+            opener.ends(0, "Found it.");
+            opener.ends(1, "Fixed it.");
+            opener.pump().await;
+
+            let prompts = opener.prompts();
+            assert_eq!(prompts.len(), 1, "{prompts:?}");
+            let fixed = format!(
+                "Subagent {}, \"Fix\", ended its turn. It last said:\n\nFixed it.",
+                opener.subagents[1]
+            );
+            assert!(
+                prompts[0].starts_with(&format!("{}\n\n{fixed}", found_it(opener.subagents[0]))),
+                "{prompts:?}"
+            );
+        });
+    }
+
+    #[test]
+    fn a_subagent_s_report_heard_with_agent_report_is_not_told() {
+        on_daemon(async {
+            let mut opener = Opener::new(&["Look"]).await;
+            opener.prompts();
+            let waited = opener.wait(0);
+
+            opener.ends(0, "Found it.");
+            opener.pump().await;
+
+            assert_eq!(
+                waited.await.unwrap().unwrap().said.as_deref(),
+                Some("Found it.")
+            );
+            assert_eq!(opener.prompts(), Vec::<String>::new());
+            // Asked again, it answers again.
+            let again = opener.wait(0).await.unwrap().unwrap();
+            assert_eq!(again.said.as_deref(), Some("Found it."));
+        });
+    }
+
+    #[test]
+    fn a_subagent_that_asks_the_human_is_told_as_asking() {
+        on_daemon(async {
+            let mut opener = Opener::new(&["Look"]).await;
+            opener.prompts();
+
+            tells(
+                &opener.agent(Some(0)),
+                [AgentEvent::PermissionRequest {
+                    id: "rm".to_owned(),
+                    title: Some("rm -rf build".to_owned()),
+                    content: None,
+                    options: vec!["Allow".to_owned(), "Reject".to_owned()],
+                }],
+            );
+            opener.pump().await;
+
+            let prompts = opener.prompts();
+            assert_eq!(prompts.len(), 1, "{prompts:?}");
+            let number = opener.subagents[0];
+            assert!(
+                prompts[0].starts_with(&format!(
+                    "Subagent {number}, \"Look\", waits for the human to answer: rm -rf build."
+                )),
+                "{prompts:?}"
+            );
+        });
+    }
+
+    #[test]
+    fn archiving_the_opener_leaves_a_subagent_s_unheard_report_unread_for_the_human() {
+        on_daemon(async {
+            let mut opener = Opener::new(&["Look", "Fix"]).await;
+            submit(&mut opener.daemon, opener.key);
+            opener.pump().await;
+            opener.ends(0, "Found it.");
+            opener.pump().await;
+            let unread = |opener: &Opener| -> Vec<bool> {
+                opener
+                    .subagents
+                    .iter()
+                    .map(|&key| opener.daemon.slot(key).unwrap().unread)
+                    .collect()
+            };
+            assert_eq!(unread(&opener), [false, false], "the agent's to hear");
+
+            opener.daemon.act(ToDaemon::Archive {
+                key: opener.key,
+                archived: true,
+            });
+            opener.pump().await;
+            assert_eq!(unread(&opener), [true, false], "the human's now");
+
+            // The one at work waits for the human once it ends, and the
+            // archived chat's agent hears of neither.
+            opener.ends(1, "Fixed it.");
+            tells(
+                &opener.agent(None),
+                [AgentEvent::TurnEnded(cox_acp::StopReason::EndTurn)],
+            );
+            opener.pump().await;
+            assert_eq!(unread(&opener), [true, true]);
+            assert_eq!(opener.prompts(), ["work"]);
+        });
     }
 }

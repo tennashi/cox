@@ -31,8 +31,9 @@ pub(super) fn agent_tool() -> Value {
             subagent, a Task or an Agent, with the same arguments. The human sees the \
             subagent's chat, its conversation and its stage, and can step in. Without \
             `run_in_background`, it waits for the subagent to end its turn and answers its \
-            report; with it, it answers at once the number the chat goes by, and \
-            agent_report, giving that number, waits for the report. The chat works in the \
+            report; with it, it answers at once the number the chat goes by, and Cox tells \
+            you the report unasked, in a line of its own once your turn is not running, \
+            unless agent_report, giving that number, waited for it first. The chat works in the \
             same folder as this one, so two that change files at once may collide, unless \
             `sketch` gives it a folder of its own. Beside the Agent tool's arguments, \
             Cox's own say how the subagent is set up: `context` is told to it after the \
@@ -142,8 +143,10 @@ pub(super) fn agent_report_tool() -> Value {
         "name": AGENT_REPORT,
         "description": "Waits for a subagent you ran with agent, or a sketch you opened, to \
             end its turn, or to come to ask the human, and answers what it last said, its \
-            report, or what it asks. One that is not at work answers at once. Use it for a \
-            subagent you ran in the background, to hear how the work went before you go on.",
+            report, or what it asks. One that is not at work answers at once. Cox tells you \
+            the report of a subagent you ran in the background unasked, once your turn is not \
+            running: use this to wait for one before you go on, or to read a report Cox cut \
+            short in full.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -370,8 +373,9 @@ pub(super) async fn agent(
     let notes = notes(&opened, sketch);
     if background {
         let mut told = format!(
-            "The subagent works in {}, chat {number}, under this one. Get its report with \
-             agent_report, giving {number}, when you need it.",
+            "The subagent works in {}, chat {number}, under this one. Cox tells you its \
+             report once it ends its turn and your turn is not running; to wait for it \
+             sooner, call agent_report, giving {number}.",
             opened.name
         );
         if let Some(model) = &model {
@@ -690,9 +694,10 @@ mod tests {
         assert!(!error, "{told}");
         assert_eq!(
             told,
-            "The subagent works in Review the parser, chat 4, under this one. Get its report \
-             with agent_report, giving 4, when you need it. It runs with the model `haiku` \
-             when its agent offers it, and agent_report says when it does not."
+            "The subagent works in Review the parser, chat 4, under this one. Cox tells you \
+             its report once it ends its turn and your turn is not running; to wait for it \
+             sooner, call agent_report, giving 4. It runs with the model `haiku` when its \
+             agent offers it, and agent_report says when it does not."
         );
         drop(chats);
         let heard = window.await.unwrap();

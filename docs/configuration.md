@@ -269,6 +269,9 @@ a good starting point to copy.
 | `wiki/save.md` | What "Save to wiki" asks the agent. | [`wiki/save.md`](../crates/coxd/src/workflow/wiki/save.md) |
 | `close/merge.md` | What "Merge" asks the agent. | [`close/merge.md`](../crates/coxd/src/workflow/close/merge.md) |
 | `icon/generate.md` | What "Generate", under the icon on a project's card, asks an agent. `{name}` stands for the project's name. | [`icon/generate.md`](../crates/coxd/src/workflow/icon/generate.md) |
+| `subagent/reports.md` | What an agent that ran subagents with `agent` in the background is told, unasked, of those that ended their turn or came to ask you while it did not wait for them with `agent_report`: in one line, once its own turn is not running. `{reports}` stands for their reports, each as `subagent/ended.md` or `subagent/asks.md` says. | [`subagent/reports.md`](../crates/coxd/src/workflow/subagent/reports.md) |
+| `subagent/ended.md` | A subagent's report in `subagent/reports.md`, once it ended its turn. `{number}` and `{name}` stand for its chat's number and name, `{said}` for what it last said, cut to 2000 characters. | [`subagent/ended.md`](../crates/coxd/src/workflow/subagent/ended.md) |
+| `subagent/asks.md` | A subagent's report in `subagent/reports.md`, as it waits for you to answer. `{asking}` stands for what it asks, beside what `subagent/ended.md` takes. | [`subagent/asks.md`](../crates/coxd/src/workflow/subagent/asks.md) |
 | `triggers/*.md` | Triggers that run in every project. See [Triggers](#triggers). | none |
 
 ## Triggers

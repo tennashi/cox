@@ -4054,11 +4054,15 @@ async fn a_chat_an_agent_opens_waits_for_the_human_only_when_it_asks_them(cx: &m
 
     assert!(!unread(cx, &workspace, ended), "not the human's to read");
     let told = told();
+    // The opener's agent goes on with their reports, in turns of the
+    // human's chat, which the human hears of as of any turn there.
     let notices: Vec<_> = told
         .iter()
         .filter_map(|told| match told {
-            Told::Notice(key, _, body) => Some((*key, body.as_str())),
-            Told::Badge(_) => None,
+            Told::Notice(key, _, body) if [ended, asking].contains(key) => {
+                Some((*key, body.as_str()))
+            }
+            Told::Notice(..) | Told::Badge(_) => None,
         })
         .collect();
     assert_eq!(
@@ -4066,7 +4070,6 @@ async fn a_chat_an_agent_opens_waits_for_the_human_only_when_it_asks_them(cx: &m
         [(asking, "Asks you: Edit x.txt")],
         "the human hears of what it asks them, and not of the turn that ended"
     );
-    assert_eq!(told.last(), Some(&Told::Badge(1)), "{told:?}");
 }
 
 #[gpui::test]
@@ -4447,6 +4450,10 @@ async fn an_ended_sketch_goes_on_in_the_project(cx: &mut TestAppContext) {
         let chat = workspace.chats(0).nth(2).unwrap();
         assert_eq!(chat.setup().unwrap().folder.as_ref(), Some(&folder));
     });
+    wait_for_turn(cx, &opened).await;
+    let agent = Arc::clone(&agents.borrow()[1]);
+    let sketch = view_at(cx, &workspace, 1);
+    wait_for_report(cx, &agent, &sketch).await;
 
     // Discarded while its turn goes on, the sketch waits for the turn to
     // end, and for its agent to sum it up.
@@ -4454,7 +4461,6 @@ async fn an_ended_sketch_goes_on_in_the_project(cx: &mut TestAppContext) {
     let sketch = shown(cx, &workspace);
     cx.simulate_input("slow");
     cx.simulate_keystrokes("enter");
-    let agent = Arc::clone(&agents.borrow()[1]);
     settle_until(cx, |_| agent.did(&Event::Held)).await;
     workspace.update_in(cx, |workspace, window, cx| {
         workspace.end_sketch_as(1, own_ending("Discard sketch"), window, cx);
@@ -4523,6 +4529,19 @@ async fn an_ended_sketch_goes_on_in_the_project(cx: &mut TestAppContext) {
         workspace.chats(0).nth(1).unwrap().is_open()
     });
     assert!(open);
+}
+
+/// Waits until `agent`, of the chat `view`, has heard the report of a
+/// subagent it ran, in a turn of its own, and that turn ended.
+async fn wait_for_report(cx: &mut VisualTestContext, agent: &FakeAgent, view: &Entity<ChatView>) {
+    settle_until(cx, |_| {
+        agent
+            .prompts()
+            .iter()
+            .any(|prompt| prompt.starts_with("Subagent"))
+    })
+    .await;
+    wait_for_turn(cx, view).await;
 }
 
 /// The way to end a sketch of Cox's own workflow named `name`.
@@ -5091,6 +5110,45 @@ async fn a_subagent_goes_by_its_title_and_runs_with_the_model_asked_as_offered(
         entries(cx, &view).contains(&Entry::Note(unoffered.to_owned())),
         "the human reads it too"
     );
+}
+
+#[gpui::test]
+async fn a_subagent_run_in_the_background_reports_to_its_opener_unasked(cx: &mut TestAppContext) {
+    let home = scratch::folder("subagent-report-home");
+    let store = kept_store("chats-subagent-report");
+    let (agents, asks, workspace, cx) = open_window_asking(cx, home, store, Resumes::Resume);
+    cx.simulate_keystrokes("secondary-n");
+    say(cx, &workspace, "hello").await;
+    let parent = shown(cx, &workspace);
+    let (answer, opened) = tokio::sync::oneshot::channel();
+    asks.borrow()[0]
+        .send(ChatRequest::OpenChat {
+            text: "go".to_owned(),
+            title: Some("Look".to_owned()),
+            setup: Setup::default(),
+            model: None,
+            goal: None,
+            sketch: None,
+            answer,
+        })
+        .unwrap();
+    let number = opened.await.unwrap().unwrap().number;
+
+    let report = format!("Subagent {number}, \"Look\", ended its turn. It last said:\n\necho: go");
+    let told = |entries: &[Entry]| {
+        entries
+            .iter()
+            .any(|entry| matches!(entry, Entry::Cox(line) if line.starts_with(&report)))
+    };
+    let (_waiting, timeout) = given_up();
+    tokio::select! {
+        () = cx.condition(&parent, |view, _| told(view.conversation().entries())) => {}
+        _ = timeout => panic!("the parent never heard: {:?}", entries(cx, &parent)),
+    }
+    settle_until(cx, |_| agents.borrow()[0].prompts().len() > 1).await;
+    let prompts = agents.borrow()[0].prompts();
+    assert_eq!(prompts.len(), 2, "{prompts:?}");
+    assert!(prompts[1].starts_with(&report), "{prompts:?}");
 }
 
 #[gpui::test]
