@@ -69,6 +69,56 @@ jobs:
         run: |
           codesign --verify --deep --strict target/release/Cox.app
           codesign --display --verbose=2 target/release/Cox.app 2>&1 | grep -x 'Authority=Cox'
+      # As Homebrew installs it: what an installed Cox does differs from a
+      # build's, as where it keeps its data, and its start at login.
+      - name: Install the app in Applications and open it
+        run: |
+          ditto target/release/Cox.app /Applications/Cox.app
+          /Applications/Cox.app/Contents/MacOS/Cox --behind > "$RUNNER_TEMP/cox.log" 2>&1 &
+          data="$HOME/Library/Application Support/Cox"
+          for _ in $(seq 120); do
+            [ -S "$data/run/inspect.sock" ] && break
+            sleep 1
+          done
+          if [ ! -S "$data/run/inspect.sock" ]; then
+            echo "::error::the installed Cox did not open in $data in 2 minutes"
+            cat "$RUNNER_TEMP/cox.log"
+            exit 1
+          fi
+      - name: Check the installed Cox
+        run: |
+          cox=/Applications/Cox.app/Contents/MacOS/Cox
+          data="$HOME/Library/Application Support/Cox"
+          "$cox" --inspect state | tee "$RUNNER_TEMP/state.txt"
+          grep -qxF "It keeps what lasts in $data" "$RUNNER_TEMP/state.txt" || {
+            echo "::error::the installed Cox keeps its data elsewhere than $data"
+            exit 1
+          }
+          sleep 5
+          if ! grep -h 'coxd starts at login from now on' "$data"/logs/*.jsonl; then
+            echo "::error::the installed Cox did not have coxd start at login"
+            grep -h 'login' "$data"/logs/*.jsonl || true
+            exit 1
+          fi
+          launchctl print "gui/$(id -u)/com.github.tennashi.cox.coxd" | head -n 20 || true
+          echo "coxd processes: $(pgrep -f 'Cox --daemon' | wc -l)"
+      - name: Take a screenshot of the installed Cox
+        continue-on-error: true
+        run: /Applications/Cox.app/Contents/MacOS/Cox --inspect screenshot "$RUNNER_TEMP/installed.png"
+      - name: Keep what the installed Cox showed and said
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: installed-cox
+          path: |
+            ${{ runner.temp }}/installed.png
+            ${{ runner.temp }}/state.txt
+            ${{ runner.temp }}/cox.log
+            ~/Library/Application Support/Cox/logs/
+          if-no-files-found: ignore
+      - name: Close the installed Cox
+        if: always()
+        run: pkill -f /Applications/Cox.app/Contents/MacOS/Cox || true
       - name: Zip the app
         run: |
           ditto -c -k --keepParent target/release/Cox.app "$RUNNER_TEMP/$ZIP"
