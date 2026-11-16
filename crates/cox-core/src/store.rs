@@ -223,6 +223,16 @@ pub struct KeptChat {
     pub folder: Option<PathBuf>,
 }
 
+/// The plan a chat's agent sent last, as [`Store::plans`] reads it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct KeptPlan {
+    pub chat: ChatId,
+    pub steps: Vec<Step>,
+    /// When the last entry of the chat was written, in milliseconds
+    /// since the epoch: about when the agent last did anything.
+    pub at: i64,
+}
+
 /// A question an agent asked in a chat, which the human answered by
 /// choosing or in their own words, as [`Store::answered`] reads it.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -992,30 +1002,33 @@ impl Store {
         Ok(())
     }
 
-    /// The plan each chat's agent sent last, by the chat, for the chats
-    /// whose agent sent one.
+    /// The plan each chat's agent sent last, for the chats whose agent
+    /// sent one.
     ///
     /// # Errors
     ///
     /// When the database cannot be read.
-    pub fn plans(&self) -> anyhow::Result<Vec<(ChatId, Vec<Step>)>> {
+    pub fn plans(&self) -> anyhow::Result<Vec<KeptPlan>> {
         // The WHERE is the plans index's, word for word, for SQLite to
         // read that index rather than every entry.
         let mut statement = self.connection.prepare(
-            r#"SELECT entries.chat, entries.entry FROM entries JOIN
+            r#"SELECT entries.chat, entries.entry,
+             (SELECT at FROM entries AS later WHERE later.chat = entries.chat
+              ORDER BY later.number DESC LIMIT 1)
+             FROM entries JOIN
              (SELECT chat, max(number) AS number FROM entries
               WHERE entry LIKE '{"plan":%' GROUP BY chat) AS last
              ON entries.chat = last.chat AND entries.number = last.number
              ORDER BY entries.chat"#,
         )?;
         let rows = statement.query_map([], |row| {
-            Ok((ChatId(row.get(0)?), row.get::<_, String>(1)?))
+            Ok((ChatId(row.get(0)?), row.get::<_, String>(1)?, row.get(2)?))
         })?;
         let mut plans = Vec::new();
         for row in rows {
-            let (chat, entry) = row?;
+            let (chat, entry, at) = row?;
             if let Ok(Entry::Plan(steps)) = serde_json::from_str(&entry) {
-                plans.push((chat, steps));
+                plans.push(KeptPlan { chat, steps, at });
             }
         }
         Ok(plans)
@@ -1714,7 +1727,9 @@ mod tests {
             .keep_entry(quiet, 0, &Entry::Human("hi".to_owned()))
             .unwrap();
 
-        assert_eq!(store.plans().unwrap(), [(planned, last)]);
+        let plans = store.plans().unwrap();
+        assert_eq!(plans.len(), 1);
+        assert_eq!((plans[0].chat, &plans[0].steps), (planned, &last));
         let plan: String = store
             .connection
             .query_row(

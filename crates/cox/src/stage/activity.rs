@@ -30,7 +30,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use cox_core::entry::{Entry, QuestionAnswer, Step, StepState};
-use cox_core::store::{ChatId, KeptAnswer, Store};
+use cox_core::store::{ChatId, KeptAnswer, KeptPlan, Store};
 use jiff::tz::TimeZone;
 use serde_json::{Value, json};
 
@@ -40,6 +40,9 @@ use crate::stage::commands;
 const HAPPENED: usize = 50;
 /// How many of what was decided the page is told of, the last first.
 const DECIDED: usize = 20;
+/// How long, in milliseconds, a chat whose plan is done shows it after
+/// its agent last did anything, for the human to see what came of it.
+const DONE_SHOWS: i64 = 30 * 60 * 1000;
 /// How many times what was decided is read again after a chat stopped
 /// asking: coxd may tell the window so before it keeps the answer.
 const READ_AGAIN: u8 = 2;
@@ -297,7 +300,10 @@ pub fn told(root: &Path, wiki: &Path, raw: &Path, triggers: &Value) -> Value {
         &now(),
         root,
         &decided(),
-        &plans(),
+        &Plans {
+            kept: &plans(),
+            at: jiff::Timestamp::now().as_millisecond(),
+        },
         &commands::now,
         &Places {
             wiki,
@@ -308,7 +314,7 @@ pub fn told(root: &Path, wiki: &Path, raw: &Path, triggers: &Value) -> Value {
 }
 
 /// The plan each chat's agent sent last, as coxd keeps it, by the chat.
-fn plans() -> Vec<(ChatId, Vec<Step>)> {
+fn plans() -> Vec<KeptPlan> {
     let plans = coxd::storage::path(coxd::storage::Kept::Chats)
         .ok_or_else(|| anyhow::anyhow!("no place keeps the chats"))
         .and_then(|path| Store::read(&path)?.plans());
@@ -355,7 +361,8 @@ fn alike(one: &str, other: &str) -> f64 {
             at += 1;
         }
     }
-    f64::from(2 * both) / (one.len() + other.len()) as f64
+    let all = u32::try_from(one.len() + other.len()).unwrap_or(u32::MAX);
+    f64::from(2 * both) / f64::from(all)
 }
 
 /// The step of `plan` each of `subagents` works on, by its place in the
@@ -372,6 +379,13 @@ fn linked(plan: &[Step], subagents: &[&Chat]) -> Vec<Option<usize>> {
                 .map(|(at, _)| at)
         })
         .collect()
+}
+
+/// The plans each chat's agent sent last, and when, in milliseconds
+/// since the epoch, they are told.
+struct Plans<'a> {
+    kept: &'a [KeptPlan],
+    at: i64,
 }
 
 /// Where what happened in a folder is read from: the human's wiki, their
@@ -422,74 +436,36 @@ fn waiting_in(told: &Told, root: &Path, now: &dyn Fn(u64) -> Option<commands::No
 }
 
 /// The chats of the folder `root`, or of every folder in the home, at
-/// work, or with a plan not done, or done while the human did not look
-/// yet, as JSON: each with what it does now, as `now` says, and the steps
-/// of its plan, of `plans`, each with the subagents' chats that work on
-/// it, and after it the subagents at work it opened that no step has.
+/// work, or with a plan not done, or done not [`DONE_SHOWS`] ago, or
+/// while it asks the human or they did not look, as JSON: each with what
+/// it does now, as `now` says, and the steps of its plan, of `plans`,
+/// each with the subagents' chats that work on it, and after it its
+/// other subagents, all of them under a plan, those at work otherwise.
 fn planned(
     told: &Told,
     root: &Path,
-    plans: &[(ChatId, Vec<Step>)],
+    plans: &Plans<'_>,
     now: &dyn Fn(u64) -> Option<commands::Now>,
 ) -> Vec<Value> {
-    let plan_of = |chat: &Chat| -> &[Step] {
+    let plan_of = |chat: &Chat| {
         chat.kept
-            .and_then(|kept| plans.iter().find(|(id, _)| *id == kept))
-            .map_or(&[], |(_, plan)| plan.as_slice())
+            .and_then(|kept| plans.kept.iter().find(|plan| plan.chat == kept))
     };
     let shown = |chat: &Chat| {
-        let plan = plan_of(chat);
-        let done = plan.iter().all(|step| step.state == StepState::Completed);
-        chat.working || !plan.is_empty() && (!done || chat.asking || chat.unread)
+        chat.working
+            || plan_of(chat).is_some_and(|plan| {
+                !plan.steps.is_empty()
+                    && (plan.steps.iter().any(|step| step.state != StepState::Completed)
+                        || chat.asking
+                        || chat.unread
+                        || plans.at - plan.at < DONE_SHOWS)
+            })
     };
     let listed_chats: Vec<&Chat> = told
         .chats
         .iter()
         .filter(|chat| of_folder(told, chat, root) && shown(chat))
         .collect();
-    let steps_of = |chat: &Chat| -> (Vec<Value>, Vec<u64>) {
-        let plan = plan_of(chat);
-        let subagents: Vec<&Chat> = told
-            .chats
-            .iter()
-            .filter(|other| other.parent == Some(chat.key))
-            .collect();
-        let links = linked(plan, &subagents);
-        let stepped = subagents
-            .iter()
-            .zip(&links)
-            .filter(|(_, link)| link.is_some())
-            .map(|(subagent, _)| subagent.key)
-            .collect();
-        let steps = plan
-            .iter()
-            .enumerate()
-            .map(|(at, step)| {
-                let chats: Vec<Value> = subagents
-                    .iter()
-                    .zip(&links)
-                    .filter(|(_, link)| **link == Some(at))
-                    .map(|(subagent, _)| {
-                        json!({
-                            "key": subagent.key,
-                            "name": subagent.name,
-                            "working": subagent.working,
-                            "said": subagent
-                                .working
-                                .then(|| now(subagent.key).and_then(|now| now.said))
-                                .flatten(),
-                        })
-                    })
-                    .collect();
-                json!({
-                    "text": step.text,
-                    "state": step.state,
-                    "chats": chats,
-                })
-            })
-            .collect();
-        (steps, stepped)
-    };
     let mut listed = Vec::new();
     let mut under: Vec<(&Chat, usize)> = listed_chats
         .iter()
@@ -503,7 +479,13 @@ fn planned(
         .collect();
     while let Some((chat, depth)) = under.pop() {
         let does = now(chat.key).unwrap_or_default();
-        let (plan, stepped) = steps_of(chat);
+        let steps = plan_of(chat).map_or(&[][..], |plan| plan.steps.as_slice());
+        let subagents: Vec<&Chat> = told
+            .chats
+            .iter()
+            .filter(|other| other.parent == Some(chat.key))
+            .collect();
+        let links = linked(steps, &subagents);
         listed.push(json!({
             "key": chat.key,
             "name": chat.name,
@@ -516,6 +498,8 @@ fn planned(
                 Some("asks you")
             } else if chat.unread {
                 Some("finished a turn")
+            } else if depth > 0 {
+                Some("finished")
             } else {
                 Some("waits")
             },
@@ -533,17 +517,53 @@ fn planned(
                     })
                 })
                 .collect::<Vec<_>>(),
-            "plan": plan,
+            "plan": steps_of(steps, &subagents, &links, now),
         }));
         under.extend(
-            listed_chats
+            subagents
                 .iter()
+                .zip(&links)
                 .rev()
-                .filter(|other| other.parent == Some(chat.key) && !stepped.contains(&other.key))
-                .map(|other| (*other, depth + 1)),
+                .filter(|(other, link)| {
+                    link.is_none() && (!steps.is_empty() || listed_chats.contains(other))
+                })
+                .map(|(other, _)| (*other, depth + 1)),
         );
     }
     listed
+}
+
+/// The steps of a plan, as JSON, each with those of `subagents` that
+/// `links` link to it, and what they do now, as `now` says.
+fn steps_of(
+    steps: &[Step],
+    subagents: &[&Chat],
+    links: &[Option<usize>],
+    now: &dyn Fn(u64) -> Option<commands::Now>,
+) -> Vec<Value> {
+    steps
+        .iter()
+        .enumerate()
+        .map(|(at, step)| {
+            let chats: Vec<Value> = subagents
+                .iter()
+                .zip(links)
+                .filter(|(_, link)| **link == Some(at))
+                .map(|(chat, _)| {
+                    json!({
+                        "key": chat.key,
+                        "name": chat.name,
+                        "working": chat.working,
+                        "said": chat
+                            .working
+                            .then(|| now(chat.key).and_then(|now| now.said))
+                            .flatten(),
+                    })
+                })
+                .collect();
+            json!({ "text": step.text, "state": step.state, "chats": chats })
+        })
+        .collect()
 }
 
 /// What was decided in the folder `root`, or in any in the home, the
@@ -584,7 +604,7 @@ fn told_of(
     told: &Told,
     root: &Path,
     decided: &[Decided],
-    plans: &[(ChatId, Vec<Step>)],
+    plans: &Plans<'_>,
     now: &dyn Fn(u64) -> Option<commands::Now>,
     places: &Places<'_>,
 ) -> Value {
@@ -758,7 +778,7 @@ mod tests {
             raw,
             triggers,
         };
-        told_of(told, root, &[], &[], &|_| None, &places)
+        told_of(told, root, &[], &Plans { kept: &[], at: 0 }, &|_| None, &places)
     }
 
     /// What goes on in the folder `root`, where nothing happened.
@@ -937,7 +957,7 @@ mod tests {
             triggers: &json!({}),
         };
 
-        let json = told_of(&told, &root, &decisions, &[], &now, &places);
+        let json = told_of(&told, &root, &decisions, &Plans { kept: &[], at: 0 }, &now, &places);
 
         assert_eq!(json["waiting"][0]["asks"], "Which way?");
         let working: Vec<(u64, u64)> = json["plans"]
@@ -972,7 +992,7 @@ mod tests {
         assert_eq!(decided[1]["chat"], "kept 6");
 
         // The home tells of every folder.
-        let json = told_of(&told, &home, &decisions, &[], &now, &places);
+        let json = told_of(&told, &home, &decisions, &Plans { kept: &[], at: 0 }, &now, &places);
         assert_eq!(json["plans"].as_array().unwrap().len(), 4);
         assert_eq!(json["busy"], 4);
         let questions: Vec<&str> = json["decided"]
@@ -986,7 +1006,7 @@ mod tests {
     }
 
     #[test]
-    fn a_chat_shows_its_plan_while_at_work_not_done_or_done_unseen() {
+    fn a_chat_shows_its_plan_while_at_work_not_done_or_done_lately() {
         let root = TempDir::new();
         let kept = |number: u64| -> ChatId { serde_json::from_value(json!(number)).unwrap() };
         let listed = |key: u64, name: &str, working: bool, parent: Option<u64>| {
@@ -1001,7 +1021,6 @@ mod tests {
             text: text.to_owned(),
             state,
         };
-        let done = || vec![step("Ship it", StepState::Completed)];
         let mut unseen = listed(6, "unseen", false, None);
         unseen.unread = true;
         let mut asking = listed(8, "asking", false, None);
@@ -1012,28 +1031,43 @@ mod tests {
                 listed(3, "Add the --shout flag", true, Some(2)),
                 listed(4, "Look around", true, Some(2)),
                 listed(9, "README docs update", false, Some(2)),
+                listed(11, "Check CI", false, Some(2)),
                 listed(5, "waits", false, None),
                 unseen,
-                listed(7, "seen", false, None),
+                listed(7, "done long ago", false, None),
                 asking,
+                listed(10, "done lately", false, None),
             ],
             projects: Vec::new(),
             home: root.join("home"),
         };
-        let plans = [
-            (
-                kept(2),
+        let at = 100 * DONE_SHOWS;
+        let plan = |chat: u64, steps: Vec<Step>, ago: i64| KeptPlan {
+            chat: kept(chat),
+            steps,
+            at: at - ago,
+        };
+        let done = || vec![step("Ship it", StepState::Completed)];
+        let kept_plans = [
+            plan(
+                2,
                 vec![
                     step("Add a --shout flag with tests", StepState::InProgress),
                     step("Update the README", StepState::Completed),
                     step("Commit", StepState::Pending),
                 ],
+                0,
             ),
-            (kept(5), vec![step("Later", StepState::Pending)]),
-            (kept(6), done()),
-            (kept(7), done()),
-            (kept(8), done()),
+            plan(5, vec![step("Later", StepState::Pending)], DONE_SHOWS * 2),
+            plan(6, done(), DONE_SHOWS * 2),
+            plan(7, done(), DONE_SHOWS * 2),
+            plan(8, done(), DONE_SHOWS * 2),
+            plan(10, done(), DONE_SHOWS / 2),
         ];
+        let plans = Plans {
+            kept: &kept_plans,
+            at,
+        };
         let now = |key: u64| {
             Some(commands::Now {
                 said: Some(format!("step of {key}")),
@@ -1056,8 +1090,12 @@ mod tests {
             .map(|chat| (chat["key"].as_u64().unwrap(), chat["depth"].as_u64().unwrap()))
             .collect();
         // A subagent whose name reads as a step shows under the step, not
-        // again under the chat; one that reads as none shows under it.
-        assert_eq!(rows, [(2, 0), (4, 1), (5, 0), (6, 0), (8, 0)]);
+        // again under the chat; the others show under the chat, done or
+        // not, while it has a plan.
+        assert_eq!(
+            rows,
+            [(2, 0), (4, 1), (11, 1), (5, 0), (6, 0), (8, 0), (10, 0)]
+        );
         let plan = &json["plans"][0]["plan"];
         assert_eq!(plan[0]["state"], "in_progress");
         assert_eq!(
@@ -1069,7 +1107,8 @@ mod tests {
             json!([{ "key": 9, "name": "README docs update", "working": false, "said": null }])
         );
         assert_eq!(plan[2]["chats"], json!([]));
-        assert_eq!(json["plans"][2]["working"], false);
+        assert_eq!(json["plans"][2]["waits"], "finished");
+        assert_eq!(json["plans"][3]["waits"], "waits");
         // Only the chats at work count as at work.
         assert_eq!(json["busy"], 3);
     }
