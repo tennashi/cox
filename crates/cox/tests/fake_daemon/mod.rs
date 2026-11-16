@@ -159,6 +159,7 @@ impl Spawns for FakeSpawns {
         _: Option<u16>,
         _: bool,
         subagents: Subagents,
+        _: bool,
     ) -> Spawned {
         let fakes = &self.0;
         let made = fakes.next.borrow_mut().pop_front();

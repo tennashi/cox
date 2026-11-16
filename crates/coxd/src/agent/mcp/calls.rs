@@ -791,12 +791,14 @@ fn propose_project_tool() -> Value {
     })
 }
 
-/// Calls the tool `params` names, and answers what it did, or the error
-/// the agent made in calling it.
+/// Calls the tool `params` names, for a chat that hands its work off, or
+/// not, as `hands_off` says, and answers what it did, or the error the
+/// agent made in calling it.
 pub(super) async fn call(
     params: &Value,
     cwd: &Path,
     only: Option<&[String]>,
+    hands_off: bool,
     requests: &UnboundedSender<ToolRequest>,
     chats: &UnboundedSender<ChatRequest>,
 ) -> Answered {
@@ -826,9 +828,13 @@ pub(super) async fn call(
         SHOW_MAP => show_map(arguments, cwd, requests),
         RUN_COMMAND => run_command(arguments, cwd, requests).await,
         subagent::AGENT => {
-            subagent::agent(arguments, &subagent::Kinds::of_claude(cwd), chats).await
+            let kinds = subagent::Kinds::of_claude(cwd);
+            subagent::agent(arguments, &kinds, hands_off, chats).await
         }
-        subagent::AGENT_REPORT => subagent::agent_report(arguments, chats).await,
+        subagent::AGENT_REPORT => {
+            let most = hands_off.then_some(subagent::HANDS_OFF_WAIT);
+            subagent::agent_report(arguments, most, chats).await
+        }
         READ_CHAT => read_chat(arguments, chats).await,
         PROPOSE_GOAL => propose_goal(arguments, chats).await,
         PROPOSE_NAME => propose_name(arguments, chats).await,
@@ -2063,7 +2069,14 @@ mod tests {
         tokio::runtime::Builder::new_current_thread()
             .build()
             .unwrap()
-            .block_on(call(&params, cwd, None, requests, &unbounded_channel().0))
+            .block_on(call(
+                &params,
+                cwd,
+                None,
+                false,
+                requests,
+                &unbounded_channel().0,
+            ))
             .unwrap()
     }
 
@@ -2327,7 +2340,7 @@ mod tests {
             "from": "project",
             "what": "A warmer greeting.",
         } });
-        let answered = call(&params, Path::new("/work"), None, &sent, &chats)
+        let answered = call(&params, Path::new("/work"), None, false, &sent, &chats)
             .await
             .unwrap();
         assert_eq!(answered["isError"], false);
@@ -2355,7 +2368,7 @@ mod tests {
             json!({ "from": "empty", "what": " " }),
         ] {
             let params = json!({ "name": START_SKETCH, "arguments": arguments });
-            let answered = call(&params, Path::new("/"), None, &sent, &chats)
+            let answered = call(&params, Path::new("/"), None, false, &sent, &chats)
                 .await
                 .unwrap();
             assert_eq!(answered["isError"], true, "{arguments}");
@@ -2551,6 +2564,7 @@ mod tests {
             &params,
             Path::new("/work"),
             None,
+            false,
             &sent,
             &unbounded_channel().0,
         )
@@ -2592,9 +2606,16 @@ mod tests {
     async fn asks_for_a_command() {
         let (sent, mut requests) = unbounded_channel();
         let params = json!({ "name": RUN_COMMAND, "arguments": { "command": " " } });
-        let answered = call(&params, Path::new("/"), None, &sent, &unbounded_channel().0)
-            .await
-            .unwrap();
+        let answered = call(
+            &params,
+            Path::new("/"),
+            None,
+            false,
+            &sent,
+            &unbounded_channel().0,
+        )
+        .await
+        .unwrap();
         assert_eq!(answered["isError"], true);
         assert!(requests.try_recv().is_err());
     }
@@ -2605,7 +2626,7 @@ mod tests {
         let (chats, mut asked) = unbounded_channel();
         let params = json!({ "name": SHOW_MEDIA, "arguments": { "path": "notes.txt" } });
 
-        let answered = call(&params, Path::new("/work"), None, &sent, &chats)
+        let answered = call(&params, Path::new("/work"), None, false, &sent, &chats)
             .await
             .unwrap();
 
@@ -2639,7 +2660,7 @@ mod tests {
             let params = json!({ "name": PROPOSE_NAME, "arguments": arguments });
             let (sent, chats) = (sent.clone(), chats.clone());
             async move {
-                call(&params, Path::new("/work"), None, &sent, &chats)
+                call(&params, Path::new("/work"), None, false, &sent, &chats)
                     .await
                     .unwrap()
             }
@@ -2682,7 +2703,7 @@ mod tests {
             let params = json!({ "name": READ_CHAT, "arguments": arguments });
             let (sent, chats) = (sent.clone(), chats.clone());
             async move {
-                call(&params, Path::new("/work"), None, &sent, &chats)
+                call(&params, Path::new("/work"), None, false, &sent, &chats)
                     .await
                     .unwrap()
             }
@@ -2716,7 +2737,7 @@ mod tests {
             let params = json!({ "name": PROPOSE_ABOUT, "arguments": arguments });
             let (sent, chats) = (sent.clone(), chats.clone());
             async move {
-                call(&params, Path::new("/work"), None, &sent, &chats)
+                call(&params, Path::new("/work"), None, false, &sent, &chats)
                     .await
                     .unwrap()
             }
@@ -2769,7 +2790,11 @@ mod tests {
         let propose = |arguments: Value| {
             let params = json!({ "name": PROPOSE_ICON, "arguments": arguments });
             let (sent, chats, cwd) = (sent.clone(), chats.clone(), cwd.to_path_buf());
-            async move { call(&params, &cwd, None, &sent, &chats).await.unwrap() }
+            async move {
+                call(&params, &cwd, None, false, &sent, &chats)
+                    .await
+                    .unwrap()
+            }
         };
 
         // What is no picture, or no path, asks the window nothing.
@@ -2833,7 +2858,7 @@ mod tests {
             let params = json!({ "name": PROPOSE_GOAL, "arguments": arguments });
             let (sent, chats) = (sent.clone(), chats.clone());
             async move {
-                call(&params, Path::new("/work"), None, &sent, &chats)
+                call(&params, Path::new("/work"), None, false, &sent, &chats)
                     .await
                     .unwrap()
             }

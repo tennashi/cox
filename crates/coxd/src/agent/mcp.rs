@@ -575,7 +575,9 @@ static STARTED: AtomicU64 = AtomicU64::new(0);
 /// the paths the agent gives are taken from, serving the tools named in
 /// `only`, or all of them when `None`, but those of a project when the
 /// chat is in none, and the one that makes a project of a chat when it is
-/// in one, as `in_project` says.
+/// in one, as `in_project` says, for a chat that hands its work off, or
+/// not, as `hands_off` says (see [`crate::daemon::hands_off`]): its
+/// subagents run in the background, and it waits for one only a while.
 ///
 /// # Errors
 ///
@@ -584,6 +586,7 @@ pub fn start(
     cwd: PathBuf,
     only: Option<&[String]>,
     in_project: bool,
+    hands_off: bool,
 ) -> anyhow::Result<ToolServer> {
     let only = Some(calls::for_chat(only, in_project));
     let directory = private_directory()?;
@@ -597,6 +600,7 @@ pub fn start(
     let served = Arc::new(Served {
         cwd,
         only,
+        hands_off,
         requests: sent,
         chats,
     });
@@ -694,11 +698,13 @@ pub fn serve(
 }
 
 /// What one chat's server serves: the tools named in `only`, or all of
-/// them, working in `cwd`, asking the chat's stage through `requests`,
-/// and the window through `chats`.
+/// them, working in `cwd`, for a chat that hands its work off, or not, as
+/// `hands_off` says, asking the chat's stage through `requests`, and the
+/// window through `chats`.
 struct Served {
     cwd: PathBuf,
     only: Option<Vec<String>>,
+    hands_off: bool,
     requests: UnboundedSender<ToolRequest>,
     chats: UnboundedSender<ChatRequest>,
 }
@@ -716,6 +722,7 @@ impl Serves for Served {
             params,
             &self.cwd,
             self.only.as_deref(),
+            self.hands_off,
             &self.requests,
             &self.chats,
         ))
@@ -928,6 +935,7 @@ mod tests {
         let served = Served {
             cwd: cwd.to_owned(),
             only: None,
+            hands_off: false,
             requests: requests.clone(),
             chats,
         };
