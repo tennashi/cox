@@ -456,6 +456,48 @@ fn describe_entry(entry: &Entry) -> String {
             let chosen = chosen.map_or("none yet".to_owned(), |chosen| (chosen + 1).to_string());
             format!("login: {}; chosen: {chosen}{failed}", options.join(", "))
         }
+        Entry::Question {
+            message,
+            questions,
+            answer,
+        } => {
+            let asked: Vec<String> = questions
+                .iter()
+                .map(|question| {
+                    let options: Vec<String> = question
+                        .options
+                        .iter()
+                        .enumerate()
+                        .map(|(index, option)| format!("{} {}", index + 1, option.label))
+                        .collect();
+                    format!(
+                        "{}{}: options {}{}{}",
+                        question.header.as_deref().unwrap_or("question"),
+                        question
+                            .text
+                            .as_deref()
+                            .map_or_default(|text| format!(" ({})", text_of(text))),
+                        options.join(", "),
+                        if question.multiple { ", several" } else { "" },
+                        if question.other {
+                            ", or other words"
+                        } else {
+                            ""
+                        },
+                    )
+                })
+                .collect();
+            let answer = answer
+                .as_ref()
+                .map_or("waiting for the answer".to_owned(), |answer| {
+                    format!("answered {}", answer.said(questions))
+                });
+            format!(
+                "question {:?}: {}; {answer}",
+                text_of(message),
+                asked.join("; ")
+            )
+        }
         Entry::PlanChanged { added, removed } => describe_drift(added, removed),
         Entry::Media {
             kind,

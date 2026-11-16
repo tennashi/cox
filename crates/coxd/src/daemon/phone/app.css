@@ -518,6 +518,14 @@ pre code { padding: 0; background: none; font-size: inherit; color: var(--foregr
 .answers button.first { background: var(--tone); color: var(--ground); font-weight: 600; }
 .answers button:disabled { opacity: 0.6; }
 .answers button.armed { background: var(--asking); }
+/* A question the agent asks: its options one under another, each with
+   what it means under its label. */
+.question { display: flex; flex-direction: column; gap: 6px; }
+.question .tag { font-size: 11px; font-weight: 600; color: var(--tone); text-transform: uppercase; }
+.answers.column { flex-direction: column; }
+.answers.column button.choice { flex: none; display: flex; flex-direction: column; align-items: flex-start; gap: 2px; padding: 8px 10px; text-align: left; white-space: normal; }
+.answers.column button.choice.first .why { color: var(--ground); }
+.question input { min-height: 36px; padding: 0 10px; border: 1px solid var(--tone-edge); border-radius: 10px; background: transparent; color: var(--foreground); font-size: 14px; }
 .hint { margin: 0; font-size: 12px; color: var(--faint); }
 
 .gathered { display: flex; flex-direction: column; gap: 10px; }

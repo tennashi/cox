@@ -1014,7 +1014,7 @@ function conversation(entries, current) {
       at = end - 1;
       continue;
     }
-    const asks = kind === "permission" && at === asked;
+    const asks = (kind === "permission" || kind === "question") && at === asked;
     const first = at;
     found.push(() => {
       const node = entryNode(first, kind, value, asks);
@@ -1070,6 +1070,8 @@ function entryNode(at, kind, value, asks) {
       return shownRow(value);
     case "permission":
       return permission(at, value, asks);
+    case "question":
+      return question(at, value, asks);
     case "proposal":
       return proposal(value, at);
     case "name_proposal":
@@ -1106,14 +1108,17 @@ function entryNode(at, kind, value, asks) {
   }
 }
 
-// The place of the permission request the agent waits on the human to
-// answer, while it does, or -1: the agent asks one thing at a time, so it
-// is the last asked, wherever notes Cox added since put it.
+// The place of the permission request or the question the agent waits
+// on the human to answer, while it does, or -1: the agent asks one thing
+// at a time, so it is the last asked, wherever notes Cox added since put
+// it.
 function askedAt(chat) {
   if (chat.state !== "Asking") return -1;
-  const at = lastIndexOf(chat.entries, "permission");
-  const value = at < 0 ? null : kindOf(chat.entries[at])[1];
-  return value && (value.chosen === null || value.chosen === undefined) ? at : -1;
+  const at = Math.max(lastIndexOf(chat.entries, "permission"), lastIndexOf(chat.entries, "question"));
+  if (at < 0) return -1;
+  const [kind, value] = kindOf(chat.entries[at]);
+  const open = kind === "question" ? value.answer : value.chosen;
+  return open === null || open === undefined ? at : -1;
 }
 
 function lastIndexOf(entries, kind) {
@@ -1336,6 +1341,71 @@ function permission(at, asked, asks) {
   return el("div", { class: "call" },
     line(key, "?", "var(--asking)", asked.title, answer, opens),
     opens && opened.has(key) ? [found].concat(more ? shows || shownAt(at) : []) : null);
+}
+
+// What the human answered of `questions`, as the window's line says it.
+function questionSaid(questions, answer) {
+  if (answer === null || answer === undefined) return "no answer";
+  if (answer === "declined") return "declined";
+  const said = questions.map((asked, at) => {
+    const picked = answer.given[at] || { chosen: [] };
+    const words = picked.chosen.map((index) => asked.options[index] && asked.options[index].label).filter(Boolean);
+    if (picked.other) words.push(picked.other);
+    return words.length ? words.join(", ") : "skipped";
+  });
+  return said.length ? said.join("; ") : "answered";
+}
+
+// The questions the agent asks: while it waits on them, the amber card of
+// each question's options, which a tap answers when it asks one question
+// of which the human picks one, and else picks until Send, with a box for
+// the human's own words where it takes them, and Decline; answered, its
+// line.
+function question(at, asked, asks) {
+  if (!asks) return line(`question-${at}`, "?", "var(--asking)", asked.message, questionSaid(asked.questions, asked.answer), false);
+  const byATap = asked.questions.length === 1 && !asked.questions[0].multiple && asked.questions[0].options.length > 0;
+  const picks = asked.questions.map(() => new Set());
+  const boxes = [];
+  const parts = asked.questions.map((one, at) => {
+    const options = one.options.map((option, index) => {
+      const button = el("button", { type: "button", class: "choice" },
+        el("span", {}, byATap ? `${index + 1} · ${option.label}` : option.label),
+        option.description ? el("span", { class: "why" }, option.description) : null);
+      button.onclick = (event) => {
+        if (byATap) return choose(event, index);
+        const picked = picks[at];
+        if (picked.has(index)) picked.delete(index);
+        else {
+          if (!one.multiple) picked.clear();
+          picked.add(index);
+        }
+        for (const [other, node] of [...button.parentNode.querySelectorAll(".choice")].entries()) {
+          node.classList.toggle("first", picked.has(other));
+        }
+      };
+      return button;
+    });
+    const box = one.other ? el("input", { type: "text", placeholder: one.options.length ? "Other…" : "Your answer" }) : null;
+    boxes.push(box);
+    return el("div", { class: "question" },
+      one.header ? el("div", { class: "tag" }, one.header) : null,
+      one.text ? el("div", {}, one.text) : null,
+      el("div", { class: "answers options column" }, options),
+      box);
+  });
+  const given = () => ({ given: asked.questions.map((_, at) => {
+    const words = boxes[at] ? boxes[at].value.trim() : "";
+    return words ? { chosen: [...picks[at]].sort(), other: words } : { chosen: [...picks[at]].sort() };
+  }) });
+  const answers = [["Decline", { AnswerQuestion: { key: chat.key, answer: "declined" } }]];
+  const card = el("div", { class: "card-ask" }, cardHead("?", asked.message, "waiting for you"), parts);
+  if (!byATap) {
+    const send = el("button", { type: "button", class: "first" }, "Send");
+    send.onclick = () => act({ AnswerQuestion: { key: chat.key, answer: given() } });
+    card.append(el("div", { class: "answers" }, send));
+  }
+  card.append(buttons(answers));
+  return card;
 }
 
 // A picture or a video shown in the conversation, with its caption, or

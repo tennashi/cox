@@ -1428,6 +1428,11 @@ impl Daemon {
                     chat.choose(index);
                 }
             }
+            ToDaemon::AnswerQuestion { key, answer } => {
+                if let Some(chat) = self.chat(key) {
+                    chat.answer_question(answer);
+                }
+            }
             ToDaemon::Stop { key } => {
                 if let Some(chat) = self.chat(key) {
                     chat.stop();

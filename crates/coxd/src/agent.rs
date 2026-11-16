@@ -34,8 +34,8 @@ use tokio::sync::oneshot;
 use tracing::Instrument as _;
 
 use cox_core::entry::{
-    Answer, Attachment, Content, Entry, LoginOption, Proposal, Proposed, Step, StepState,
-    TerminalLogin, ToolCallResult,
+    Answer, Attachment, Content, Entry, LoginOption, Picked, Proposal, Proposed, Question,
+    QuestionAnswer, QuestionOption, Step, StepState, TerminalLogin, ToolCallResult,
 };
 use cox_core::settings::{Choice, Setting};
 
@@ -102,6 +102,14 @@ pub enum AgentEvent {
         /// What the call is about to do, if the request tells it.
         content: Option<Vec<Content>>,
         options: Vec<String>,
+    },
+    /// The agent asks the human `questions`, saying `message` as it asks;
+    /// the agent side waits for a [`Command::AnswerQuestion`], or for a
+    /// [`Command::Cancel`], as for a permission request. Cox never
+    /// answers it in the human's place.
+    Question {
+        message: String,
+        questions: Vec<Question>,
     },
     /// The agent asked permission for a tool call, and Cox answered in the
     /// human's place, as the chat's setup says, choosing `chosen` of
@@ -183,6 +191,9 @@ pub enum Command {
     /// [`AgentEvent::Steered`].
     Steer(Prompt),
     Answer(PermissionAnswer),
+    /// The human answered the questions the agent asks
+    /// ([`AgentEvent::Question`]).
+    AnswerQuestion(QuestionAnswer),
     /// Asks the agent to stop the turn it is taking.
     Cancel,
     /// Asks the agent to set the setting `id` of its session to `value`,
@@ -564,7 +575,10 @@ async fn run<T: Transport + Send + 'static>(
                         let set = async |id: &str, value: &str| session.set(id, value).await;
                         set_model(set, &settings, &asked, events).await;
                     }
-                    Command::Answer(_) | Command::Cancel | Command::LogIn(_) => {}
+                    Command::Answer(_)
+                    | Command::AnswerQuestion(_)
+                    | Command::Cancel
+                    | Command::LogIn(_) => {}
                 }
             }
             Ok(())
@@ -660,7 +674,7 @@ async fn logged_in(
             ) => {
                 commands.held.push_back(command);
             }
-            Some(Command::Answer(_)) => {}
+            Some(Command::Answer(_) | Command::AnswerQuestion(_)) => {}
         }
     }
 }
@@ -967,34 +981,36 @@ async fn take_one_turn(
         let Some(update) = update else {
             break;
         };
-        let request = match update_event(update) {
+        let ask = match update_event(update) {
             Ok(event) => {
                 send(event);
                 continue;
             }
-            Err(request) => request,
+            Err(ask) => ask,
         };
         // Once the human has asked to stop, the agent is told no without
         // asking them.
         if cancelled {
-            request.answer(PermissionAnswer::Cancel)?;
+            ask.answer(None)?;
             continue;
         }
-        // The setup's policy answers in the human's place, when it has an
-        // answer and the agent offers it.
-        if let Some(chosen) = decided(policy, &request) {
-            send(decided_event(&request, chosen));
-            request.answer(PermissionAnswer::Select(chosen))?;
+        // The setup's policy answers a permission request in the human's
+        // place, when it has an answer and the agent offers it.
+        if let Ask::Permission(request) = &ask
+            && let Some(chosen) = decided(policy, request)
+        {
+            send(decided_event(request, chosen));
+            ask.answer(Some(Command::Answer(PermissionAnswer::Select(chosen))))?;
             continue;
         }
-        send(asked_event(&request));
+        send(ask.event());
         let answer = loop {
             match commands.recv().await {
-                Some(Command::Answer(answer)) => break answer,
+                Some(command) if ask.takes(&command) => break Some(command),
                 Some(Command::Cancel) => {
                     cancelled = true;
                     turn.cancel()?;
-                    break PermissionAnswer::Cancel;
+                    break None;
                 }
                 Some(Command::Set { id, value }) => {
                     let set = async |id: &str, value: &str| turn.set(id, value).await;
@@ -1007,13 +1023,20 @@ async fn take_one_turn(
                     steer(&turn, prompt, steers, folder, &mut later, events).await;
                 }
                 // The window sends no prompt while a turn runs, no
-                // login while the agent does not ask for one, and a
-                // model only ahead of the first line.
-                Some(Command::Prompt(_) | Command::LogIn(_) | Command::Model(_)) => {}
-                None => break PermissionAnswer::Cancel,
+                // login while the agent does not ask for one, a model
+                // only ahead of the first line, and no answer to what
+                // the agent does not ask.
+                Some(
+                    Command::Prompt(_)
+                    | Command::LogIn(_)
+                    | Command::Model(_)
+                    | Command::Answer(_)
+                    | Command::AnswerQuestion(_),
+                ) => {}
+                None => break None,
             }
         };
-        request.answer(answer)?;
+        ask.answer(answer)?;
     }
     Ok(Some(Ended {
         how: turn.end().await,
@@ -1021,9 +1044,81 @@ async fn take_one_turn(
     }))
 }
 
-/// What the window is told of `update`, or, for a permission request,
-/// the request, which waits for an answer.
-fn update_event(update: Update) -> Result<AgentEvent, cox_acp::PermissionRequest> {
+/// What the agent asks that waits for the human to answer.
+enum Ask {
+    Permission(cox_acp::PermissionRequest),
+    Question(cox_acp::QuestionRequest),
+}
+
+impl Ask {
+    /// What the window is told of it, which waits for the human.
+    fn event(&self) -> AgentEvent {
+        match self {
+            Self::Permission(request) => asked_event(request),
+            Self::Question(request) => AgentEvent::Question {
+                message: request.message().to_owned(),
+                questions: request.questions().iter().map(question).collect(),
+            },
+        }
+    }
+
+    /// Whether `command` answers it.
+    fn takes(&self, command: &Command) -> bool {
+        matches!(
+            (self, command),
+            (Self::Permission(_), Command::Answer(_))
+                | (Self::Question(_), Command::AnswerQuestion(_))
+        )
+    }
+
+    /// Sends the agent `answer`, a command that answers it, or, with none,
+    /// tells it the human did not answer.
+    fn answer(self, answer: Option<Command>) -> anyhow::Result<()> {
+        match (self, answer) {
+            (Self::Permission(request), Some(Command::Answer(answer))) => request.answer(answer),
+            (Self::Permission(request), _) => request.answer(PermissionAnswer::Cancel),
+            (Self::Question(request), Some(Command::AnswerQuestion(answer))) => {
+                request.answer(&question_answer(answer))
+            }
+            (Self::Question(request), _) => request.answer(&cox_acp::QuestionAnswer::Cancel),
+        }
+    }
+}
+
+/// `question` as the conversation shows it.
+fn question(question: &cox_acp::Question) -> Question {
+    Question {
+        header: question.header.clone(),
+        text: question.text.clone(),
+        options: question
+            .options
+            .iter()
+            .map(|option| QuestionOption {
+                label: option.label.clone(),
+                description: option.description.clone(),
+            })
+            .collect(),
+        multiple: question.multiple,
+        other: question.other,
+    }
+}
+
+/// The human's `answer` as the agent is sent it.
+fn question_answer(answer: QuestionAnswer) -> cox_acp::QuestionAnswer {
+    match answer {
+        QuestionAnswer::Given(picked) => cox_acp::QuestionAnswer::Given(
+            picked
+                .into_iter()
+                .map(|Picked { chosen, other }| cox_acp::Picked { chosen, other })
+                .collect(),
+        ),
+        QuestionAnswer::Declined => cox_acp::QuestionAnswer::Declined,
+    }
+}
+
+/// What the window is told of `update`, or, for what the agent asks the
+/// human, the ask, which waits for an answer.
+fn update_event(update: Update) -> Result<AgentEvent, Ask> {
     Ok(match update {
         Update::ReplyText(text) => AgentEvent::ReplyText(text),
         Update::ThoughtText(text) => AgentEvent::ThoughtText(text),
@@ -1039,7 +1134,8 @@ fn update_event(update: Update) -> Result<AgentEvent, cox_acp::PermissionRequest
             id: task.id,
             running: task.running,
         },
-        Update::PermissionRequest(request) => return Err(request),
+        Update::PermissionRequest(request) => return Err(Ask::Permission(request)),
+        Update::Question(request) => return Err(Ask::Question(request)),
     })
 }
 
@@ -1094,7 +1190,7 @@ async fn between_turns(
 
 /// Passes on `update`, which the agent sent while no turn ran, as it went
 /// on by itself. A permission request is answered as `policy` says, or
-/// as the human does, as in a turn: a line they send meanwhile goes once
+/// as the human does, and a question as the human does, as in a turn: a line they send meanwhile goes once
 /// they have, and asking to stop stops what the agent does, which ends
 /// as a turn stopped does.
 async fn unprompted(
@@ -1105,25 +1201,27 @@ async fn unprompted(
     commands: &mut Commands,
     events: &UnboundedSender<AgentEvent>,
 ) -> anyhow::Result<()> {
-    let request = match update_event(update) {
+    let ask = match update_event(update) {
         Ok(event) => {
             let _ = events.send(event);
             return Ok(());
         }
-        Err(request) => request,
+        Err(ask) => ask,
     };
-    if let Some(chosen) = decided(policy, &request) {
-        let _ = events.send(decided_event(&request, chosen));
-        return request.answer(PermissionAnswer::Select(chosen));
+    if let Ask::Permission(request) = &ask
+        && let Some(chosen) = decided(policy, request)
+    {
+        let _ = events.send(decided_event(request, chosen));
+        return ask.answer(Some(Command::Answer(PermissionAnswer::Select(chosen))));
     }
-    let _ = events.send(asked_event(&request));
+    let _ = events.send(ask.event());
     let answer = loop {
         match commands.recv().await {
-            Some(Command::Answer(answer)) => break answer,
+            Some(command) if ask.takes(&command) => break Some(command),
             Some(Command::Cancel) => {
                 session.cancel()?;
                 let _ = events.send(AgentEvent::TurnEnded(StopReason::Cancelled));
-                break PermissionAnswer::Cancel;
+                break None;
             }
             Some(Command::Set { id, value }) => {
                 let set = async |id: &str, value: &str| session.set(id, value).await;
@@ -1134,11 +1232,11 @@ async fn unprompted(
             Some(command @ (Command::Prompt(_) | Command::Steer(_) | Command::Model(_))) => {
                 commands.held.push_back(command);
             }
-            Some(Command::LogIn(_)) => {}
-            None => break PermissionAnswer::Cancel,
+            Some(Command::LogIn(_) | Command::Answer(_) | Command::AnswerQuestion(_)) => {}
+            None => break None,
         }
     };
-    request.answer(answer)
+    ask.answer(answer)
 }
 
 /// Takes `prompt`, a line the human steered into `turn`, and steers it
@@ -1196,6 +1294,17 @@ fn decided(policy: &Policy, request: &cox_acp::PermissionRequest) -> Option<usiz
 /// The most of the conversation so far that a new session is told, in
 /// characters: past it, the start is left out.
 const RETOLD_LENGTH: usize = 100_000;
+
+/// What the agent is told of the questions it asked the human, saying
+/// `message`, and how they answered, if they did.
+fn told_of_question(
+    message: &str,
+    questions: &[Question],
+    answer: Option<&QuestionAnswer>,
+) -> String {
+    let answer = answer.map_or_else(|| "nothing".to_owned(), |answer| answer.said(questions));
+    format!("[you asked the human: {message}; they answered: {answer}]")
+}
 
 /// What the agent is told of what it proposed, and what the human did
 /// with it.
@@ -1328,6 +1437,11 @@ fn said(entries: &[Entry]) -> Option<(String, bool)> {
                     "[you asked permission for: {title}; {who} chose: {chosen}]"
                 ))
             }
+            Entry::Question {
+                message,
+                questions,
+                answer,
+            } => Some(told_of_question(message, questions, answer.as_ref())),
             Entry::Proposal(proposal) => Some(told_of_proposal(proposal)),
             Entry::Switched { from, to } => Some(format!(
                 "[the human switched the chat from the agent {from} to the agent {to}]"
@@ -1498,6 +1612,27 @@ mod tests {
                 by_setup: true,
                 gathered: Vec::new(),
             },
+            Entry::Question {
+                message: "Which language?".to_owned(),
+                questions: vec![Question {
+                    options: vec![
+                        QuestionOption {
+                            label: "Rust".to_owned(),
+                            description: None,
+                        },
+                        QuestionOption {
+                            label: "Go".to_owned(),
+                            description: None,
+                        },
+                    ],
+                    other: true,
+                    ..Question::default()
+                }],
+                answer: Some(QuestionAnswer::Given(vec![Picked {
+                    chosen: vec![0],
+                    other: Some("but slowly".to_owned()),
+                }])),
+            },
             Entry::Reply("Done".to_owned()),
             Entry::Proposal(Proposal {
                 proposed: Proposed::Goal("$ make".to_owned()),
@@ -1516,6 +1651,7 @@ mod tests {
                  [your tool call: Edit x.txt … Completed]\n\n\
                  [you asked permission for: Edit x.txt; the human chose: Allow once]\n\n\
                  [you asked permission for: Write y.txt; Cox, as the chat is set up, chose: Reject once]\n\n\
+                 [you asked the human: Which language?; they answered: Rust, but slowly]\n\n\
                  [you]\nDone\n\n\
                  [you proposed the goal: $ make; the human changed it, and set that]"
             ),
