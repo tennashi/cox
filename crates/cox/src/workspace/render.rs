@@ -210,6 +210,7 @@ impl Render for Workspace {
             .children(self.render_menu(cx))
             .children(self.render_project_menu(cx))
             .children(self.render_archived_projects(cx))
+            .children(self.render_waits(window, cx))
             .children(self.render_project_card(cx))
             .children(self.render_settings(cx))
             .children(self.render_sheet(cx))

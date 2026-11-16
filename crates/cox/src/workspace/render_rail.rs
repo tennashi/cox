@@ -1,11 +1,13 @@
 //! The rail of projects down the window's left side, its buttons and
-//! badges, and the menu of a project on it.
+//! badges, and the menu of a project on it, under the bell that counts
+//! what waits for the human.
 
 use gpui::{
     Context, Div, FontWeight, MouseButton, MouseDownEvent, Pixels, SharedString, Stateful, Window,
     anchored, deferred, div, img, prelude::*, px, rgb,
 };
 
+use super::waits::Wait;
 use super::{PROJECT_RADIUS, PROJECT_SIZE, Project, RAIL, RAIL_WIDTH, Workspace};
 use crate::ui::ellipsis::ellipsis;
 use crate::ui::icons::{Icon, app_icon, icon};
@@ -19,7 +21,8 @@ use coxd::theme::{
 };
 
 impl Workspace {
-    /// The rail down the window's left side: a button for each project,
+    /// The rail down the window's left side: at its head the bell that
+    /// counts what waits for the human, then a button for each project,
     /// which chooses it, marked when it is the one chosen and counting its
     /// chats that wait for the human, and at its foot the button that
     /// opens a folder, and the gear that opens the settings.
@@ -67,6 +70,7 @@ impl Workspace {
             .gap(px(14.))
             .py(px(16.))
             .overflow_y_scroll()
+            .child(self.render_waits_button(cx))
             .children(projects)
             .child(div().flex_1())
             .children(self.render_archived_projects_button(cx))
@@ -94,6 +98,58 @@ impl Workspace {
                     })),
             )
             .child(self.render_settings_button(cx))
+    }
+
+    /// The bell at the head of the rail, which counts the chats of every
+    /// project that wait for the human, but the one shown, in amber when
+    /// one of them asks, and opens the list of them (see
+    /// [`super::waits`]); faint, with nothing to open, while none waits.
+    fn render_waits_button(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let waits = self.waits();
+        let count = waits.len();
+        let asks = waits.iter().any(|(_, wait)| *wait == Wait::Asks);
+        let open = self.waits_open();
+        let ink = if count > 0 { FOREGROUND } else { FAINT };
+        div()
+            .id("waits-button")
+            .debug_selector(|| "waits-button".to_owned())
+            .relative()
+            .flex_shrink_0()
+            .size(px(32.))
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded(px(10.))
+            .when(open, |button| button.bg(rgb(SELECTED)))
+            .when(count > 0, |button| {
+                button
+                    .cursor_pointer()
+                    .hover(|style| style.bg(rgb(HOVER)))
+                    .on_hint_click(cx.listener(|workspace, _, window, cx| {
+                        workspace.open_waits(window, cx);
+                    }))
+            })
+            // Not over the list, while that is open.
+            .when(!open, |button| {
+                button.tooltip(tip(match count {
+                    0 => "Nothing waits for you".to_owned(),
+                    1 => "A chat waits for you".to_owned(),
+                    _ => format!("{count} chats wait for you"),
+                }))
+            })
+            .child(icon(Icon::Bell, 18., ink))
+            .when(count > 0, |button| {
+                button.child(
+                    badge(
+                        if asks { ASKING } else { ACCENT },
+                        px(10.),
+                        count.to_string(),
+                    )
+                    .debug_selector(|| "waits-count".to_owned())
+                    .top(px(-6.))
+                    .right(px(-8.)),
+                )
+            })
     }
 
     /// The button at the foot of the rail that opens the menu of the

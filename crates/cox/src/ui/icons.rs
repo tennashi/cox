@@ -9,6 +9,7 @@ use gpui::{AssetSource, Img, Result, SharedString, Styled, Svg, img, px, rgb, sv
 /// An icon of the window.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Icon {
+    Bell,
     Bolt,
     Book,
     Changes,
@@ -33,7 +34,8 @@ pub enum Icon {
 }
 
 impl Icon {
-    const ALL: [Self; 21] = [
+    const ALL: [Self; 22] = [
+        Self::Bell,
         Self::Bolt,
         Self::Book,
         Self::Changes,
@@ -60,6 +62,7 @@ impl Icon {
     /// Where GPUI finds it among the assets.
     fn path(self) -> &'static str {
         match self {
+            Self::Bell => "icons/bell.svg",
             Self::Bolt => "icons/bolt.svg",
             Self::Book => "icons/book.svg",
             Self::Changes => "icons/changes.svg",
@@ -87,6 +90,7 @@ impl Icon {
     /// Its SVG file.
     fn file(self) -> &'static [u8] {
         match self {
+            Self::Bell => include_bytes!("../../assets/icons/bell.svg"),
             Self::Bolt => include_bytes!("../../assets/icons/bolt.svg"),
             Self::Book => include_bytes!("../../assets/icons/book.svg"),
             Self::Changes => include_bytes!("../../assets/icons/changes.svg"),
