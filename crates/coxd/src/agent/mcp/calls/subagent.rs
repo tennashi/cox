@@ -13,7 +13,7 @@ use serde_json::{Value, json};
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::oneshot;
 
-use crate::agent::mcp::{ChatRequest, OpenedChat, Waited};
+use crate::agent::mcp::{ChatRequest, OpenedChat, Subagent, Waited};
 use crate::agent::setup::{Policy, Setup, StageUse, Withheld};
 use crate::chat::sketch::Sketch;
 
@@ -61,9 +61,10 @@ pub(super) fn agent_tool() -> Value {
             subagent, a Task or an Agent, with the same arguments. The human sees the \
             subagent's chat, its conversation and its stage, and can step in. Without \
             `run_in_background`, it waits for the subagent to end its turn and answers its \
-            report; with it, it answers at once the number the chat goes by, and Cox tells \
-            you the report unasked, in a line of its own once your turn is not running, \
-            unless agent_report, giving that number, waited for it first. The chat works in the \
+            report; with it, it answers at once the title the chat goes by in the human's \
+            list, and Cox tells you the report unasked, in a line of its own once your turn \
+            is not running, unless agent_report, giving that title, waited for it first. \
+            Name a subagent to the human by its title, as they see it. The chat works in the \
             same folder as this one, so two that change files at once may collide, unless \
             `sketch` gives it a folder of its own. Beside the Agent tool's arguments, \
             Cox's own say how the subagent is set up: `context` is told to it after the \
@@ -111,7 +112,7 @@ pub(super) fn agent_tool() -> Value {
                 },
                 "run_in_background": {
                     "type": "boolean",
-                    "description": "Whether to answer at once, with the number of the \
+                    "description": "Whether to answer at once, with the title of the \
                         subagent's chat, rather than its report.",
                 },
                 "context": {
@@ -180,12 +181,17 @@ pub(super) fn agent_report_tool() -> Value {
         "inputSchema": {
             "type": "object",
             "properties": {
+                "title": {
+                    "type": "string",
+                    "description": "The title agent answered for the subagent's chat, as \
+                        the human sees it in the list.",
+                },
                 "chat": {
                     "type": "integer",
-                    "description": "The number agent answered for the subagent's chat.",
+                    "description": "The number agent answered for the subagent's chat, in \
+                        place of `title` when two of your subagents share a title.",
                 },
             },
-            "required": ["chat"],
         },
     })
 }
@@ -352,7 +358,7 @@ fn setup(arguments: &Value, context: String) -> Result<Setup, String> {
 
 /// Runs a subagent as `arguments` say: asks the window to open its chat,
 /// with the definition of its kind found in `kinds`, and answers its
-/// report once its turn ends, or at once, in the background, the number
+/// report once its turn ends, or at once, in the background, the title
 /// its chat goes by, as it always does for a chat that hands its work
 /// off, as `hands_off` says.
 pub(super) async fn agent(
@@ -402,14 +408,15 @@ pub(super) async fn agent(
     let opened = opened
         .await
         .map_err(|_| "the chat closed while the subagent's opened".to_owned())??;
-    let number = opened.number;
+    let (number, name) = (opened.number, &opened.name);
     let notes = notes(&opened, sketch);
     if background {
         let mut told = format!(
-            "The subagent works in {}, chat {number}, under this one. Cox tells you its \
-             report once it ends its turn and your turn is not running; to wait for it \
-             sooner, call agent_report, giving {number}.",
-            opened.name
+            "The subagent works in the chat \"{name}\", under this one: tell the human of it \
+             by that title, as they see it in the list. Cox tells you its report once it \
+             ends its turn and your turn is not running; to wait for it sooner, call \
+             agent_report, giving that title. Its number, {number}, is for agent_report \
+             only, should another of your subagents share its title."
         );
         if let Some(model) = &model {
             let _ = write!(
@@ -433,16 +440,16 @@ pub(super) async fn agent(
     let waited = wait(number, chats).await?;
     let mut told = match (&waited.asking, waited.ended_but(), &waited.said) {
         (Some(asking), _, _) => format!(
-            "The subagent in chat {number} waits for the human to answer: {asking}. Get its \
-             report with agent_report, giving {number}, once it goes on."
+            "The subagent \"{name}\" waits for the human to answer: {asking}. Get its report \
+             with agent_report, giving its title, once it goes on."
         ),
         (None, Some(but), Some(said)) => {
-            format!("The subagent in chat {number} {but}. It reports:\n\n{said}")
+            format!("The subagent \"{name}\" {but}. It reports:\n\n{said}")
         }
-        (None, Some(but), None) => format!("The subagent in chat {number} {but}. It said nothing."),
-        (None, None, Some(said)) => format!("The subagent in chat {number} reports:\n\n{said}"),
+        (None, Some(but), None) => format!("The subagent \"{name}\" {but}. It said nothing."),
+        (None, None, Some(said)) => format!("The subagent \"{name}\" reports:\n\n{said}"),
         (None, None, None) => {
-            format!("The subagent in chat {number} ended its turn and said nothing.")
+            format!("The subagent \"{name}\" ended its turn and said nothing.")
         }
     };
     let notes: Vec<String> = waited.unoffered.into_iter().chain(notes).collect();
@@ -509,6 +516,37 @@ async fn wait(chat: u64, chats: &UnboundedSender<ChatRequest>) -> Result<Waited,
         .map_err(|_| "the chat closed while waiting".to_owned())?
 }
 
+/// The subagent `arguments` name, by its `title`, or else by its number
+/// as `chat`.
+fn named(arguments: &Value) -> Result<Subagent, String> {
+    if let Some(title) = string(arguments, "title")? {
+        return Ok(Subagent::Title(title));
+    }
+    match arguments.get("chat") {
+        None | Some(Value::Null) => {
+            Err("no subagent: give the title agent answered as `title`".to_owned())
+        }
+        Some(chat) => chat
+            .as_u64()
+            .map(Subagent::Number)
+            .ok_or_else(|| "`chat` is not a number: give the title as `title`".to_owned()),
+    }
+}
+
+/// The number and the title of the chat `subagent` names.
+async fn find(
+    subagent: Subagent,
+    chats: &UnboundedSender<ChatRequest>,
+) -> Result<(u64, String), String> {
+    let (answer, found) = oneshot::channel();
+    chats
+        .send(ChatRequest::FindSubagent { subagent, answer })
+        .map_err(|_| "the chat has closed".to_owned())?;
+    found
+        .await
+        .map_err(|_| "the chat closed while finding the subagent".to_owned())?
+}
+
 /// Waits for the subagent's chat `arguments` name to end its turn, or to
 /// come to wait for the human, and tells how it stands, or, past `most`,
 /// when given, that it is at work still.
@@ -517,10 +555,7 @@ pub(super) async fn agent_report(
     most: Option<Duration>,
     chats: &UnboundedSender<ChatRequest>,
 ) -> Result<String, String> {
-    let chat = arguments
-        .get("chat")
-        .and_then(Value::as_u64)
-        .ok_or("no chat: give the number agent answered as `chat`")?;
+    let (chat, name) = find(named(arguments)?, chats).await?;
     let waited = match most {
         None => wait(chat, chats).await?,
         // Past the time, the wait is dropped, and Cox tells the report
@@ -529,18 +564,20 @@ pub(super) async fn agent_report(
             Ok(waited) => waited?,
             Err(_) => {
                 return Ok(format!(
-                    "Chat {chat} is at work still. This chat talks with the human and hands \
-                     the work off, so it does not wait longer: end your turn, or go on with \
-                     the human, and Cox tells you chat {chat}'s report once it ends and your \
+                    "The subagent \"{name}\" is at work still. This chat talks with the human \
+                     and hands the work off, so it does not wait longer: end your turn, or go \
+                     on with the human, and Cox tells you its report once it ends and your \
                      turn is not running. Do not call agent_report again to wait for it."
                 ));
             }
         },
     };
     let mut told = match (&waited.asking, waited.ended_but()) {
-        (Some(asking), _) => format!("Chat {chat} waits for the human to answer: {asking}."),
-        (None, Some(but)) => format!("Chat {chat} {but}."),
-        (None, None) => format!("Chat {chat} ended its turn."),
+        (Some(asking), _) => {
+            format!("The subagent \"{name}\" waits for the human to answer: {asking}.")
+        }
+        (None, Some(but)) => format!("The subagent \"{name}\" {but}."),
+        (None, None) => format!("The subagent \"{name}\" ended its turn."),
     };
     match &waited.said {
         Some(said) => {
@@ -603,6 +640,18 @@ mod tests {
                         let _ = answer.send(stands.next().ok_or(format!("no chat {chat}")));
                         let (answer, _) = oneshot::channel();
                         ChatRequest::WaitChat { chat, answer }
+                    }
+                    ChatRequest::FindSubagent { subagent, answer } => {
+                        let found = match &subagent {
+                            Subagent::Number(number) => Ok((*number, opened.name.clone())),
+                            Subagent::Title(title) if *title == opened.name => {
+                                Ok((opened.number, title.clone()))
+                            }
+                            Subagent::Title(title) => Err(format!("none titled {title}")),
+                        };
+                        let _ = answer.send(found);
+                        let (answer, _) = oneshot::channel();
+                        ChatRequest::FindSubagent { subagent, answer }
                     }
                     other => other,
                 };
@@ -685,7 +734,7 @@ mod tests {
         assert!(!error, "{told}");
         assert_eq!(
             told,
-            "The subagent in chat 7 reports:\n\nThe parser drops the last line.\n\nThe agent \
+            "The subagent \"Review the parser\" reports:\n\nThe parser drops the last line.\n\nThe agent \
              offers no model `opus`. It is a sketch, working in /sketches/parser-1, a \
              worktree of the project's last commit, apart from the project: read what it made \
              there, and show the human with show_changes, giving that folder. It may do no \
@@ -758,10 +807,12 @@ mod tests {
         assert!(!error, "{told}");
         assert_eq!(
             told,
-            "The subagent works in Review the parser, chat 4, under this one. Cox tells you \
-             its report once it ends its turn and your turn is not running; to wait for it \
-             sooner, call agent_report, giving 4. It runs with the model `haiku` when its \
-             agent offers it, and agent_report says when it does not."
+            "The subagent works in the chat \"Review the parser\", under this one: tell the \
+             human of it by that title, as they see it in the list. Cox tells you its report \
+             once it ends its turn and your turn is not running; to wait for it sooner, call \
+             agent_report, giving that title. Its number, 4, is for agent_report only, should \
+             another of your subagents share its title. It runs with the model `haiku` when \
+             its agent offers it, and agent_report says when it does not."
         );
         drop(chats);
         let heard = window.await.unwrap();
@@ -823,7 +874,7 @@ mod tests {
 
         assert_eq!(
             told.as_deref(),
-            Ok("The subagent in chat 2 ended its turn and said nothing.")
+            Ok("The subagent \"Review the parser\" ended its turn and said nothing.")
         );
         let [ChatRequest::OpenChat { setup, model, .. }, _] = &heard[..] else {
             panic!("the window was asked {} times", heard.len());
@@ -879,11 +930,13 @@ mod tests {
 
         assert_eq!(
             answered["content"][0]["text"],
-            "The subagent works in Review the parser, chat 4, under this one. Cox tells you \
-             its report once it ends its turn and your turn is not running; to wait for it \
-             sooner, call agent_report, giving 4. This chat talks with the human and hands the \
-             work off, so its subagents run in the background: go on with the human, or end \
-             your turn, rather than wait for the report."
+            "The subagent works in the chat \"Review the parser\", under this one: tell the \
+             human of it by that title, as they see it in the list. Cox tells you its report \
+             once it ends its turn and your turn is not running; to wait for it sooner, call \
+             agent_report, giving that title. Its number, 4, is for agent_report only, should \
+             another of your subagents share its title. This chat talks with the human and \
+             hands the work off, so its subagents run in the background: go on with the human, \
+             or end your turn, rather than wait for the report."
         );
         drop(chats);
         let heard = window.await.unwrap();
@@ -902,13 +955,17 @@ mod tests {
         let held = tokio::spawn(async move {
             let mut held = Vec::new();
             while let Some(request) = asked.recv().await {
+                if let ChatRequest::FindSubagent { answer, .. } = request {
+                    let _ = answer.send(Ok((7, "Review the parser".to_owned())));
+                    continue;
+                }
                 held.push(request);
             }
             held
         });
 
         let told = agent_report(
-            &json!({ "chat": 7 }),
+            &json!({ "title": "Review the parser" }),
             Some(Duration::from_millis(10)),
             &chats,
         )
@@ -917,19 +974,49 @@ mod tests {
 
         assert_eq!(
             told,
-            "Chat 7 is at work still. This chat talks with the human and hands the work off, \
-             so it does not wait longer: end your turn, or go on with the human, and Cox tells \
-             you chat 7's report once it ends and your turn is not running. Do not call \
-             agent_report again to wait for it."
+            "The subagent \"Review the parser\" is at work still. This chat talks with the \
+             human and hands the work off, so it does not wait longer: end your turn, or go on \
+             with the human, and Cox tells you its report once it ends and your turn is not \
+             running. Do not call agent_report again to wait for it."
         );
         drop(chats);
         let held = held.await.unwrap();
-        let [ChatRequest::WaitChat { answer, .. }] = &held[..] else {
+        let [ChatRequest::WaitChat { chat: 7, answer }] = &held[..] else {
             panic!("the window was asked {} times", held.len());
         };
         assert!(
             answer.is_closed(),
             "the wait is dropped, so the report is told unasked"
+        );
+    }
+
+    #[tokio::test]
+    async fn asks_for_a_subagent_named_by_a_title_it_has_or_a_number() {
+        let (chats, asked) = unbounded_channel();
+        let window = window(asked, opened(7), Vec::new());
+
+        assert_eq!(
+            agent_report(&json!({ "title": "Fix the lexer" }), None, &chats).await,
+            Err("none titled Fix the lexer".to_owned()),
+            "the window's answer of why none is titled so is the agent's"
+        );
+        assert!(
+            agent_report(&json!({ "chat": "seven" }), None, &chats)
+                .await
+                .is_err(),
+            "a number is a number"
+        );
+        assert!(
+            agent_report(&json!({}), None, &chats).await.is_err(),
+            "a subagent has to be named"
+        );
+        drop(chats);
+        let heard = window.await.unwrap();
+        assert!(
+            !heard
+                .iter()
+                .any(|request| matches!(request, ChatRequest::WaitChat { .. })),
+            "it waits for none"
         );
     }
 
@@ -960,8 +1047,8 @@ mod tests {
                 },
             ],
         );
-        let report = |chat: Value| {
-            let params = json!({ "name": AGENT_REPORT, "arguments": { "chat": chat } });
+        let report = |arguments: Value| {
+            let params = json!({ "name": AGENT_REPORT, "arguments": arguments });
             let chats = chats.clone();
             async move {
                 let answered = super::super::call(
@@ -982,35 +1069,51 @@ mod tests {
         };
 
         assert_eq!(
-            report(json!(7)).await,
+            report(json!({ "title": "Review the parser" })).await,
             (
                 false,
-                "Chat 7 ended its turn. It last said:\n\nBuilt, and the tests pass.\n\nThe \
-                 agent offers no effort `max`."
+                "The subagent \"Review the parser\" ended its turn. It last said:\n\nBuilt, and \
+                 the tests pass.\n\nThe agent offers no effort `max`."
                     .to_owned()
             )
         );
         assert_eq!(
-            report(json!(7)).await,
+            report(json!({ "chat": 7 })).await,
             (
                 false,
-                "Chat 7 waits for the human to answer: Edit src/main.rs. It said nothing."
+                "The subagent \"Review the parser\" waits for the human to answer: Edit \
+                 src/main.rs. It said nothing."
+                    .to_owned()
+            ),
+            "the number still names it"
+        );
+        assert_eq!(
+            report(json!({ "title": "Review the parser" })).await,
+            (
+                false,
+                "The subagent \"Review the parser\" ended its turn, but still works in the \
+                 background: the background command \"cargo bench\". Cox tells you once that ends \
+                 and your turn is not running. It last said:\n\nThe benchmark runs."
                     .to_owned()
             )
         );
         assert_eq!(
-            report(json!(7)).await,
-            (
-                false,
-                "Chat 7 ended its turn, but still works in the background: the background command \
-                 \"cargo bench\". Cox tells you once that ends and your turn is not running. It last \
-                 said:\n\nThe benchmark runs."
-                    .to_owned()
-            )
+            report(json!({ "chat": 9 })).await,
+            (true, "no chat 9".to_owned())
         );
-        assert_eq!(report(json!(9)).await, (true, "no chat 9".to_owned()));
-        assert!(report(json!("seven")).await.0, "a chat has to be named");
         drop(chats);
-        window.await.unwrap();
+        let heard = window.await.unwrap();
+        let waited: Vec<u64> = heard
+            .iter()
+            .filter_map(|request| match request {
+                ChatRequest::WaitChat { chat, .. } => Some(*chat),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            waited,
+            [7, 7, 7, 9],
+            "the title is waited for by its number"
+        );
     }
 }

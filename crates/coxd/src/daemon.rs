@@ -52,7 +52,9 @@ use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use tokio::sync::oneshot;
 
 use crate::agent::instructions::Instructions;
-use crate::agent::mcp::{ChatRequest, OpenedChat, Ran, Seen, ToolRequest, Waited, Whereabouts};
+use crate::agent::mcp::{
+    ChatRequest, OpenedChat, Ran, Seen, Subagent, ToolRequest, Waited, Whereabouts,
+};
 use crate::agent::setup::{Policy, Setup, StageUse, Withheld, keeps_in_wiki};
 use crate::agent::{Agent, AgentEvent, Start};
 use crate::agents::Agents;
@@ -2239,6 +2241,9 @@ impl Daemon {
                 answer.send(opened).ok();
             }
             ChatRequest::WaitChat { chat, answer } => self.wait_chat(key, chat, answer),
+            ChatRequest::FindSubagent { subagent, answer } => {
+                answer.send(self.find_subagent(key, &subagent)).ok();
+            }
             ChatRequest::SaveToWiki { chat } => self.save_to_wiki_of(key, chat),
             ChatRequest::WikiWritten { page } => {
                 let in_sketch = self.sketch_of(key).is_some();
@@ -2356,6 +2361,56 @@ impl Daemon {
         } else {
             answer.send(Ok(chat.stands())).ok();
             self.heard(key);
+        }
+    }
+
+    /// The number and the title of the chat the agent of the chat
+    /// `asking` names as `subagent`: by its number, among the chats it may
+    /// see, or by its title, among those it opened; or why there is none,
+    /// or, when several have the title, which they are.
+    fn find_subagent(&self, asking: u64, subagent: &Subagent) -> Result<(u64, String), String> {
+        let title = match subagent {
+            Subagent::Number(number) => {
+                return self
+                    .seen_by(asking)
+                    .and_then(|mut chats| chats.find(|slot| slot.key == *number))
+                    .map(|slot| (slot.key, slot.name.clone()))
+                    .ok_or_else(|| format!("no chat {number}"));
+            }
+            Subagent::Title(title) => title,
+        };
+        let own: Vec<&Slot> = self
+            .chats
+            .iter()
+            .chain(&self.archived)
+            .filter(|slot| slot.parent == Some(asking))
+            .collect();
+        let listed = |slots: &[&Slot]| {
+            slots
+                .iter()
+                .map(|slot| format!("\"{}\" (chat {})", slot.name, slot.key))
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        let titled: Vec<&Slot> = own
+            .iter()
+            .copied()
+            .filter(|slot| slot.name == *title)
+            .collect();
+        match titled[..] {
+            [slot] => Ok((slot.key, slot.name.clone())),
+            [] if own.is_empty() => Err(format!(
+                "No subagent of this chat is titled \"{title}\": this chat opened none."
+            )),
+            [] => Err(format!(
+                "No subagent of this chat is titled \"{title}\". Its subagents are {}.",
+                listed(&own)
+            )),
+            _ => Err(format!(
+                "Several subagents of this chat are titled \"{title}\": {}. Give the number of \
+                 the one you mean as `chat`.",
+                listed(&titled)
+            )),
         }
     }
 
@@ -3724,10 +3779,51 @@ mod tests {
         }
     }
 
-    /// What the chat's agent is told of a subagent `number`, "Look", that
-    /// ended its turn saying "Found it.", per the requirement.
-    fn found_it(number: u64) -> String {
-        format!("Subagent {number}, \"Look\", ended its turn. It last said:\n\nFound it.")
+    /// What the chat's agent is told of a subagent, "Look", that ended its
+    /// turn saying "Found it.", per the requirement.
+    const FOUND_IT: &str = "The subagent \"Look\" ended its turn. It last said:\n\nFound it.";
+
+    #[test]
+    fn an_agent_finds_a_subagent_by_its_title_among_its_own_or_by_its_number() {
+        on_daemon(async {
+            let opener = Opener::new(&["Look", "Fix", "Fix"]).await;
+            let [look, fix, other_fix] = opener.subagents[..] else {
+                panic!("{:?}", opener.subagents);
+            };
+            let find = |asking, subagent| opener.daemon.find_subagent(asking, &subagent);
+            let title = |title: &str| Subagent::Title(title.to_owned());
+
+            assert_eq!(
+                find(opener.key, title("Look")),
+                Ok((look, "Look".to_owned()))
+            );
+            assert_eq!(
+                find(opener.key, Subagent::Number(fix)),
+                Ok((fix, "Fix".to_owned())),
+                "the number still names it"
+            );
+            assert_eq!(
+                find(opener.key, title("Fix")),
+                Err(format!(
+                    "Several subagents of this chat are titled \"Fix\": \"Fix\" (chat {fix}), \
+                     \"Fix\" (chat {other_fix}). Give the number of the one you mean as `chat`."
+                ))
+            );
+            assert_eq!(
+                find(opener.key, title("Build")),
+                Err(format!(
+                    "No subagent of this chat is titled \"Build\". Its subagents are \"Look\" \
+                     (chat {look}), \"Fix\" (chat {fix}), \"Fix\" (chat {other_fix})."
+                ))
+            );
+            assert_eq!(
+                find(look, title("Fix")),
+                Err(
+                    "No subagent of this chat is titled \"Fix\": this chat opened none.".to_owned()
+                ),
+                "a title names only a chat's own subagents"
+            );
+        });
     }
 
     #[test]
@@ -3741,8 +3837,7 @@ mod tests {
 
             let prompts = opener.prompts();
             assert_eq!(prompts.len(), 1, "{prompts:?}");
-            let number = opener.subagents[0];
-            assert!(prompts[0].starts_with(&found_it(number)), "{prompts:?}");
+            assert!(prompts[0].starts_with(FOUND_IT), "{prompts:?}");
             assert!(prompts[0].contains("agent_report"), "{prompts:?}");
             assert_eq!(
                 opener
@@ -3784,10 +3879,7 @@ mod tests {
             opener.pump().await;
             let prompts = opener.prompts();
             assert_eq!(prompts.len(), 1, "{prompts:?}");
-            assert!(
-                prompts[0].starts_with(&found_it(opener.subagents[0])),
-                "{prompts:?}"
-            );
+            assert!(prompts[0].starts_with(FOUND_IT), "{prompts:?}");
         });
     }
 
@@ -3803,12 +3895,9 @@ mod tests {
 
             let prompts = opener.prompts();
             assert_eq!(prompts.len(), 1, "{prompts:?}");
-            let fixed = format!(
-                "Subagent {}, \"Fix\", ended its turn. It last said:\n\nFixed it.",
-                opener.subagents[1]
-            );
+            let fixed = "The subagent \"Fix\" ended its turn. It last said:\n\nFixed it.";
             assert!(
-                prompts[0].starts_with(&format!("{}\n\n{fixed}", found_it(opener.subagents[0]))),
+                prompts[0].starts_with(&format!("{FOUND_IT}\n\n{fixed}")),
                 "{prompts:?}"
             );
         });
@@ -3858,11 +3947,11 @@ mod tests {
             let prompts = opener.prompts();
             assert_eq!(prompts.len(), 1, "{prompts:?}");
             assert!(
-                prompts[0].starts_with(&format!(
-                    "Subagent {number}, \"Look\", ended its turn, but still works in the \
-                     background: the background command \"sleep 120\". Cox tells you once that ends. It last \
+                prompts[0].starts_with(
+                    "The subagent \"Look\" ended its turn, but still works in the background: \
+                     the background command \"sleep 120\". Cox tells you once that ends. It last \
                      said:\n\nStarted it."
-                )),
+                ),
                 "{prompts:?}"
             );
             let listed = opener.daemon.listed.clone().unwrap();
@@ -3898,10 +3987,10 @@ mod tests {
             let prompts = opener.prompts();
             assert_eq!(prompts.len(), 1, "{prompts:?}");
             assert!(
-                prompts[0].starts_with(&format!(
-                    "Subagent {number}, \"Look\", is done with what it ran in the background. \
-                     It last said:\n\nStarted it."
-                )),
+                prompts[0].starts_with(
+                    "The subagent \"Look\" is done with what it ran in the background. It last \
+                     said:\n\nStarted it."
+                ),
                 "{prompts:?}"
             );
             // It is told once.
@@ -3934,11 +4023,10 @@ mod tests {
 
             let prompts = opener.prompts();
             assert_eq!(prompts.len(), 1, "{prompts:?}");
-            let number = opener.subagents[0];
             assert!(
-                prompts[0].starts_with(&format!(
-                    "Subagent {number}, \"Look\", waits for the human to answer: rm -rf build."
-                )),
+                prompts[0].starts_with(
+                    "The subagent \"Look\" waits for the human to answer: rm -rf build."
+                ),
                 "{prompts:?}"
             );
         });
