@@ -5243,3 +5243,21 @@ async fn an_agent_waits_for_no_chat_of_another_project(cx: &mut TestAppContext) 
     cx.run_until_parked();
     assert_eq!(waited.await.unwrap(), Err(format!("no chat {other}")));
 }
+
+/// The stage names the chats of its tabs from inside the window's own
+/// update, as when the daemon asks the stage of a new chat to work:
+/// what names them reads no more of the window than the names it was
+/// told, as reading the window then would panic.
+#[gpui::test]
+async fn the_stage_names_the_chats_while_the_window_is_updated(cx: &mut TestAppContext) {
+    let home = scratch::folder("names-home");
+    let (_agents, workspace, cx) = open_window(cx, home);
+
+    cx.simulate_keystrokes("secondary-n");
+    say(cx, &workspace, "hello").await;
+    let key = workspace.read_with(cx, |workspace, _| workspace.shown().map(Chat::key));
+    let key = key.expect("a chat is shown");
+    let names = workspace.read_with(cx, |workspace, _| workspace.chat_names());
+    let name = workspace.update(cx, |_, cx| names(key, cx));
+    assert_eq!(name.as_ref().map(AsRef::as_ref), Some("hello"));
+}

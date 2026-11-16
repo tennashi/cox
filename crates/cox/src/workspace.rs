@@ -39,6 +39,7 @@
 //! and the app's icon counts the chats that wait for them or that they
 //! have not seen since a turn ended. A click on what a chat told shows it.
 
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -492,6 +493,10 @@ pub struct Workspace {
     chat_card: FocusHandle,
     /// Show the chat of a stage's tab that the human asks a stage to.
     shows_chats: Vec<Subscription>,
+    /// The chats' names, by their keys, as the stages read them: told
+    /// them as the list changes, for the stages never to read the
+    /// workspace, which may be updating as it asks them something.
+    chat_names: Rc<RefCell<HashMap<u64, SharedString>>>,
     _from_daemon: Task<()>,
 }
 
@@ -580,6 +585,7 @@ impl Workspace {
             stage_card: cx.focus_handle(),
             chat_card: cx.focus_handle(),
             shows_chats: Vec::new(),
+            chat_names: Rc::default(),
             _from_daemon: heard,
         }
     }
@@ -735,6 +741,7 @@ impl Workspace {
         self.stage_chosen();
         self.follow_project_card(cx);
         self.sight(cx);
+        self.tell_names();
         self.at_work(cx);
         self.follow_commands(cx);
         self.badge(cx);
@@ -1514,6 +1521,7 @@ impl Workspace {
             chat.named = Named::Human;
             let key = chat.key;
             self.tell(ToDaemon::Rename { key, name });
+            self.tell_names();
         }
         window.focus(&self.focus_handle(cx));
         cx.notify();

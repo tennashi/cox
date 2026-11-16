@@ -101,10 +101,7 @@ impl Workspace {
                 tabs: tabs.clone(),
             });
         });
-        let workspace = cx.entity().downgrade();
-        let names: crate::stage::owners::Names = Rc::new(move |key, cx: &App| {
-            Some(workspace.upgrade()?.read(cx).chat(key)?.name.clone())
-        });
+        let names = self.chat_names();
         stage.update(cx, |stage, cx| {
             stage.set_names(names);
             stage.set_wrote(wrote, cx);
@@ -122,7 +119,30 @@ impl Workspace {
             },
         );
         self.shows_chats.push(turns);
+        self.tell_names();
         self.at_work(cx);
+    }
+
+    /// What names the chats, by their keys, for the stages: the names
+    /// the workspace last told them, not the workspace itself, which a
+    /// stage may be asked to name a chat from inside an update of, as
+    /// the daemon asking a new chat's stage to work is heard in one.
+    #[must_use]
+    pub fn chat_names(&self) -> crate::stage::owners::Names {
+        let names = Rc::clone(&self.chat_names);
+        Rc::new(move |key, _: &App| names.borrow().get(&key).cloned())
+    }
+
+    /// Tells the stages the chats' names as they are now, those archived
+    /// too, whose tabs a stage still shows.
+    pub(super) fn tell_names(&self) {
+        let names = self
+            .chats
+            .iter()
+            .chain(&self.archived)
+            .map(|chat| (chat.key, chat.name.clone()))
+            .collect();
+        *self.chat_names.borrow_mut() = names;
     }
 
     /// Asks the daemon for the stage of the project chosen, while no chat
