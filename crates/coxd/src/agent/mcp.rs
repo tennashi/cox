@@ -279,26 +279,6 @@ pub enum ChatRequest {
     /// The chat's agent wrote `page` of a wiki, which the triggers of
     /// the chat's folder run on: no answer.
     WikiWritten { page: String },
-    /// Change the tasks the chat's agent broke its work into as `change`
-    /// says, and answer the tree as the agent reads it then, or why it
-    /// cannot change so.
-    Tasks {
-        change: TasksChange,
-        answer: oneshot::Sender<Result<String, String>>,
-    },
-}
-
-/// How the agent changes the tree of its chat's tasks.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum TasksChange {
-    /// Add or change each task said, all of them or none.
-    Say(Vec<cox_core::tasks::Said>),
-    /// Hand the task to the chat that goes by `chat`, which the agent
-    /// opened for it.
-    Hand {
-        task: cox_core::tasks::TaskId,
-        chat: u64,
-    },
 }
 
 /// Where a chat is, as a page of the wiki its agent writes notes it.
@@ -1025,7 +1005,7 @@ mod tests {
         let cwd = Path::new("/");
         let listed = answer_now(&ask("tools/list", &json!({})), cwd, &sent).unwrap();
         // Cox's own, the Android emulator's, and the Mac's windows' on macOS.
-        let tools = 22 + 6 + if cfg!(target_os = "macos") { 6 } else { 0 };
+        let tools = 21 + 6 + if cfg!(target_os = "macos") { 6 } else { 0 };
         assert_eq!(listed["result"]["tools"].as_array().unwrap().len(), tools);
         let called = ask("tools/call", &json!({ "name": "no_such_tool" }));
         let called = answer_now(&called, cwd, &sent).unwrap();

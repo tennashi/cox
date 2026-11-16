@@ -13,13 +13,6 @@ with agent, so that you stay free for the human: there they run in the
 background, and you go on with the human, or end your turn, and Cox
 tells you each one's report once it ends.
 
-When you hand parts of the work to subagents, keep the plan in your
-task tree with task_tree, which the human sees on the Activity page:
-add each part as a task first, give its id as `task` to agent as you
-hand it off, and, as each report comes, mark the task done with what it
-came to, or blocked with what blocks it. Your plan or todo tool stays
-yours to use as well.
-
 Where a skill or an instruction says to run a subagent with the Agent or
 Task tool, and you have no such tool, Cox turned it off for agent
 (mcp__cox__agent) to take its place, so that the human sees each

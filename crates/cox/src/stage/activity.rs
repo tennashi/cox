@@ -27,7 +27,6 @@ use std::sync::Mutex;
 
 use cox_core::entry::{Entry, QuestionAnswer};
 use cox_core::store::{ChatId, KeptAnswer, Store};
-use cox_core::tasks::{Status, Tree};
 use jiff::tz::TimeZone;
 use serde_json::{Value, json};
 
@@ -294,7 +293,6 @@ pub fn told(root: &Path, wiki: &Path, raw: &Path, triggers: &Value) -> Value {
         &now(),
         root,
         &decided(),
-        &trees(),
         &commands::now,
         &Places {
             wiki,
@@ -302,17 +300,6 @@ pub fn told(root: &Path, wiki: &Path, raw: &Path, triggers: &Value) -> Value {
             triggers,
         },
     )
-}
-
-/// The tasks of each chat whose agent said any, as coxd keeps them.
-fn trees() -> Vec<(ChatId, Tree)> {
-    let trees = coxd::storage::path(coxd::storage::Kept::Chats)
-        .ok_or_else(|| anyhow::anyhow!("no place keeps the chats"))
-        .and_then(|path| Store::read(&path)?.trees());
-    trees.unwrap_or_else(|error| {
-        tracing::warn!("the tasks of the chats are not read: {error:#}");
-        Vec::new()
-    })
 }
 
 /// Where what happened in a folder is read from: the human's wiki, their
@@ -362,33 +349,14 @@ fn waiting_in(told: &Told, root: &Path, now: &dyn Fn(u64) -> Option<commands::No
         .collect()
 }
 
-/// The chats of the folder `root` at work, or that planned tasks not all
-/// done, or of every folder in the home, each with what it does now, as
-/// `now` says, and its tasks, of `trees`, and after each the subagents
-/// at work it opened that no task of it was handed to, as JSON.
-fn at_work(
-    told: &Told,
-    root: &Path,
-    trees: &[(ChatId, Tree)],
-    now: &dyn Fn(u64) -> Option<commands::Now>,
-) -> Vec<Value> {
-    let tree_of = |chat: &Chat| {
-        chat.kept
-            .and_then(|kept| trees.iter().find(|(id, _)| *id == kept))
-            .map(|(_, tree)| tree)
-    };
+/// The chats of the folder `root` at work, or of every folder in the
+/// home, each with what it does now, as `now` says, and after each the
+/// subagents at work it opened, as JSON.
+fn at_work(told: &Told, root: &Path, now: &dyn Fn(u64) -> Option<commands::Now>) -> Vec<Value> {
     let working: Vec<&Chat> = told
         .chats
         .iter()
-        .filter(|chat| {
-            (chat.working || tree_of(chat).is_some_and(|tree| !tree.is_done()))
-                && of_folder(told, chat, root)
-        })
-        .collect();
-    let handed: Vec<ChatId> = working
-        .iter()
-        .filter_map(|chat| tree_of(chat))
-        .flat_map(|tree| tree.tasks().iter().filter_map(|task| task.chat))
+        .filter(|chat| chat.working && of_folder(told, chat, root))
         .collect();
     let mut listed = Vec::new();
     let mut under: Vec<(&Chat, usize)> = working
@@ -408,7 +376,6 @@ fn at_work(
             "name": chat.name,
             "goal": chat.goal,
             "depth": depth,
-            "working": chat.working,
             "sketch": chat.cwd != chat.project,
             "where": where_of(told, &chat.project),
             "said": does.said,
@@ -423,57 +390,16 @@ fn at_work(
                     })
                 })
                 .collect::<Vec<_>>(),
-            "tasks": tree_of(chat).map_or_else(Vec::new, |tree| tasks(told, tree, now)),
         }));
         under.extend(
             working
                 .iter()
                 .rev()
-                .filter(|other| {
-                    other.parent == Some(chat.key)
-                        && !other.kept.is_some_and(|kept| handed.contains(&kept))
-                })
+                .filter(|other| other.parent == Some(chat.key))
                 .map(|other| (*other, depth + 1)),
         );
     }
     listed
-}
-
-/// The tasks of `tree`, as JSON, each with the chat it was handed to, by
-/// its key and name when the window lists it, and what it does now, as
-/// `now` says, while it is at work.
-fn tasks(told: &Told, tree: &Tree, now: &dyn Fn(u64) -> Option<commands::Now>) -> Vec<Value> {
-    tree.tasks()
-        .iter()
-        .map(|task| {
-            let (status, note) = match &task.status {
-                Status::Pending => ("pending", None),
-                Status::InProgress => ("in_progress", None),
-                Status::Done { result } => ("done", result.as_deref()),
-                Status::Blocked { blocker } => ("blocked", Some(blocker.as_str())),
-            };
-            let chat = task.chat.map(|kept| {
-                match told.chats.iter().find(|chat| chat.kept == Some(kept)) {
-                    Some(chat) => json!({
-                        "key": chat.key,
-                        "name": chat.name,
-                        "working": chat.working,
-                        "said": chat.working.then(|| now(chat.key).and_then(|now| now.said)).flatten(),
-                    }),
-                    None => json!({ "key": null, "name": format!("chat {kept}"), "working": false }),
-                }
-            });
-            json!({
-                "id": task.id.as_str(),
-                "title": task.title,
-                "detail": task.detail,
-                "depth": task.depth(tree),
-                "status": status,
-                "note": note,
-                "chat": chat,
-            })
-        })
-        .collect()
 }
 
 /// What was decided in the folder `root`, or in any in the home, the
@@ -514,7 +440,6 @@ fn told_of(
     told: &Told,
     root: &Path,
     decided: &[Decided],
-    trees: &[(ChatId, Tree)],
     now: &dyn Fn(u64) -> Option<commands::Now>,
     places: &Places<'_>,
 ) -> Value {
@@ -525,7 +450,7 @@ fn told_of(
     } = *places;
     let home = root == told.home;
     let waiting = waiting_in(told, root, now);
-    let working = at_work(told, root, trees, now);
+    let working = at_work(told, root, now);
     let decided = decided_in(told, root, decided);
     let name = name_of(told, root);
     let mut happened = Vec::new();
@@ -682,7 +607,7 @@ mod tests {
             raw,
             triggers,
         };
-        told_of(told, root, &[], &[], &|_| None, &places)
+        told_of(told, root, &[], &|_| None, &places)
     }
 
     /// What goes on in the folder `root`, where nothing happened.
@@ -861,7 +786,7 @@ mod tests {
             triggers: &json!({}),
         };
 
-        let json = told_of(&told, &root, &decisions, &[], &now, &places);
+        let json = told_of(&told, &root, &decisions, &now, &places);
 
         assert_eq!(json["waiting"][0]["asks"], "Which way?");
         let working: Vec<(u64, u64)> = json["working"]
@@ -896,7 +821,7 @@ mod tests {
         assert_eq!(decided[1]["chat"], "kept 6");
 
         // The home tells of every folder.
-        let json = told_of(&told, &home, &decisions, &[], &now, &places);
+        let json = told_of(&told, &home, &decisions, &now, &places);
         assert_eq!(json["working"].as_array().unwrap().len(), 4);
         let questions: Vec<&str> = json["decided"]
             .as_array()
@@ -906,115 +831,6 @@ mod tests {
             .collect();
         assert_eq!(questions, ["Which way?", "Which name?", "Which store?"]);
         assert_eq!(json["decided"][1]["where"], "other");
-    }
-
-    #[test]
-    fn a_chat_that_planned_tasks_shows_them_each_with_the_chat_it_was_handed_to() {
-        use cox_core::tasks::{Said, TaskId};
-        let root = TempDir::new();
-        let kept = |number: i64| -> ChatId { serde_json::from_value(json!(number)).unwrap() };
-        let listed = |key: u64, working: bool, parent: Option<u64>| {
-            let mut listed = chat(key, &root, &root, false, false);
-            listed.working = working;
-            listed.parent = parent;
-            listed.kept = Some(kept(i64::try_from(key).unwrap()));
-            listed
-        };
-        let told = Told {
-            chats: vec![
-                listed(2, true, None),
-                listed(3, true, Some(2)),
-                listed(4, true, Some(2)),
-                listed(5, false, None),
-                listed(6, false, None),
-            ],
-            projects: Vec::new(),
-            home: root.join("home"),
-        };
-        let id = |id: &str| TaskId::try_from(id.to_owned()).unwrap();
-        let tree = |tasks: &[(&str, Option<Status>)]| {
-            let mut tree = Tree::default();
-            tree.apply(
-                tasks
-                    .iter()
-                    .map(|(task, status)| Said {
-                        id: Some(id(task)),
-                        title: Some(format!("Do {task}")),
-                        status: status.clone(),
-                        ..Said::default()
-                    })
-                    .collect(),
-                1,
-            )
-            .unwrap();
-            tree
-        };
-        let mut handed = tree(&[
-            (
-                "store",
-                Some(Status::Done {
-                    result: Some("kept".to_owned()),
-                }),
-            ),
-            ("ui", None),
-            (
-                "docs",
-                Some(Status::Blocked {
-                    blocker: "no window".to_owned(),
-                }),
-            ),
-        ]);
-        handed.hand(&id("ui"), kept(3), 2).unwrap();
-        let trees = [
-            (kept(2), handed),
-            (kept(5), tree(&[("later", None)])),
-            (
-                kept(6),
-                tree(&[("over", Some(Status::Done { result: None }))]),
-            ),
-        ];
-        let now = |key: u64| {
-            Some(commands::Now {
-                said: Some(format!("step of {key}")),
-                running: None,
-                asks: None,
-            })
-        };
-        let places = Places {
-            wiki: &root.join("wiki"),
-            raw: &root.join("raw"),
-            triggers: &json!({}),
-        };
-
-        let json = told_of(&told, &root, &[], &trees, &now, &places);
-
-        let rows: Vec<(u64, u64)> = json["working"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|chat| {
-                (
-                    chat["key"].as_u64().unwrap(),
-                    chat["depth"].as_u64().unwrap(),
-                )
-            })
-            .collect();
-        // The subagent handed a task shows in it, not again under the
-        // chat; a chat whose plan is not done shows though it waits, and
-        // one whose plan is done does not.
-        assert_eq!(rows, [(2, 0), (4, 1), (5, 0)]);
-        let tasks = &json["working"][0]["tasks"];
-        assert_eq!(tasks[0]["status"], "done");
-        assert_eq!(tasks[0]["note"], "kept");
-        assert_eq!(tasks[1]["status"], "in_progress");
-        assert_eq!(
-            tasks[1]["chat"],
-            json!({ "key": 3, "name": "chat 3", "working": true, "said": "step of 3" })
-        );
-        assert_eq!(tasks[2]["status"], "blocked");
-        assert_eq!(tasks[2]["note"], "no window");
-        assert_eq!(json["working"][2]["working"], false);
-        assert_eq!(json["working"][2]["tasks"][0]["status"], "pending");
     }
 
     #[test]
