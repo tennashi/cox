@@ -1,3 +1,3 @@
-Subagent {number}, "{name}", ended its turn. It last said:
+The subagent "{name}" ended its turn. It last said:
 
 {said}

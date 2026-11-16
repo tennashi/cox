@@ -1,3 +1,3 @@
-Subagent {number}, "{name}", waits for the human to answer: {asking}. It last said:
+The subagent "{name}" waits for the human to answer: {asking}. It last said:
 
 {said}

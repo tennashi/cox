@@ -267,6 +267,12 @@ pub enum ChatRequest {
         chat: u64,
         answer: oneshot::Sender<Result<Waited, String>>,
     },
+    /// Answer the number and the title of the chat `subagent` names, or
+    /// why it names none, or which it could mean.
+    FindSubagent {
+        subagent: Subagent,
+        answer: oneshot::Sender<Result<(u64, String), String>>,
+    },
     /// Answer where the chat is, for a page of the wiki its agent writes
     /// to say where it was used.
     Whereabouts {
@@ -293,6 +299,15 @@ pub struct Whereabouts {
     pub chat: String,
     /// The number the chat is kept by, if it is kept.
     pub kept: Option<String>,
+}
+
+/// A chat an agent names to `agent_report`: by its title, as the human
+/// sees it in the list, among the chats the agent's own chat opened, or
+/// by the number `agent` answered, among the chats of its project.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Subagent {
+    Title(String),
+    Number(u64),
 }
 
 /// How a chat stands, as the agent that waited for it is told.

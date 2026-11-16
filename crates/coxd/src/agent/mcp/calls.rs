@@ -1511,9 +1511,9 @@ async fn start_sketch(
         .await
         .map_err(|_| "the chat closed before the sketch was made".to_owned())??;
     let mut told = format!(
-        "The sketch {} is open beside this chat as chat {}, trying it. Wait for its turn to \
-         end with agent_report, giving {}.",
-        opened.name, opened.number, opened.number
+        "The sketch \"{}\" is open beside this chat, trying it. Wait for its turn to end with \
+         agent_report, giving its title.",
+        opened.name
     );
     if let Some(folder) = &opened.folder {
         let _ = write!(
@@ -2355,7 +2355,8 @@ mod tests {
         let told = answered["content"][0]["text"].as_str().unwrap();
         assert!(
             told.starts_with(
-                "The sketch A warmer greeting. is open beside this chat as chat 3, trying it."
+                "The sketch \"A warmer greeting.\" is open beside this chat, trying it. Wait \
+                 for its turn to end with agent_report, giving its title."
             ),
             "{told}"
         );

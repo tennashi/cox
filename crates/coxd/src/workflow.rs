@@ -82,7 +82,9 @@ pub const SUBAGENT_REPORTS: Text = Text {
 };
 
 /// A subagent's report, in [`SUBAGENT_REPORTS`], once it ended its turn:
-/// its chat's `{number}` and `{name}`, and what it last `{said}`.
+/// its chat's `{name}`, and what it last `{said}`. Its `{number}` is there
+/// too, for a text the human keeps, though Cox's own leaves it out: the
+/// human sees a chat only by its name.
 pub const SUBAGENT_ENDED: Text = Text {
     name: "subagent/ended.md",
     own: include_str!("workflow/subagent/ended.md"),
