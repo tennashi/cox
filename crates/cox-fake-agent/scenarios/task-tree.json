@@ -1,0 +1,58 @@
+{
+  "turns": [
+    {
+      "when": "Ship the release",
+      "steps": [
+        { "say": "I'll break it into three tasks and hand two to subagents." },
+        { "call": { "tool": "task_tree", "arguments": { "tasks": [
+          { "id": "notes", "title": "Write the release notes" },
+          { "id": "build", "title": "Build and sign the bundle" },
+          { "id": "announce", "title": "Announce the release", "detail": "Once the notes and the bundle are done." }
+        ] } } },
+        { "call": { "tool": "agent", "arguments": {
+          "description": "Release notes", "prompt": "SUBAGENT notes: write the release notes.",
+          "run_in_background": true, "task": "notes"
+        } } },
+        { "call": { "tool": "agent", "arguments": {
+          "description": "Bundle", "prompt": "SUBAGENT build: build and sign the bundle.",
+          "run_in_background": true, "task": "build"
+        } } },
+        { "say": "Both are at work; I'll mark each task as its report comes." }
+      ]
+    },
+    {
+      "when": "SUBAGENT notes",
+      "steps": [
+        { "say": "Writing the notes…" },
+        { "sleep": 12000 },
+        { "say": "NOTES-READY: the notes list 4 fixes and 2 features." }
+      ]
+    },
+    {
+      "when": "SUBAGENT build",
+      "steps": [
+        { "say": "Building…" },
+        { "sleep": 30000 },
+        { "say": "BUNDLE-FAILED: codesign found no identity." }
+      ]
+    },
+    {
+      "when": "NOTES-READY",
+      "steps": [
+        { "call": { "tool": "task_tree", "arguments": { "tasks": [
+          { "id": "notes", "status": "done", "note": "4 fixes and 2 features listed" }
+        ] } } },
+        { "say": "The notes are done." }
+      ]
+    },
+    {
+      "when": "BUNDLE-FAILED",
+      "steps": [
+        { "call": { "tool": "task_tree", "arguments": { "tasks": [
+          { "id": "build", "status": "blocked", "note": "codesign found no identity" }
+        ] } } },
+        { "say": "The bundle is blocked on the signing identity." }
+      ]
+    }
+  ]
+}
