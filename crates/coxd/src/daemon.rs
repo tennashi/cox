@@ -52,7 +52,9 @@ use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use tokio::sync::oneshot;
 
 use crate::agent::instructions::Instructions;
-use crate::agent::mcp::{ChatRequest, OpenedChat, Ran, Seen, ToolRequest, Waited, Whereabouts};
+use crate::agent::mcp::{
+    ChatRequest, OpenedChat, Ran, Seen, TasksChange, ToolRequest, Waited, Whereabouts,
+};
 use crate::agent::setup::{Policy, Setup, StageUse, Withheld, keeps_in_wiki};
 use crate::agent::{Agent, AgentEvent, Start};
 use crate::agents::Agents;
@@ -2252,6 +2254,9 @@ impl Daemon {
                     );
                 }
             }
+            ChatRequest::Tasks { change, answer } => {
+                answer.send(self.change_tasks(key, change)).ok();
+            }
             ChatRequest::Whereabouts { answer } => {
                 let whereabouts = self.slot(key).map_or_default(|slot| Whereabouts {
                     project: self.projects[slot.project].name.clone(),
@@ -2263,6 +2268,43 @@ impl Daemon {
                 answer.send(whereabouts).ok();
             }
         }
+    }
+
+    /// Changes the tasks of the chat `key` as `change` says, keeps them,
+    /// and answers them as its agent reads them, or why they cannot
+    /// change so.
+    fn change_tasks(&mut self, key: u64, change: TasksChange) -> Result<String, String> {
+        let kept_of = |key: u64| self.slot(key).and_then(|slot| slot.kept);
+        let kept = kept_of(key).ok_or("this chat is not kept, so it keeps no tasks")?;
+        let mut tree = self
+            .store
+            .tasks(kept)
+            .map_err(|error| format!("the tasks cannot be read: {error:#}"))?;
+        let was = tree.clone();
+        let at = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .ok()
+            .and_then(|since| i64::try_from(since.as_millis()).ok())
+            .unwrap_or_default();
+        match change {
+            TasksChange::Say(said) => tree.apply(said, at)?,
+            TasksChange::Hand { task, chat } => {
+                let handed = kept_of(chat).ok_or_else(|| format!("no chat {chat} is kept"))?;
+                tree.hand(&task, handed, at)?;
+            }
+        }
+        if tree != was {
+            self.store
+                .keep_tasks(kept, &tree)
+                .map_err(|error| format!("the tasks cannot be kept: {error:#}"))?;
+        }
+        let number = |chat: ChatId| {
+            self.chats
+                .iter()
+                .find(|slot| slot.kept == Some(chat))
+                .map_or_else(|| "closed".to_owned(), |slot| slot.key.to_string())
+        };
+        Ok(cox_core::tasks::told(&tree, &number))
     }
 
     /// Asks the agent of the chat kept as `chat`, or of the chat `key`, to
@@ -3101,6 +3143,65 @@ mod tests {
         });
 
         assert_eq!(kept_chat(&store, chat).name, "Renamed");
+    }
+
+    #[test]
+    fn keeps_the_tasks_a_chats_agent_says_and_hands_to_a_subagents_chat() {
+        use cox_core::tasks::{Said, Status, TaskId};
+        let home = TempDir::new();
+        let (store, chat) = one_chat(&home);
+        let project = kept_chat(&store, chat).project;
+        let child = store
+            .add_chat_under(chat, project, "Subagent", None)
+            .unwrap();
+        let (mut daemon, _told) = daemon_of(&store, &home);
+        let key = key_of(&mut daemon, chat);
+        let child_key = key_of(&mut daemon, child);
+        let id = |id: &str| TaskId::try_from(id.to_owned()).unwrap();
+        let mut ask = |change: TasksChange| {
+            let (answer, told) = oneshot::channel();
+            daemon.asked(key, ChatRequest::Tasks { change, answer });
+            told.blocking_recv().unwrap()
+        };
+
+        let said = |task: &str, title: &str| Said {
+            id: Some(id(task)),
+            title: Some(title.to_owned()),
+            ..Said::default()
+        };
+        ask(TasksChange::Say(vec![
+            said("a", "First"),
+            said("b", "Second"),
+        ]))
+        .unwrap();
+        let told = ask(TasksChange::Hand {
+            task: id("b"),
+            chat: child_key,
+        })
+        .unwrap();
+
+        assert_eq!(
+            told,
+            format!("[ ] a: First\n[~] b: Second (chat {child_key})\n")
+        );
+        let kept = store.tasks(chat).unwrap();
+        let handed = kept.task(&id("b")).unwrap();
+        assert_eq!(
+            (handed.chat, &handed.status),
+            (Some(child), &Status::InProgress)
+        );
+        assert!(store.tasks(child).unwrap().is_empty());
+        let refused = ask(TasksChange::Say(vec![Said {
+            id: Some(id("a")),
+            parent: Some(id("none")),
+            ..Said::default()
+        }]));
+        assert!(refused.is_err());
+        assert_eq!(
+            store.tasks(chat).unwrap(),
+            kept,
+            "a refused change keeps nothing"
+        );
     }
 
     #[test]

@@ -24,6 +24,7 @@ use crate::{raw, wiki};
 mod android;
 mod mac;
 mod subagent;
+mod tasks;
 
 const SHOW_MARKDOWN: &str = "show_markdown";
 const SHOW_FILE: &str = "show_file";
@@ -229,6 +230,7 @@ fn all_tools() -> Value {
     propose_icon_tool(),
     propose_project_tool(),
     start_sketch_tool(),
+    tasks::tool(),
     ]);
     if let Some(all) = tools.as_array_mut() {
         all.extend(wiki_tools());
@@ -851,6 +853,7 @@ pub(super) async fn call(
         PROPOSE_PROJECT => propose_project(arguments, chats).await,
         SHOW_MEDIA => show_media(arguments, cwd, chats).await,
         START_SKETCH => start_sketch(arguments, chats).await,
+        tasks::TASK_TREE => tasks::call(arguments, chats).await,
         WIKI_SEARCH => wiki_search(arguments, chats).await,
         WIKI_READ => wiki_read(arguments, chats).await,
         WIKI_WRITE => wiki_write(arguments, cwd, chats).await,
@@ -2114,6 +2117,7 @@ mod tests {
             "propose_icon",
             "propose_project",
             "start_sketch",
+            "task_tree",
             "wiki_search",
             "wiki_read",
             "wiki_write",

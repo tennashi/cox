@@ -20,9 +20,10 @@ use crate::goal::Goal;
 use crate::moved::Moved;
 use crate::settings::Setting;
 use crate::tabs::KeptTabs;
+use crate::tasks::Tree;
 
 /// The version of the tables below, as `SQLite`'s `user_version` holds it.
-const VERSION: i64 = 17;
+const VERSION: i64 = 18;
 
 const TABLES: &str = "
 CREATE TABLE projects (
@@ -78,7 +79,9 @@ CREATE TABLE chats (
     -- Where the agent of its session runs subagents, `agent` or `chats`,
     -- as the settings said when the session started: NULL for a session
     -- that started before Cox kept it, which ran them as `agent`.
-    subagents TEXT
+    subagents TEXT,
+    -- The tasks its agent broke its work into, as JSON, once it said any.
+    tasks TEXT
 );
 CREATE TABLE entries (
     chat INTEGER NOT NULL REFERENCES chats (id),
@@ -148,6 +151,7 @@ const UPGRADES: &[&str] = &[
     "ALTER TABLE projects ADD COLUMN about TEXT;",
     "ALTER TABLE chats ADD COLUMN commands TEXT;",
     "ALTER TABLE chats ADD COLUMN subagents TEXT;",
+    "ALTER TABLE chats ADD COLUMN tasks TEXT;",
 ];
 
 /// How long a write waits for another Cox writing the same database.
@@ -988,6 +992,57 @@ impl Store {
         Ok(())
     }
 
+    /// The tasks `chat`'s agent broke its work into: none until it said
+    /// any.
+    ///
+    /// # Errors
+    ///
+    /// When the database cannot be read, or holds tasks this Cox cannot.
+    pub fn tasks(&self, chat: ChatId) -> anyhow::Result<Tree> {
+        let tasks: Option<String> = self.connection.query_row(
+            "SELECT tasks FROM chats WHERE id = ?1",
+            [chat.0],
+            |row| row.get(0),
+        )?;
+        Ok(tasks
+            .map(|tasks| serde_json::from_str(&tasks))
+            .transpose()?
+            .unwrap_or_default())
+    }
+
+    /// The tasks of each chat whose agent said any, by the chat.
+    ///
+    /// # Errors
+    ///
+    /// When the database cannot be read, or holds tasks this Cox cannot.
+    pub fn trees(&self) -> anyhow::Result<Vec<(ChatId, Tree)>> {
+        let mut statement = self
+            .connection
+            .prepare("SELECT id, tasks FROM chats WHERE tasks IS NOT NULL ORDER BY id")?;
+        let rows = statement.query_map([], |row| {
+            Ok((ChatId(row.get(0)?), row.get::<_, String>(1)?))
+        })?;
+        let mut trees = Vec::new();
+        for row in rows {
+            let (chat, tasks) = row?;
+            trees.push((chat, serde_json::from_str(&tasks)?));
+        }
+        Ok(trees)
+    }
+
+    /// Keeps `tasks` as those `chat`'s agent broke its work into.
+    ///
+    /// # Errors
+    ///
+    /// When the database cannot be written.
+    pub fn keep_tasks(&self, chat: ChatId, tasks: &Tree) -> anyhow::Result<()> {
+        self.connection.execute(
+            "UPDATE chats SET tasks = ?2 WHERE id = ?1",
+            params![chat.0, serde_json::to_string(tasks)?],
+        )?;
+        Ok(())
+    }
+
     /// The steps of the plan `chat`'s agent first sent after the human's
     /// last line, once it sent one.
     ///
@@ -1813,6 +1868,39 @@ mod tests {
         assert_eq!(goals(&store), [None, Some(ci)]);
         store.keep_goal(other, Some(&words)).unwrap();
         assert_eq!(goals(&store), [None, Some(words)]);
+    }
+
+    #[test]
+    fn keeps_the_tasks_of_each_chat_whose_agent_said_any() {
+        use crate::tasks::{Said, Status, TaskId};
+        let directory = scratch();
+        let path = directory.path().join("chats.sqlite");
+        let mut tree = Tree::default();
+        tree.apply(
+            vec![Said {
+                id: Some(TaskId::try_from("ui".to_owned()).unwrap()),
+                title: Some("Show the tree".to_owned()),
+                status: Some(Status::Blocked {
+                    blocker: "no window".to_owned(),
+                }),
+                ..Said::default()
+            }],
+            5,
+        )
+        .unwrap();
+        let (planned, quiet) = {
+            let store = Store::open(&path).unwrap();
+            let planned = store.add_chat(None, "Chat 1").unwrap();
+            let quiet = store.add_chat(None, "Chat 2").unwrap();
+            assert_eq!(store.tasks(planned).unwrap(), Tree::default());
+            store.keep_tasks(planned, &tree).unwrap();
+            (planned, quiet)
+        };
+
+        let store = Store::read(&path).unwrap();
+        assert_eq!(store.tasks(planned).unwrap(), tree);
+        assert_eq!(store.tasks(quiet).unwrap(), Tree::default());
+        assert_eq!(store.trees().unwrap(), [(planned, tree)]);
     }
 
     #[test]

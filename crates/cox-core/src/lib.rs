@@ -8,6 +8,7 @@
 //! - [`settings`] is what a chat's agent lets the human choose of its
 //!   session, such as its model.
 //! - [`tabs`] is what is kept of a chat's stage.
+//! - [`tasks`] is the tree of tasks a chat's agent broke its work into.
 //! - [`list`] is a list of which one item is shown, as a stage's tabs
 //!   are, and a window's chats.
 //! - [`store`] keeps all of it in `SQLite`.
@@ -27,3 +28,4 @@ pub mod quit;
 pub mod settings;
 pub mod store;
 pub mod tabs;
+pub mod tasks;

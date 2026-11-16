@@ -154,6 +154,12 @@ pub(super) fn agent_tool() -> Value {
                     "description": "What the subagent works until it is met: \"$ \" and a \
                         shell command, which has to pass, or words, which an agent judges.",
                 },
+                "task": {
+                    "type": "string",
+                    "description": "The id of the task of your task_tree the subagent does, \
+                        which this puts in progress and links to its chat, for the human to \
+                        see who works on it.",
+                },
                 "sketch": {
                     "type": "string",
                     "enum": ["project", "empty"],
@@ -387,6 +393,7 @@ pub(super) async fn agent(
     let sketch = string(arguments, "sketch")?
         .map(|name| Sketch::parse(&name).ok_or("`sketch` is not \"project\" or \"empty\""))
         .transpose()?;
+    let task = super::tasks::id(arguments.get("task"), "task")?;
     let (answer, opened) = oneshot::channel();
     chats
         .send(ChatRequest::OpenChat {
@@ -403,7 +410,12 @@ pub(super) async fn agent(
         .await
         .map_err(|_| "the chat closed while the subagent's opened".to_owned())??;
     let number = opened.number;
-    let notes = notes(&opened, sketch);
+    let mut notes = notes(&opened, sketch);
+    if let Some(task) = task
+        && let Err(error) = super::tasks::hand(task, number, chats).await
+    {
+        notes.push(format!("The task was not handed to it: {error}."));
+    }
     if background {
         let mut told = format!(
             "The subagent works in {}, chat {number}, under this one. Cox tells you its \
