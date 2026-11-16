@@ -7,7 +7,9 @@
 //! when the command ends, so the human sees what the agent waits on.
 //!
 //! The window tells this module of a chat's conversation as it changes
-//! (see [`tell`]), since the stage's pages are served apart from it.
+//! (see [`tell`]), since the stage's pages are served apart from it; the
+//! Activity page reads from it what each chat at work does now, and what
+//! each chat that asks the human asks (see [`now`]).
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -43,6 +45,9 @@ pub struct Chat {
     pub working: bool,
     /// The steps of its conversation that ran commands (see [`steps`]).
     pub steps: Vec<Step>,
+    /// What its agent asks the human, while it asks a question (see
+    /// [`asked`]).
+    pub asks: Option<String>,
 }
 
 /// Commands the agent ran one after another, with nothing said between.
@@ -114,6 +119,32 @@ pub fn steps(entries: &[Entry]) -> Vec<Step> {
     }
     let skip = steps.len().saturating_sub(STEPS);
     steps.split_off(skip)
+}
+
+/// What the last question of `entries` asks, while it is not answered:
+/// the first line of what the agent said as it asked, or of its first
+/// question, or that question's label.
+#[must_use]
+pub fn asked(entries: &[Entry]) -> Option<String> {
+    let Some(Entry::Question {
+        message,
+        questions,
+        answer: None,
+    }) = entries
+        .iter()
+        .rev()
+        .find(|entry| matches!(entry, Entry::Question { .. }))
+    else {
+        return None;
+    };
+    first_line(message).or_else(|| {
+        let question = questions.first()?;
+        question
+            .text
+            .as_deref()
+            .and_then(first_line)
+            .or_else(|| question.header.clone())
+    })
 }
 
 /// The first line of `text` that says something, cut to [`SAID`]
@@ -202,6 +233,43 @@ pub fn keep(keys: &[u64]) {
     if let Ok(mut told) = TOLD.lock() {
         told.get_or_insert_with(Told::default).keep(keys);
     }
+}
+
+/// What the agent of a chat does now, and what it asks, as the window
+/// last told of its conversation.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Now {
+    /// What the agent said before its last step of commands.
+    pub said: Option<String>,
+    /// The last command of that step still running, if one is.
+    pub running: Option<String>,
+    /// What the agent asks the human (see [`asked`]).
+    pub asks: Option<String>,
+}
+
+impl Chat {
+    fn now(&self) -> Now {
+        let last = self.steps.last();
+        Now {
+            said: last.and_then(|step| step.said.clone()),
+            running: last.and_then(|step| {
+                step.commands
+                    .iter()
+                    .rev()
+                    .find(|command| command.result.is_none())
+                    .map(|command| command.line.clone())
+            }),
+            asks: self.asks.clone(),
+        }
+    }
+}
+
+/// What the agent of the chat `key` does now, and what it asks, if the
+/// window told of its conversation.
+#[must_use]
+pub fn now(key: u64) -> Option<Now> {
+    let told = TOLD.lock().ok()?;
+    told.as_ref()?.chats.get(&key).map(Chat::now)
 }
 
 /// What the page at `cox://api/commands` reads, for the stage of the
@@ -351,6 +419,7 @@ mod tests {
             cwd: root.clone(),
             project: root.clone(),
             working: true,
+            asks: None,
             steps: vec![Step {
                 said: None,
                 commands: vec![
@@ -401,6 +470,61 @@ mod tests {
     }
 
     #[test]
+    fn a_chat_does_its_last_step_and_asks_its_last_question_unanswered() {
+        use cox_core::entry::{Question, QuestionAnswer};
+
+        let question = |message: &str, text: Option<&str>, answer| Entry::Question {
+            message: message.to_owned(),
+            questions: vec![Question {
+                header: Some("Approach".to_owned()),
+                text: text.map(str::to_owned),
+                ..Question::default()
+            }],
+            answer,
+        };
+        let entries = vec![
+            call("1", "ls", "", Some(ToolCallResult::Completed)),
+            Entry::Reply("Now I wait.\nThen I report.".to_owned()),
+            call("2", "sleep 30 && echo done", "Waits", None),
+            call("3", "date", "", Some(ToolCallResult::Completed)),
+        ];
+        let chat = Chat {
+            key: 1,
+            name: "wait".to_owned(),
+            cwd: PathBuf::from("/p"),
+            project: PathBuf::from("/p"),
+            working: true,
+            asks: asked(&entries),
+            steps: steps(&entries),
+        };
+
+        assert_eq!(
+            chat.now(),
+            Now {
+                said: Some("Now I wait.".to_owned()),
+                running: Some("sleep 30 && echo done".to_owned()),
+                asks: None,
+            }
+        );
+        assert_eq!(
+            asked(&[question("", Some("Which one?"), None)]).as_deref(),
+            Some("Which one?")
+        );
+        assert_eq!(
+            asked(&[question("Which way?\n\nTell me.", None, None)]).as_deref(),
+            Some("Which way?")
+        );
+        assert_eq!(
+            asked(&[question("", None, None)]).as_deref(),
+            Some("Approach")
+        );
+        assert_eq!(
+            asked(&[question("Which way?", None, Some(QuestionAnswer::Declined))]),
+            None
+        );
+    }
+
+    #[test]
     fn what_a_command_printed_comes_out_of_its_fence() {
         assert_eq!(last_lines("```console\n1\n2\n```"), "1\n2");
         assert_eq!(last_lines("1\n2\n"), "1\n2");
@@ -416,6 +540,7 @@ mod tests {
                 cwd: PathBuf::from("/q"),
                 project: PathBuf::from("/q"),
                 working: false,
+                asks: None,
                 steps: steps(&[call("1", "ls", "", None)]),
             },
             Instant::now(),

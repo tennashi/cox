@@ -186,6 +186,7 @@ impl Workspace {
         let Some(view) = &chat.view else {
             return;
         };
+        let entries = view.read(cx).conversation().entries();
         crate::stage::commands::tell(crate::stage::commands::Chat {
             key,
             name: chat.name.to_string(),
@@ -195,22 +196,25 @@ impl Workspace {
                 chat.state,
                 State::Busy | State::Asking | State::Stopping | State::Checking
             ),
-            steps: crate::stage::commands::steps(view.read(cx).conversation().entries()),
+            steps: crate::stage::commands::steps(entries),
+            asks: crate::stage::commands::asked(entries),
         });
     }
 
     /// Tells the stages' Commands pages of every chat with a view, as the
-    /// list of chats changed, having the conversation of each subagent
-    /// at work told, for its commands to show while no one looks at it.
+    /// list of chats changed, having the conversation of each chat at
+    /// work, or that asks the human something, told, for the Commands and
+    /// Activity pages to show what it runs and asks while no one looks at
+    /// it.
     pub(super) fn follow_commands(&mut self, cx: &mut Context<Self>) {
-        let subagents: Vec<u64> = self
+        let unseen: Vec<u64> = self
             .chats
             .iter()
-            .filter(|chat| chat.parent.is_some() && chat.view.is_none())
-            .filter(|chat| matches!(chat.state, State::Busy | State::Checking))
+            .filter(|chat| chat.view.is_none())
+            .filter(|chat| matches!(chat.state, State::Busy | State::Checking | State::Asking))
             .map(|chat| chat.key)
             .collect();
-        for key in subagents {
+        for key in unseen {
             self.view(key, cx);
         }
         let keys: Vec<u64> = self

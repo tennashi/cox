@@ -72,6 +72,23 @@
         color: var(--asking);
         margin-left: 4px;
       }
+      .tier i {
+        font-style: normal;
+        color: var(--accent);
+        margin-left: 4px;
+      }
+      /* What is asked and at work on the left, what was decided on the
+         right, once the page is wide enough for both. */
+      .columns {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr);
+        column-gap: 20px;
+      }
+      @media (min-width: 760px) {
+        .columns {
+          grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+        }
+      }
       .row {
         display: flex;
         align-items: baseline;
@@ -101,6 +118,56 @@
       }
       .dot.unread {
         background: var(--accent);
+      }
+      .dot.busy {
+        border: 2px solid var(--accent);
+        border-right-color: transparent;
+        width: 6px;
+        height: 6px;
+        animation: turn 1s linear infinite;
+      }
+      @keyframes turn {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+      .row .line,
+      .decision .line {
+        color: var(--dim);
+        font-size: 12px;
+        overflow-wrap: anywhere;
+      }
+      .row .running {
+        font: 11.5px var(--mono);
+        color: var(--foreground);
+        overflow-wrap: anywhere;
+      }
+      .row .running .prompt {
+        color: var(--faint);
+      }
+      .decision {
+        padding: 7px 10px;
+        border-bottom: 1px solid var(--border);
+        overflow-wrap: anywhere;
+      }
+      .decision .header {
+        font: 600 9.5px var(--sans);
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        color: var(--dim);
+      }
+      .decision .arrow {
+        color: var(--faint);
+      }
+      .decision .choice {
+        font-weight: 600;
+      }
+      .decision .other {
+        color: var(--dim);
+      }
+      .decision .meta {
+        font: 11.5px var(--mono);
+        color: var(--faint);
       }
       .row .name {
         font-weight: 600;
