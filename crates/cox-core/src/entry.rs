@@ -147,6 +147,10 @@ pub enum Entry {
         /// How the human answered, once they did.
         #[serde(default)]
         answer: Option<QuestionAnswer>,
+        /// When they answered, in milliseconds since the epoch: none for
+        /// an answer an older Cox kept without it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        answered_at: Option<i64>,
     },
     /// The agent asks the human to log in, one of the ways of `options`.
     Login {
@@ -735,11 +739,12 @@ mod tests {
                 chosen: vec![0],
                 other: None,
             }])),
+            answered_at: Some(1_700_000_000_000),
         };
         let written = serde_json::to_string(&entry).unwrap();
         assert_eq!(
             written,
-            r#"{"question":{"message":"Which?","questions":[{"header":"Pick","options":[{"label":"A","description":"the first"}],"multiple":false,"other":true}],"answer":{"given":[{"chosen":[0]}]}}}"#
+            r#"{"question":{"message":"Which?","questions":[{"header":"Pick","options":[{"label":"A","description":"the first"}],"multiple":false,"other":true}],"answer":{"given":[{"chosen":[0]}]},"answered_at":1700000000000}}"#
         );
         assert_eq!(serde_json::from_str::<Entry>(&written).unwrap(), entry);
         let declined: Entry =
@@ -751,6 +756,7 @@ mod tests {
                 message: "Which?".to_owned(),
                 questions: Vec::new(),
                 answer: Some(QuestionAnswer::Declined),
+                answered_at: None,
             }
         );
     }

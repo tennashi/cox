@@ -501,6 +501,7 @@ fn describe_entry(entry: &Entry) -> String {
             message,
             questions,
             answer,
+            ..
         } => {
             let asked: Vec<String> = questions
                 .iter()

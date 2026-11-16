@@ -925,6 +925,7 @@ impl ChatView {
                 message,
                 questions,
                 answer,
+                ..
             } => self.render_question(index, message, questions, answer.as_ref(), &mut writer, cx),
             Entry::Permission {
                 title,

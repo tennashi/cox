@@ -98,6 +98,7 @@ impl Decided {
             message,
             questions,
             answer: Some(QuestionAnswer::Given(picked)),
+            ..
         } = &kept.entry
         else {
             return Vec::new();
@@ -671,6 +672,7 @@ mod tests {
                 message: "Which way do we go?".to_owned(),
                 questions: vec![question.clone(), words.clone()],
                 answer: Some(answer),
+                answered_at: None,
             },
         };
         let given = QuestionAnswer::Given(vec![
