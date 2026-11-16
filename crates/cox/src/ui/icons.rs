@@ -169,6 +169,9 @@ impl AssetSource for Icons {
         if let Some(file) = app_icon_file(path) {
             return Ok(Some(Cow::Owned(file.into_bytes())));
         }
+        if let Some(file) = crate::workspace::arc_file(path) {
+            return Ok(Some(Cow::Owned(file.into_bytes())));
+        }
         Ok(Icon::ALL
             .into_iter()
             .find(|icon| icon.path() == path)
