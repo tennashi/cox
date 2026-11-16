@@ -126,6 +126,68 @@
         height: 6px;
         animation: turn 1s linear infinite;
       }
+      .dot.planned {
+        border: 1.5px solid var(--faint);
+        width: 5px;
+        height: 5px;
+      }
+      .tasks {
+        margin: -2px 0 8px;
+        padding-left: 10px;
+        border-left: 1px solid var(--border);
+      }
+      .tasks .plan {
+        font: 11.5px var(--mono);
+        color: var(--faint);
+        padding: 2px 0 2px 2px;
+      }
+      .task {
+        display: flex;
+        align-items: baseline;
+        gap: 8px;
+        padding: 2px 0 2px 2px;
+      }
+      .task .mark {
+        flex: none;
+        width: 12px;
+        text-align: center;
+        font: 600 12px var(--mono);
+        color: var(--faint);
+      }
+      .task.in_progress .mark {
+        color: var(--accent);
+      }
+      .task.done .mark {
+        color: var(--dim);
+      }
+      .task.done .title {
+        color: var(--dim);
+      }
+      .task.blocked .mark,
+      .task .note.blocked {
+        color: var(--asking);
+      }
+      .task .what {
+        min-width: 0;
+      }
+      .task .note {
+        color: var(--dim);
+        font-size: 12px;
+        overflow-wrap: anywhere;
+      }
+      .task .line {
+        color: var(--faint);
+        font-size: 12px;
+      }
+      .task .handed {
+        font-size: 12px;
+        white-space: nowrap;
+      }
+      .task .handed .dot {
+        display: inline-block;
+        margin-right: 4px;
+        vertical-align: -1px;
+      }
       @keyframes turn {
         to {
           transform: rotate(360deg);
