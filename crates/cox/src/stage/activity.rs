@@ -478,7 +478,11 @@ fn planned(
         .map(|chat| (*chat, 0))
         .collect();
     while let Some((chat, depth)) = under.pop() {
-        let does = now(chat.key).unwrap_or_default();
+        let does = chat
+            .working
+            .then(|| now(chat.key))
+            .flatten()
+            .unwrap_or_default();
         let steps = plan_of(chat).map_or(&[][..], |plan| plan.steps.as_slice());
         let subagents: Vec<&Chat> = told
             .chats
