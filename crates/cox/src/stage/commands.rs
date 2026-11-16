@@ -137,6 +137,20 @@ pub fn asked(entries: &[Entry]) -> Option<String> {
     else {
         return None;
     };
+    // A question of several goes by its header, its own short name.
+    let line = |question: &cox_core::entry::Question| {
+        question
+            .header
+            .clone()
+            .or_else(|| question.text.as_deref().and_then(first_line))
+    };
+    // Several questions come under a message that names none of them.
+    if questions.len() > 1 {
+        let lines: Vec<String> = questions.iter().filter_map(line).collect();
+        if !lines.is_empty() {
+            return Some(lines.join(" · "));
+        }
+    }
     first_line(message).or_else(|| {
         let question = questions.first()?;
         question
@@ -521,6 +535,26 @@ mod tests {
         assert_eq!(
             asked(&[question("Which way?", None, Some(QuestionAnswer::Declined))]),
             None
+        );
+        let Entry::Question {
+            questions: mut both,
+            ..
+        } = question("", Some("Which one?"), None)
+        else {
+            unreachable!("a question");
+        };
+        both.push(cox_core::entry::Question {
+            header: Some("Add".to_owned()),
+            ..both[0].clone()
+        });
+        assert_eq!(
+            asked(&[Entry::Question {
+                message: "Please answer the following questions.".to_owned(),
+                questions: both,
+                answer: None,
+            }])
+            .as_deref(),
+            Some("Approach · Add")
         );
     }
 
