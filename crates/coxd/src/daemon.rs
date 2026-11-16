@@ -2385,13 +2385,6 @@ impl Daemon {
             .chain(&self.archived)
             .filter(|slot| slot.parent == Some(asking))
             .collect();
-        let listed = |slots: &[&Slot]| {
-            slots
-                .iter()
-                .map(|slot| format!("\"{}\" (chat {})", slot.name, slot.key))
-                .collect::<Vec<_>>()
-                .join(", ")
-        };
         let titled: Vec<&Slot> = own
             .iter()
             .copied()
@@ -2402,14 +2395,24 @@ impl Daemon {
             [] if own.is_empty() => Err(format!(
                 "No subagent of this chat is titled \"{title}\": this chat opened none."
             )),
+            // A subagent's agent may title its chat anew: the human sees
+            // it by that title now.
             [] => Err(format!(
-                "No subagent of this chat is titled \"{title}\". Its subagents are {}.",
-                listed(&own)
+                "No subagent of this chat is titled \"{title}\". Its subagents go by {} now: \
+                 give agent_report one of those, and name it so to the human.",
+                own.iter()
+                    .map(|slot| format!("\"{}\"", slot.name))
+                    .collect::<Vec<_>>()
+                    .join(", ")
             )),
             _ => Err(format!(
-                "Several subagents of this chat are titled \"{title}\": {}. Give the number of \
-                 the one you mean as `chat`.",
-                listed(&titled)
+                "Several subagents of this chat are titled \"{title}\", with the numbers {}: \
+                 give agent_report the number of the one you mean as `chat`.",
+                titled
+                    .iter()
+                    .map(|slot| slot.key.to_string())
+                    .collect::<Vec<_>>()
+                    .join(" and ")
             )),
         }
     }
@@ -3805,16 +3808,18 @@ mod tests {
             assert_eq!(
                 find(opener.key, title("Fix")),
                 Err(format!(
-                    "Several subagents of this chat are titled \"Fix\": \"Fix\" (chat {fix}), \
-                     \"Fix\" (chat {other_fix}). Give the number of the one you mean as `chat`."
+                    "Several subagents of this chat are titled \"Fix\", with the numbers {fix} \
+                     and {other_fix}: give agent_report the number of the one you mean as `chat`."
                 ))
             );
             assert_eq!(
                 find(opener.key, title("Build")),
-                Err(format!(
-                    "No subagent of this chat is titled \"Build\". Its subagents are \"Look\" \
-                     (chat {look}), \"Fix\" (chat {fix}), \"Fix\" (chat {other_fix})."
-                ))
+                Err(
+                    "No subagent of this chat is titled \"Build\". Its subagents go by \"Look\", \
+                     \"Fix\", \"Fix\" now: give agent_report one of those, and name it so to the \
+                     human."
+                        .to_owned()
+                )
             );
             assert_eq!(
                 find(look, title("Fix")),
