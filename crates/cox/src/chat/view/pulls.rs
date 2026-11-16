@@ -9,8 +9,8 @@ use super::ChatView;
 use crate::ui::ellipsis::ellipsis;
 use crate::vim::hints::Hinted as _;
 use coxd::daemon::wire::PullRow;
-use coxd::github::{CheckState, PullState};
-use coxd::theme::{ACCENT, ASKING, CODE_FONT, DIM, DISABLED, FAINT, LINK, RAISED};
+use coxd::github::{Check, CheckState, PullState};
+use coxd::theme::{ACCENT, ASKING, CODE_FONT, DIM, DISABLED, FAINT, LINK, RAISED, SURFACE};
 
 /// The pull requests the bar shows of `pulls`: those still open, and the
 /// last opened, however it stands, so that a chat with many merged long
@@ -62,6 +62,36 @@ fn mark(state: CheckState) -> gpui::Div {
         .when(filled, |mark| mark.bg(rgb(color)))
 }
 
+/// The chip of `check`, the `at`th of the pull request `number`: its
+/// mark and name, which opens its job where it has a link.
+fn chip(number: u64, at: usize, check: &Check) -> gpui::Stateful<gpui::Div> {
+    div()
+        .id(SharedString::from(format!("pull-{number}-check-{at}")))
+        .debug_selector(move || format!("pull-{number}-check-{at}"))
+        .flex()
+        .items_center()
+        .gap(px(6.))
+        .h(px(22.))
+        .px(px(8.))
+        .max_w(px(240.))
+        .rounded_full()
+        .bg(rgb(SURFACE))
+        .text_size(px(11.5))
+        .font_family(CODE_FONT)
+        .text_color(rgb(FAINT))
+        .when(check.link.is_some(), |chip| {
+            chip.cursor_pointer()
+                .hover(|style| style.text_color(rgb(DIM)))
+        })
+        .child(mark(check.state))
+        .child(
+            div()
+                .min_w_0()
+                .overflow_hidden()
+                .child(ellipsis(SharedString::from(check.name.clone()))),
+        )
+}
+
 impl ChatView {
     /// The bar of the pull requests the chat's agent opened, if it opened
     /// any.
@@ -102,35 +132,19 @@ impl ChatView {
             .as_ref()
             .map_or_default(|status| status.title.clone());
         let checks = row.status.iter().flat_map(|status| &status.checks);
-        let marks = checks.enumerate().map(|(at, check)| {
-            let link = check.link.clone();
-            div()
-                .id(SharedString::from(format!("pull-{number}-check-{at}")))
-                .debug_selector(move || format!("pull-{number}-check-{at}"))
-                .flex()
-                .items_center()
-                .gap(px(4.))
-                .max_w(px(180.))
-                .text_size(px(11.5))
-                .font_family(CODE_FONT)
-                .text_color(rgb(FAINT))
-                .when(link.is_some(), |chip| {
-                    chip.cursor_pointer()
-                        .hover(|style| style.text_color(rgb(DIM)))
-                })
-                .child(mark(check.state))
-                .child(
-                    div()
-                        .min_w_0()
-                        .child(ellipsis(SharedString::from(check.name.clone()))),
-                )
-                .on_hint_click(cx.listener(move |view, _, window, cx| {
+        let chips: Vec<_> = checks
+            .enumerate()
+            .map(|(at, check)| {
+                let link = check.link.clone();
+                chip(number, at, check).on_hint_click(cx.listener(move |view, _, window, cx| {
                     if let Some(link) = &link {
                         view.show_link(link, window, cx);
                     }
                 }))
-        });
-        div()
+            })
+            .collect();
+        let head = div()
+            .w_full()
             .flex()
             .items_center()
             .gap(px(10.))
@@ -141,6 +155,7 @@ impl ChatView {
                     .debug_selector(move || format!("pull-{number}"))
                     .flex_1()
                     .min_w_0()
+                    .overflow_hidden()
                     .flex()
                     .items_center()
                     .gap(px(8.))
@@ -152,7 +167,13 @@ impl ChatView {
                             .text_color(rgb(LINK))
                             .child(format!("PR #{number}")),
                     )
-                    .child(div().min_w_0().child(ellipsis(SharedString::from(title))))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .overflow_hidden()
+                            .child(ellipsis(SharedString::from(title))),
+                    )
                     .on_hint_click(cx.listener(move |view, _, window, cx| {
                         view.show_link(&url, window, cx);
                     })),
@@ -170,8 +191,16 @@ impl ChatView {
                     .text_size(px(12.))
                     .text_color(rgb(color))
                     .child(said)
-            }))
-            .child(div().flex_shrink_0().flex().gap(px(8.)).children(marks))
+            }));
+        div()
+            .w_full()
+            .flex()
+            .flex_col()
+            .gap(px(6.))
+            .child(head)
+            .when(!chips.is_empty(), |line| {
+                line.child(div().flex().flex_wrap().gap(px(6.)).children(chips))
+            })
             .into_any_element()
     }
 }
