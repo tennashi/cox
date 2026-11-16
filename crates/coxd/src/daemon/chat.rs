@@ -9,7 +9,7 @@
 //! chat's key and the generation of its agent, so that what an agent
 //! stopped since says is let be.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -30,6 +30,7 @@ use crate::chat::conversation::{
 };
 use crate::chat::judge::{Heard, Judge, Starts};
 use crate::daemon::Internal;
+use crate::daemon::wire::{Background, BackgroundKind};
 use crate::trigger::{self, Arranged, By, On, Trigger};
 use cox_acp::{Login, StopReason};
 
@@ -136,44 +137,85 @@ struct Running {
 /// between two tool calls.
 pub const GOES_ON_QUIET: Duration = Duration::from_mins(2);
 
+/// How long what a chat's agent ran in the background is to have ended
+/// before the agent that opened the chat hears it did: once a command it
+/// left running ends, `claude-agent-acp` tells of the turn the agent goes
+/// on with by itself a moment later.
+pub const BACKGROUND_SETTLES: Duration = Duration::from_secs(5);
+
 /// What a chat's agent does apart from the turns Cox asks of it, as it
 /// tells it: once a task it left running in the background ends,
 /// `claude-agent-acp` goes on by itself, with no prompt to answer.
 #[derive(Debug, Default)]
 struct ByItself {
-    /// The tool calls the agent reported that have not ended, until its
-    /// turn ends: one runs however long it is silent.
-    tools: HashSet<String>,
-    /// The tasks the agent told of that run, until each ends (see
-    /// [`AgentEvent::Task`]), which may be long after the turn that
-    /// started it.
-    tasks: HashSet<String>,
+    /// The tool calls the agent reported that have not ended, each with
+    /// its title, in the order they started, until its turn ends: one runs
+    /// however long it is silent.
+    tools: Vec<(String, Option<String>)>,
+    /// The tasks the agent told of that run, in the order they started,
+    /// until each ends (see [`AgentEvent::Task`]), which may be long after
+    /// the turn that started it.
+    tasks: Vec<(String, Background)>,
     /// When the agent last sent something as it went on by itself, while
     /// no turn ran, until a turn ends.
     went_on: Option<Instant>,
+    /// Whether the last of what ran in the background ended lately, until
+    /// [`BACKGROUND_SETTLES`] passed, or something runs there again.
+    ended: bool,
 }
 
 impl ByItself {
     /// Takes in `event`, which the agent sent at `now`.
     fn hear(&mut self, event: &AgentEvent, now: Instant) {
+        let was = self.background();
+        self.take(event, now);
+        let is = self.background();
+        if !is.is_empty() {
+            self.ended = false;
+        } else if !was.is_empty() {
+            self.ended = true;
+        }
+    }
+
+    fn take(&mut self, event: &AgentEvent, now: Instant) {
         match event {
             AgentEvent::ToolCall {
-                id, result: None, ..
-            } => {
-                self.tools.insert(id.clone());
-            }
+                id,
+                title,
+                result: None,
+                ..
+            } => match self.tools.iter_mut().find(|(open, _)| open == id) {
+                Some((_, was)) => {
+                    if title.is_some() {
+                        was.clone_from(title);
+                    }
+                }
+                None => self.tools.push((id.clone(), title.clone())),
+            },
             AgentEvent::ToolCall {
                 id,
                 result: Some(_),
                 ..
             } => {
-                self.tools.remove(id);
+                self.tools.retain(|(open, _)| open != id);
             }
-            AgentEvent::Task { id, running: true } => {
-                self.tasks.insert(id.clone());
+            AgentEvent::Task(task) if task.running => {
+                match self.tasks.iter_mut().find(|(id, _)| *id == task.id) {
+                    Some((_, was)) => {
+                        if let Some(description) = &task.description {
+                            was.description = Some(description.clone());
+                        }
+                    }
+                    // What goes on of a task not known is of one that
+                    // ended.
+                    None if task.started => {
+                        self.tasks.push((task.id.clone(), background_of(task)));
+                    }
+                    None => {}
+                }
             }
-            AgentEvent::Task { id, running: false } => {
-                self.tasks.remove(id);
+            AgentEvent::Task(task) => {
+                self.tasks.retain(|(id, _)| *id != task.id);
             }
             AgentEvent::TurnEnded(_) | AgentEvent::TurnFailed(_) => {
                 self.tools.clear();
@@ -201,6 +243,57 @@ impl ByItself {
             || self
                 .went_on
                 .is_some_and(|at| now.saturating_duration_since(at) < GOES_ON_QUIET)
+    }
+
+    /// What the agent runs in the background now, as it told it: the
+    /// tasks it told of, then, as it went on by itself, the tool calls it
+    /// made that have not ended. A guess of [`GOES_ON_QUIET`] is none of
+    /// it.
+    fn background(&self) -> Vec<Background> {
+        let tools: Vec<Background> = self.went_on.map_or_default(|_| {
+            self.tools
+                .iter()
+                .map(|(_, title)| Background {
+                    kind: BackgroundKind::ToolCall,
+                    name: title.clone().unwrap_or_else(|| "a tool call".to_owned()),
+                    description: None,
+                })
+                .collect()
+        });
+        self.tasks
+            .iter()
+            .map(|(_, background)| background.clone())
+            .chain(tools)
+            .collect()
+    }
+
+    /// Whether nothing runs in the background, nor did within
+    /// [`BACKGROUND_SETTLES`].
+    fn settled(&self) -> bool {
+        !self.ended && self.background().is_empty()
+    }
+}
+
+/// What the task the agent told of runs, as the window and agents are
+/// told: by its kind, "shell" a command and "turn" one the agent took by
+/// itself, and by its name, or its description, when it has no name.
+fn background_of(task: &cox_acp::Task) -> Background {
+    let kind = match task.kind.as_deref() {
+        Some("shell") => BackgroundKind::Command,
+        Some("turn") => BackgroundKind::Turn,
+        Some(kind) => BackgroundKind::Task(kind.to_owned()),
+        None => BackgroundKind::Task("task".to_owned()),
+    };
+    let name = task
+        .name
+        .clone()
+        .or_else(|| task.description.clone())
+        .unwrap_or_else(|| "a task".to_owned());
+    let description = task.description.clone().filter(|told| *told != name);
+    Background {
+        kind,
+        name,
+        description,
     }
 }
 
@@ -280,6 +373,10 @@ pub struct Chat {
     turn_heads: Option<(PathBuf, Vec<Head>)>,
     /// What the agent does apart from its turns, until it closes.
     by_itself: ByItself,
+    /// What has the daemon look again at how the chat stands once what
+    /// its agent ran in the background settled (see
+    /// [`BACKGROUND_SETTLES`]), while it waits.
+    settles: Option<Task>,
 }
 
 /// A repository of the folder a chat works in, as a turn started.
@@ -337,6 +434,7 @@ impl Chat {
             turn_heads: None,
             places: Places::Cox,
             by_itself: ByItself::default(),
+            settles: None,
         }
     }
 
@@ -698,6 +796,31 @@ impl Chat {
         self.by_itself.at_work(now)
     }
 
+    /// What the agent runs in the background now, as it told it, apart
+    /// from a turn Cox asked of it: the tasks it told of, such as a command
+    /// it left running or a turn it took by itself, and the tool calls of
+    /// such a turn that have not ended. Unlike [`Self::goes_on`], it
+    /// guesses nothing from the agent having sent something lately.
+    #[must_use]
+    pub fn background(&self) -> Vec<Background> {
+        self.by_itself.background()
+    }
+
+    /// Whether nothing runs in the background, nor did within
+    /// [`BACKGROUND_SETTLES`]: what the agent goes on with by itself once
+    /// a command it left running ends is told a moment after it ended.
+    #[must_use]
+    pub fn background_settled(&self) -> bool {
+        self.by_itself.settled()
+    }
+
+    /// [`BACKGROUND_SETTLES`] passed since the last of what ran in the
+    /// background ended.
+    pub fn background_settles(&mut self) {
+        self.by_itself.ended = false;
+        self.settles = None;
+    }
+
     /// Shows what the agent of `generation` told. A turn that ends with a
     /// goal to meet starts the goal's check, or asks its judge, and then
     /// runs the triggers due, of the folder the chat works in, in a
@@ -727,7 +850,17 @@ impl Chat {
         if (closed || matches!(event, AgentEvent::TurnEnded(_))) && !self.conversation.steering() {
             self.show_commits();
         }
+        let ended = self.by_itself.ended;
         self.by_itself.hear(&event, Instant::now());
+        if self.by_itself.ended != ended {
+            self.settles = self.by_itself.ended.then(|| {
+                let (internal, key) = (self.internal.clone(), self.key);
+                spawn(async move {
+                    tokio::time::sleep(BACKGROUND_SETTLES).await;
+                    let _ = internal.send(Internal::Settled { key });
+                })
+            });
+        }
         let asks = matches!(event, AgentEvent::PermissionRequest { .. });
         let was_checking = self.conversation.state() == State::Checking;
         self.conversation.apply(event);
@@ -1696,6 +1829,7 @@ impl Chat {
             asking: self.conversation.asking_for().map(str::to_owned),
             said: self.conversation.last_told().map(str::to_owned),
             unoffered: self.conversation.unoffered().map(str::to_owned),
+            background: self.background(),
         }
     }
 
@@ -2559,6 +2693,94 @@ mod tests {
             talk.chat.gathered_enough(talk.generation - 1);
 
             assert!(talk.chat.conversation().gathering());
+        });
+    }
+
+    #[test]
+    fn what_the_agent_runs_in_the_background_is_told_until_it_ends_and_settles() {
+        on_daemon(async {
+            let mut talk = Talk::new(None);
+            let told = |id: &str, running, name: Option<&str>, kind: Option<&str>| {
+                AgentEvent::Task(cox_acp::Task {
+                    id: id.to_owned(),
+                    running,
+                    started: running && name.is_some(),
+                    name: name.map(str::to_owned),
+                    description: name.map(str::to_owned),
+                    kind: kind.map(str::to_owned),
+                })
+            };
+            talk.take_a_turn("work");
+            talk.hear(told("sleep", true, Some("sleep 120"), Some("shell")));
+            let command = Background {
+                kind: BackgroundKind::Command,
+                name: "sleep 120".to_owned(),
+                description: None,
+            };
+            assert_eq!(talk.chat.background(), std::slice::from_ref(&command));
+            assert!(!talk.chat.background_settled());
+
+            // What goes on of a task not known is of one that ended.
+            talk.hear(AgentEvent::Task(cox_acp::Task {
+                id: "gone".to_owned(),
+                running: true,
+                description: Some("still?".to_owned()),
+                ..cox_acp::Task::default()
+            }));
+            assert_eq!(talk.chat.background(), [command]);
+
+            // The command ends, and the agent goes on by itself, with a
+            // tool call, which is of the turn it took.
+            talk.hear(told("sleep", false, None, None));
+            assert_eq!(talk.chat.background(), []);
+            assert!(!talk.chat.background_settled(), "not settled yet");
+            talk.hear(told("turn", true, Some("Claude is working"), Some("turn")));
+            talk.hear(AgentEvent::Task(cox_acp::Task {
+                id: "turn".to_owned(),
+                running: true,
+                description: Some("Background command \"sleep 120\" completed".to_owned()),
+                ..cox_acp::Task::default()
+            }));
+            talk.hear(AgentEvent::WentOn);
+            talk.hear(AgentEvent::ToolCall {
+                id: "read".to_owned(),
+                title: Some("Read log".to_owned()),
+                command: false,
+                content: None,
+                result: None,
+            });
+            let turn = Background {
+                kind: BackgroundKind::Turn,
+                name: "Claude is working".to_owned(),
+                description: Some("Background command \"sleep 120\" completed".to_owned()),
+            };
+            let read = Background {
+                kind: BackgroundKind::ToolCall,
+                name: "Read log".to_owned(),
+                description: None,
+            };
+            assert_eq!(talk.chat.background(), [turn.clone(), read]);
+            assert_eq!(
+                talk.chat.stands().background.len(),
+                2,
+                "the agent waiting hears it"
+            );
+            talk.hear(AgentEvent::ToolCall {
+                id: "read".to_owned(),
+                title: None,
+                command: false,
+                content: None,
+                result: Some(cox_core::entry::ToolCallResult::Completed),
+            });
+            assert_eq!(talk.chat.background(), [turn]);
+            talk.hear(told("turn", false, None, None));
+            assert_eq!(talk.chat.background(), []);
+            assert!(!talk.chat.background_settled());
+
+            talk.chat.background_settles();
+            assert!(talk.chat.background_settled());
+            // The guess of the agent going on is no work to show.
+            assert!(talk.chat.goes_on(Instant::now()));
         });
     }
 

@@ -1,13 +1,15 @@
 //! Cox asks `claude-agent-acp` for its async tasks as the connection
-//! starts, and hands over each task's start and end as the agent tells
-//! them, while no turn runs too.
+//! starts, and hands over each task's start, with what it is, what it
+//! does anew, and its end, as the agent tells them, while no turn runs
+//! too.
 
 use std::path::Path;
 use std::time::Duration;
 
 /// An agent that writes each request it gets to `log`, opens a session,
 /// and then, with no prompt to answer, tells of a task, says something,
-/// tells of updates Cox does not know, and ends the task.
+/// tells what the task does anew, tells of updates Cox does not know,
+/// and ends the task.
 fn agent(log: &Path) -> impl cox_acp::Transport {
     let update = |update: &str| {
         format!(
@@ -25,6 +27,7 @@ fn agent(log: &Path) -> impl cox_acp::Transport {
       echo '{{"jsonrpc":"2.0","id":'"$id"',"result":{{"sessionId":"s"}}}}'
       {spawned}
       {progress}
+      {described}
       {said}
       {unknown}
       {ended} ;;
@@ -36,6 +39,9 @@ done"#,
         ),
         progress = update(
             r#"{"sessionUpdate":"async_task_progress","asyncTaskId":"ci","summary":"waiting"}"#
+        ),
+        described = update(
+            r#"{"sessionUpdate":"async_task_progress","asyncTaskId":"ci","description":"gh pr checks 418 --watch"}"#
         ),
         said = update(
             r#"{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"CI passed."}}"#
@@ -51,7 +57,10 @@ done"#,
 /// What an update is, in short.
 fn told(update: cox_acp::Update) -> String {
     match update {
-        cox_acp::Update::Task(task) => format!("task {} running {}", task.id, task.running),
+        cox_acp::Update::Task(task) => format!(
+            "task {} running {} started {} {:?} {:?} {:?}",
+            task.id, task.running, task.started, task.name, task.kind, task.description
+        ),
         cox_acp::Update::ReplyText(text) => format!("reply {text}"),
         _ => "something else".to_owned(),
     }
@@ -72,7 +81,7 @@ async fn the_tasks_the_agent_runs_by_itself_start_and_end() {
         async |_, _| anyhow::bail!("no login"),
         async |mut session| {
             let mut updates = Vec::new();
-            for _ in 0..3 {
+            for _ in 0..4 {
                 updates.push(told(session.next_unprompted().await.unwrap()));
             }
             Ok(updates)
@@ -86,9 +95,10 @@ async fn the_tasks_the_agent_runs_by_itself_start_and_end() {
     assert_eq!(
         updates,
         [
-            "task ci running true",
+            r#"task ci running true started true Some("Background task") Some("local_bash") Some("gh pr checks --watch")"#,
+            r#"task ci running true started false None None Some("gh pr checks 418 --watch")"#,
             "reply CI passed.",
-            "task ci running false"
+            "task ci running false started false None None None"
         ]
     );
     let initialize = std::fs::read_to_string(&log)

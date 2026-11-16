@@ -88,6 +88,22 @@ pub const SUBAGENT_ENDED: Text = Text {
     own: include_str!("workflow/subagent/ended.md"),
 };
 
+/// A subagent's report, in [`SUBAGENT_REPORTS`], once it ended its turn
+/// while what it runs in the `{background}` goes on, beside what
+/// [`SUBAGENT_ENDED`] says.
+pub const SUBAGENT_BACKGROUND: Text = Text {
+    name: "subagent/background.md",
+    own: include_str!("workflow/subagent/background.md"),
+};
+
+/// A subagent's report, in [`SUBAGENT_REPORTS`], once what it ran in the
+/// background, as [`SUBAGENT_BACKGROUND`] told, ended, with what
+/// [`SUBAGENT_ENDED`] says.
+pub const SUBAGENT_SETTLED: Text = Text {
+    name: "subagent/settled.md",
+    own: include_str!("workflow/subagent/settled.md"),
+};
+
 /// A subagent's report, in [`SUBAGENT_REPORTS`], as it waits for the human
 /// to answer what it `{asking}`, beside what [`SUBAGENT_ENDED`] says.
 pub const SUBAGENT_ASKS: Text = Text {
@@ -100,7 +116,7 @@ pub const SUBAGENT_ASKS: Text = Text {
 pub const REPORT_LENGTH: usize = 2000;
 
 /// The texts Cox has of its own, by where the human keeps theirs.
-const OWN: [&Text; 9] = [
+const OWN: [&Text; 11] = [
     &SKETCH_START,
     &SKETCH_OPENED,
     &SKETCH_DISCARD,
@@ -109,14 +125,18 @@ const OWN: [&Text; 9] = [
     &ICON_GENERATE,
     &SUBAGENT_REPORTS,
     &SUBAGENT_ENDED,
+    &SUBAGENT_BACKGROUND,
+    &SUBAGENT_SETTLED,
     &SUBAGENT_ASKS,
 ];
 
 /// The report of the subagent in the chat `number`, named `name`, that
 /// stands as `stands`, as [`SUBAGENT_REPORTS`] holds it: what it last said
-/// cut to [`REPORT_LENGTH`].
+/// cut to [`REPORT_LENGTH`], and what it runs in the background, if
+/// anything runs, or, as `settled` says, that what the agent was told ran
+/// there ended.
 #[must_use]
-pub fn subagent_report(number: u64, name: &str, stands: &Waited) -> String {
+pub fn subagent_report(number: u64, name: &str, stands: &Waited, settled: bool) -> String {
     let said = match stands.said.as_deref() {
         None => "(It said nothing.)".to_owned(),
         Some(said) => match said.char_indices().nth(REPORT_LENGTH) {
@@ -126,11 +146,17 @@ pub fn subagent_report(number: u64, name: &str, stands: &Waited) -> String {
     };
     let number = number.to_string();
     let mut values = vec![("number", number.as_str()), ("name", name), ("said", &said)];
+    let background = crate::daemon::wire::told(&stands.background);
     match stands.asking.as_deref() {
         Some(asking) => {
             values.push(("asking", asking));
             SUBAGENT_ASKS.say(&values)
         }
+        None if !stands.background.is_empty() => {
+            values.push(("background", &background));
+            SUBAGENT_BACKGROUND.say(&values)
+        }
+        None if settled => SUBAGENT_SETTLED.say(&values),
         None => SUBAGENT_ENDED.say(&values),
     }
 }

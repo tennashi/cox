@@ -306,6 +306,25 @@ pub struct Waited {
     /// What its session did not offer of the model asked for it, if
     /// anything.
     pub unoffered: Option<String>,
+    /// What its agent runs in the background, though its turn ended.
+    pub background: Vec<crate::daemon::wire::Background>,
+}
+
+impl Waited {
+    /// What it runs in the background, though its turn ended, as the
+    /// agent that waited is told, if anything runs: "ended its turn, but
+    /// still works in the background", what runs, and that Cox tells that
+    /// agent once it ends.
+    #[must_use]
+    pub fn ended_but(&self) -> Option<String> {
+        (!self.background.is_empty()).then(|| {
+            format!(
+                "ended its turn, but still works in the background: {}. Cox tells you once \
+                 that ends and your turn is not running",
+                crate::daemon::wire::told(&self.background)
+            )
+        })
+    }
 }
 
 /// A chat opened from a chat, as its agent is told of it.

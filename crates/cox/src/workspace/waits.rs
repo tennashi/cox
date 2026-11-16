@@ -17,6 +17,7 @@ use crate::ui::ellipsis::ellipsis;
 use crate::ui::tip;
 use crate::vim::hints::Hinted as _;
 use coxd::chat::conversation::{Entry, State};
+use coxd::daemon::wire::Background;
 use coxd::theme::{ASKING, BUTTON, BUTTON_HOVER, DIM, FAINT, FOREGROUND, GAP};
 
 actions!(
@@ -320,7 +321,8 @@ impl Workspace {
     }
 
     /// The start of the last reply of `chat`, whose turn ended unseen, and
-    /// a button that shows it.
+    /// what it runs in the background still, if anything, and a button
+    /// that shows it.
     fn render_unread(chat: &Chat, cx: &mut Context<Self>) -> AnyElement {
         let key = chat.key;
         let reply = chat.view.as_ref().and_then(|view| {
@@ -351,6 +353,16 @@ impl Workspace {
             .on_hint_click(cx.listener(move |workspace, _, window, cx| {
                 workspace.open_waiting(key, window, cx);
             }));
+        let background = chat.in_background().then(|| {
+            let what: Vec<&str> = chat.background().iter().map(Background::what).collect();
+            div()
+                .debug_selector(move || format!("waiting-{key}-in-background"))
+                .text_color(rgb(FAINT))
+                .child(format!(
+                    "Still at work in the background: {}",
+                    what.join("; ")
+                ))
+        });
         div()
             .flex()
             .items_end()
@@ -359,10 +371,14 @@ impl Workspace {
                 div()
                     .flex_1()
                     .min_w_0()
+                    .flex()
+                    .flex_col()
+                    .gap_1()
                     .text_size(px(12.))
                     .text_color(rgb(DIM))
                     .whitespace_normal()
-                    .child(reply.unwrap_or_else(|| "Its turn ended.".to_owned())),
+                    .child(reply.unwrap_or_else(|| "Its turn ended.".to_owned()))
+                    .children(background),
             )
             .child(open)
             .into_any_element()

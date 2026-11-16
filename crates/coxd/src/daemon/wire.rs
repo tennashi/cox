@@ -79,6 +79,86 @@ pub struct ChatRow {
     /// opened before another folder of the project became the project's.
     #[serde(default)]
     pub folder: Option<PathBuf>,
+    /// What its agent runs apart from the turns Cox asks of it, as it
+    /// tells it, in the order it started each: the chat is at work while
+    /// anything runs, though its turn ended.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub background: Vec<Background>,
+}
+
+/// Whether a chat that stands as `state`, its agent running `background`,
+/// works in the background: its turn ended, and it waits for no one, but
+/// something it runs goes on.
+#[must_use]
+pub fn in_background(state: State, background: &[Background]) -> bool {
+    state == State::Idle && !background.is_empty()
+}
+
+/// Something a chat's agent runs apart from the turns Cox asks of it, as
+/// the agent tells it: a command it left running in the background, a
+/// turn it took by itself, as once such a command ended, or a tool call
+/// of that turn that has not ended.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Background {
+    pub kind: BackgroundKind,
+    /// What it goes by: for a command, what the agent said it does, as
+    /// "Wait 120 seconds", or the command; for a tool call, its title.
+    pub name: String,
+    /// What it does, when the agent says more than its name: for a turn
+    /// the agent took by itself, what started it.
+    #[serde(default)]
+    pub description: Option<String>,
+}
+
+/// What kind of thing a chat's agent runs in the background.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum BackgroundKind {
+    /// A command it left running, named by what the agent said it does,
+    /// or by the command itself.
+    Command,
+    /// A turn it took by itself, while no turn Cox asked of it ran.
+    Turn,
+    /// A tool call it made in a turn it took by itself.
+    ToolCall,
+    /// Another task, of the kind the agent named, as "monitor".
+    Task(String),
+}
+
+impl Background {
+    /// What it is, in a few words, as a row of the window shows it: the
+    /// command, or, for a turn the agent took by itself, what started it.
+    #[must_use]
+    pub fn what(&self) -> &str {
+        match (&self.kind, &self.description) {
+            (BackgroundKind::Turn, Some(description)) => description,
+            _ => &self.name,
+        }
+    }
+
+    /// What it is, as an agent is told.
+    #[must_use]
+    pub fn told(&self) -> String {
+        let name = &self.name;
+        match &self.kind {
+            BackgroundKind::Command => format!("the background command \"{name}\""),
+            BackgroundKind::Turn => match &self.description {
+                Some(description) => format!("a turn it took by itself ({description})"),
+                None => "a turn it took by itself".to_owned(),
+            },
+            BackgroundKind::ToolCall => format!("the tool call \"{name}\""),
+            BackgroundKind::Task(kind) => format!("the {kind} \"{name}\""),
+        }
+    }
+}
+
+/// What `background` is, each as an agent is told, in one line.
+#[must_use]
+pub fn told(background: &[Background]) -> String {
+    background
+        .iter()
+        .map(Background::told)
+        .collect::<Vec<_>>()
+        .join("; ")
 }
 
 /// The projects and chats, as the window shows them.
@@ -453,6 +533,63 @@ mod tests {
                 "{hello:?} to coxd of {coxd_build:?} speaking {coxd_speaks:?}, at work: {at_work}"
             );
         }
+    }
+
+    #[test]
+    fn what_runs_in_the_background_is_told_by_its_kind() {
+        let background = |kind, name: &str, description: Option<&str>| Background {
+            kind,
+            name: name.to_owned(),
+            description: description.map(str::to_owned),
+        };
+        let all = [
+            background(BackgroundKind::Command, "sleep 120", None),
+            background(
+                BackgroundKind::Turn,
+                "Claude is working",
+                Some("The command ended"),
+            ),
+            background(BackgroundKind::ToolCall, "Read log", None),
+            background(BackgroundKind::Task("monitor".to_owned()), "CI", None),
+        ];
+        let what: Vec<&str> = all.iter().map(Background::what).collect();
+        assert_eq!(what, ["sleep 120", "The command ended", "Read log", "CI"]);
+        assert_eq!(
+            told(&all),
+            "the background command \"sleep 120\"; a turn it took by itself (The command ended); the tool \
+             call \"Read log\"; the monitor \"CI\""
+        );
+        assert!(in_background(State::Idle, &all));
+        assert!(
+            !in_background(State::Busy, &all),
+            "a turn is at work as it is"
+        );
+        assert!(!in_background(State::Idle, &[]));
+    }
+
+    #[test]
+    fn a_chat_row_of_a_build_that_told_no_background_reads() {
+        let row = ChatRow {
+            key: 1,
+            project: 0,
+            kept: None,
+            name: "chat".to_owned(),
+            named: Named::FirstLine,
+            open: true,
+            again: false,
+            state: State::Idle,
+            unread: false,
+            goal: None,
+            parent: None,
+            setup: None,
+            ending: false,
+            agent: "claude".to_owned(),
+            folder: None,
+            background: Vec::new(),
+        };
+        let line = serde_json::to_string(&row).unwrap();
+        assert!(!line.contains("background"), "{line}");
+        assert_eq!(serde_json::from_str::<ChatRow>(&line).unwrap(), row);
     }
 
     #[test]

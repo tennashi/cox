@@ -4,7 +4,8 @@
 //! tells, in tiers, what is asked of them, the chats of the folder that
 //! ask them something, with what they ask, or whose turn ended while they
 //! were not looking; what is at work, the chats whose agents take a turn,
-//! each with what it does now, its subagents under it; what was decided,
+//! or work in the background once it ended, each with what it does now,
+//! or runs in the background, its subagents under it; what was decided,
 //! the questions agents asked there that the human answered, each with
 //! what they chose and why, the last first; and what happened without
 //! them, the schedules that ran there, the pages of the wiki written from
@@ -56,8 +57,11 @@ pub struct Chat {
     pub unread: bool,
     /// Its goal, as the human set it, if it has one.
     pub goal: Option<String>,
-    /// Whether its agent takes a turn, or stops one.
+    /// Whether its agent takes a turn, or stops one, or works in the
+    /// background once its turn ended.
     pub working: bool,
+    /// What its agent runs in the background, once its turn ended.
+    pub background: Vec<coxd::daemon::wire::Background>,
     /// The key of the chat whose agent opened it, if one did.
     pub parent: Option<u64>,
     /// How coxd keeps it, which what it decided is read by.
@@ -376,6 +380,11 @@ fn at_work(told: &Told, root: &Path, now: &dyn Fn(u64) -> Option<commands::Now>)
             "where": where_of(told, &chat.project),
             "said": does.said,
             "running": does.running,
+            "background": chat
+                .background
+                .iter()
+                .map(|background| json!({ "what": background.what() }))
+                .collect::<Vec<_>>(),
         }));
         under.extend(
             working
@@ -578,6 +587,7 @@ mod tests {
             unread,
             goal: None,
             working: false,
+            background: Vec::new(),
             parent: None,
             kept: None,
         }
@@ -728,6 +738,11 @@ mod tests {
         let mut orphan = chat(5, &root, &root, false, false);
         orphan.working = true;
         orphan.parent = Some(9);
+        orphan.background = vec![coxd::daemon::wire::Background {
+            kind: coxd::daemon::wire::BackgroundKind::Command,
+            name: "sleep 120".to_owned(),
+            description: None,
+        }];
         let told = Told {
             chats: vec![asking, subagent, parent, elsewhere, orphan],
             projects: vec![
@@ -786,6 +801,11 @@ mod tests {
         assert_eq!(json["working"][0]["goal"], "ship it");
         assert_eq!(json["working"][0]["said"], "step of 2");
         assert_eq!(json["working"][1]["running"], "sleep 30 && echo done");
+        // A chat at work in the background tells what runs there.
+        assert_eq!(
+            json["working"][2]["background"],
+            json!([{"what": "sleep 120"}])
+        );
         let decided = json["decided"].as_array().unwrap();
         assert_eq!(decided.len(), 2);
         // A chat the window lists is linked, by the name it has there.
