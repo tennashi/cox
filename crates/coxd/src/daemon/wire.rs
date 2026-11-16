@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::agent::mcp::{AndroidAct, MacAct, Ran, Seen};
 use crate::agent::setup::Setup;
-use crate::chat::conversation::{Answer, Patch, State};
+use crate::chat::conversation::{Answer, Patch, QuestionAnswer, State};
 use crate::chat::sketch::Sketch;
 
 /// A project, as the window lists it on its rail.
@@ -322,6 +322,8 @@ pub enum ToDaemon {
     /// The human chose the option at `index` of what the agent of the
     /// chat `key` asks: of a permission request, or of the ways to log in.
     Choose { key: u64, index: usize },
+    /// The human answered the questions the agent of the chat `key` asks.
+    AnswerQuestion { key: u64, answer: QuestionAnswer },
     /// The human stopped the chat `key`'s turn.
     Stop { key: u64 },
     /// The human set the goal of the chat `key`, or cleared it.

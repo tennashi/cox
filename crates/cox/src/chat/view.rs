@@ -62,7 +62,9 @@ use crate::ui::text::Reading;
 use crate::ui::text::cursor::Step;
 use crate::ui::{Copy, Panel, tip};
 use coxd::agents::Agents;
-use coxd::chat::conversation::{Answer, Conversation, GOAL_TURNS, Goal, Patch, Proposed, State};
+use coxd::chat::conversation::{
+    Answer, Conversation, Entry, GOAL_TURNS, Goal, Patch, Picked, Proposed, QuestionAnswer, State,
+};
 use coxd::chat::sketch::Sketch;
 use coxd::daemon::Link;
 use coxd::daemon::wire::ToDaemon;
@@ -90,6 +92,9 @@ actions!(
         CancelGoal,
         /// Closes the input that starts a sketch, starting none.
         CancelSketch,
+        /// Closes the input of the human's own answer to a question,
+        /// leaving the answer as it was.
+        CancelOther,
         /// Closes the list over the input, as Escape does without Vim's
         /// keys, if it is open.
         CloseList,
@@ -108,6 +113,10 @@ pub(crate) const GOAL: &str = "Goal";
 /// The key context of the input that starts a sketch of the chat.
 pub(crate) const SKETCH: &str = "Sketch";
 
+/// The key context of the input of the human's own answer to a question
+/// the agent asks.
+pub(crate) const OTHER: &str = "Other";
+
 /// Binds the keys of the conversation. Escape is the stage's while the
 /// stage has the keyboard, and the input method's while it composes.
 pub fn bind_keys(cx: &mut App) {
@@ -117,6 +126,7 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("secondary-c", Copy, Some(KEY_CONTEXT)),
         KeyBinding::new("escape", CancelGoal, Some(GOAL)),
         KeyBinding::new("escape", CancelSketch, Some(SKETCH)),
+        KeyBinding::new("escape", CancelOther, Some(OTHER)),
     ]);
 }
 
@@ -244,6 +254,12 @@ pub struct ChatView {
     /// The input the human says what a sketch of the chat tries in, while
     /// it is open, with what the sketch is to start from.
     sketch_input: Option<(Entity<LineInput>, Sketch, Subscription)>,
+    /// What the human picked so far of the questions the agent asks, on
+    /// the card of the entry at its index, before they send it.
+    draft: Option<(usize, Vec<Picked>)>,
+    /// The input the human writes their own answer to a question in, while
+    /// it is open, with the question's place among the questions.
+    other_input: Option<(Entity<LineInput>, usize, Subscription)>,
     /// The setting whose choices are open, by its place in the
     /// conversation's settings, while they are.
     setting_open: Option<settings::Menu>,
@@ -306,6 +322,8 @@ impl ChatView {
             plan_folded: false,
             goal_input: None,
             sketch_input: None,
+            draft: None,
+            other_input: None,
             setting_open: None,
             setting_closed_at: None,
             agents,
@@ -1037,6 +1055,158 @@ impl ChatView {
         });
     }
 
+    /// The questions the agent waits on the human to answer, while it
+    /// does, with the index of their entry.
+    fn asked_questions(&self) -> Option<(usize, &[coxd::chat::conversation::Question])> {
+        let at = self.conversation.asked_at()?;
+        match &self.conversation.entries()[at] {
+            Entry::Question { questions, .. } => Some((at, questions)),
+            _ => None,
+        }
+    }
+
+    /// What the human picked so far of the questions of the entry at
+    /// `at`: nothing of each, until they pick.
+    pub(super) fn picked(&self, at: usize) -> Vec<Picked> {
+        match (&self.draft, self.asked_questions()) {
+            (Some((drafted, picked)), _) if *drafted == at => picked.clone(),
+            (_, Some((asked, questions))) if asked == at => {
+                vec![Picked::default(); questions.len()]
+            }
+            _ => Vec::new(),
+        }
+    }
+
+    /// Whether the questions the agent waits on are answered by a click on
+    /// an option, as one question of which the human picks one is.
+    pub(super) fn answered_by_a_click(&self) -> bool {
+        self.conversation.options_asked() > 0 && self.asked_questions().is_some()
+    }
+
+    /// The human picked the option at `option` of the question at
+    /// `question` on the card of the entry at `at`: it answers a question
+    /// answered by a click, and else is picked, or no longer picked, until
+    /// they send their answer.
+    pub(super) fn pick(
+        &mut self,
+        at: usize,
+        question: usize,
+        option: usize,
+        cx: &mut Context<Self>,
+    ) {
+        if self.answered_by_a_click() {
+            self.choose(option, cx);
+            return;
+        }
+        let Some((_, questions)) = self.asked_questions() else {
+            return;
+        };
+        let multiple = questions.get(question).is_some_and(|asked| asked.multiple);
+        let mut picked = self.picked(at);
+        let Some(of) = picked.get_mut(question) else {
+            return;
+        };
+        if let Some(place) = of.chosen.iter().position(|&chosen| chosen == option) {
+            of.chosen.remove(place);
+        } else if multiple {
+            of.chosen.push(option);
+            of.chosen.sort_unstable();
+        } else {
+            of.chosen = vec![option];
+        }
+        self.draft = Some((at, picked));
+        cx.notify();
+    }
+
+    /// Opens the input the human writes their own answer to the question
+    /// at `question` in, on the card of the entry at `at`, with what they
+    /// wrote before.
+    pub(super) fn open_other(
+        &mut self,
+        at: usize,
+        question: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let written = self
+            .picked(at)
+            .get(question)
+            .and_then(|picked| picked.other.clone())
+            .unwrap_or_default();
+        let input = cx.new(|cx| {
+            let mut input = LineInput::new(cx);
+            input.set_text(&written, cx);
+            input
+        });
+        let submitted = cx.subscribe_in(&input, window, |view, _, Submitted, window, cx| {
+            view.end_other(true, window, cx);
+        });
+        window.focus(&input.focus_handle(cx));
+        self.other_input = Some((input, question, submitted));
+        cx.notify();
+    }
+
+    /// Closes the input of the human's own answer, taking what it holds
+    /// when `keep` says to: a single question it answers then and there,
+    /// with the options picked beside it.
+    fn end_other(&mut self, keep: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let Some((input, question, _)) = self.other_input.take() else {
+            return;
+        };
+        window.focus(&self.input.focus_handle(cx));
+        cx.notify();
+        let Some((at, questions)) = self.asked_questions() else {
+            return;
+        };
+        if !keep {
+            return;
+        }
+        let single = questions.len() == 1;
+        let words = input.read(cx).text().trim().to_owned();
+        let mut picked = self.picked(at);
+        if let Some(of) = picked.get_mut(question) {
+            of.other = (!words.is_empty()).then_some(words);
+        }
+        self.draft = Some((at, picked));
+        if single {
+            self.send_answer(at, cx);
+        }
+    }
+
+    /// Sends what the human picked of the questions of the entry at `at`.
+    pub(super) fn send_answer(&mut self, at: usize, _: &mut Context<Self>) {
+        let picked = self.picked(at);
+        self.draft = None;
+        self.tell(ToDaemon::AnswerQuestion {
+            key: self.key,
+            answer: QuestionAnswer::Given(picked),
+        });
+    }
+
+    /// Tells the agent the human chose not to answer its questions.
+    pub(super) fn decline_questions(&mut self, _: &mut Context<Self>) {
+        self.draft = None;
+        self.tell(ToDaemon::AnswerQuestion {
+            key: self.key,
+            answer: QuestionAnswer::Declined,
+        });
+    }
+
+    /// The input of the human's own answer to a question, while it is
+    /// open.
+    fn render_other_input(&self, cx: &mut Context<Self>) -> Option<impl IntoElement + use<>> {
+        let (input, _, _) = self.other_input.as_ref()?;
+        Some(
+            Self::render_input_card("Other", "your own answer · Enter takes it")
+                .key_context(OTHER)
+                .debug_selector(|| "other-input".to_owned())
+                .on_action(cx.listener(|view, _: &CancelOther, window, cx| {
+                    view.end_other(false, window, cx);
+                }))
+                .child(input.clone()),
+        )
+    }
+
     /// Stops the turn the agent is taking, if it takes one by the time the
     /// daemon hears of it, which a line just sent may.
     fn stop(&mut self, _: &mut Context<Self>) {
@@ -1116,6 +1286,14 @@ impl ChatView {
                     format!(
                         "The agent asks you to log in: choose how with {numbers}, or give up with Escape."
                     )
+                } else if self.asked_questions().is_some() {
+                    if count > 0 {
+                        format!(
+                            "The agent asks you: choose with {numbers}, or stop it with Escape."
+                        )
+                    } else {
+                        "The agent asks you: answer on its card, or stop it with Escape.".to_owned()
+                    }
                 } else {
                     format!(
                         "The agent asks to go on: choose with {numbers}, or stop it with Escape."
@@ -1207,6 +1385,7 @@ impl ChatView {
             .update(cx, |input, cx| input.set_placeholder(placeholder, cx));
         let goal_input = self.render_goal_input(cx);
         let sketch_input = self.render_sketch_input(cx);
+        let other_input = self.render_other_input(cx);
         let plan = self.render_plan(cx);
         let goal = self.render_goal();
         div()
@@ -1269,6 +1448,7 @@ impl ChatView {
             )
             .children(goal_input)
             .children(sketch_input)
+            .children(other_input)
             .child(
                 // A column, which stretches the input across it, whatever
                 // its placeholder's width.

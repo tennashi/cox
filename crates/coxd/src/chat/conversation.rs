@@ -12,8 +12,9 @@ use std::path::{Path, PathBuf};
 use cox_acp::{PermissionAnswer, SlashCommand, StopReason};
 use cox_core::diff::Line;
 pub use cox_core::entry::{
-    Answer, Attachment, Check, CheckState, Committed, Content, Entry, LoginOption, Proposal,
-    Proposed, Step, StepState, TerminalLogin, ToolCallResult,
+    Answer, Attachment, Check, CheckState, Committed, Content, Entry, LoginOption, Picked,
+    Proposal, Proposed, Question, QuestionAnswer, QuestionOption, Step, StepState, TerminalLogin,
+    ToolCallResult,
 };
 use cox_core::goal;
 use cox_core::settings::Setting;
@@ -785,13 +786,18 @@ impl Conversation {
     }
 
     /// How many options the human chooses between, by their numbers, while
-    /// the agent waits on them: those of a permission request, or the ways
-    /// to log in.
+    /// the agent waits on them: those of a permission request, the ways
+    /// to log in, or the options of a question the agent asks alone, of
+    /// which the human picks one.
     #[must_use]
     pub fn options_asked(&self) -> usize {
         match self.asked_entry() {
             Some(Entry::Permission { options, .. }) => options.len(),
             Some(Entry::Login { options, .. }) => options.len(),
+            Some(Entry::Question { questions, .. }) => match questions.as_slice() {
+                [question] if !question.multiple => question.options.len(),
+                _ => 0,
+            },
             _ => 0,
         }
     }
@@ -803,7 +809,8 @@ impl Conversation {
     }
 
     /// The index of the entry the agent waits on the human to answer, a
-    /// permission request or the ways to log in, while it does. The agent
+    /// permission request, a question, or the ways to log in, while it
+    /// does. The agent
     /// asks one thing at a time, and nothing more until it is answered,
     /// so it is the last ask, wherever notes Cox added since put it.
     #[must_use]
@@ -813,11 +820,18 @@ impl Conversation {
         }
         self.entries
             .iter()
-            .rposition(|entry| matches!(entry, Entry::Permission { .. } | Entry::Login { .. }))
+            .rposition(|entry| {
+                matches!(
+                    entry,
+                    Entry::Permission { .. } | Entry::Login { .. } | Entry::Question { .. }
+                )
+            })
             .filter(|&index| {
                 matches!(
                     self.entries[index],
-                    Entry::Permission { chosen: None, .. } | Entry::Login { chosen: None, .. }
+                    Entry::Permission { chosen: None, .. }
+                        | Entry::Login { chosen: None, .. }
+                        | Entry::Question { answer: None, .. }
                 )
             })
     }
@@ -1045,9 +1059,22 @@ impl Conversation {
     }
 
     /// Chooses the option at `index` of the permission request the agent
-    /// waits on, and returns the answer to send.
+    /// waits on, or of the one question it asks, of which the human picks
+    /// one, and returns the answer to send.
     pub fn choose(&mut self, index: usize) -> Option<Command> {
         let at = self.asked_at()?;
+        if let Entry::Question { questions, .. } = &self.entries[at] {
+            let [question] = questions.as_slice() else {
+                return None;
+            };
+            if question.multiple {
+                return None;
+            }
+            return self.answer_question(QuestionAnswer::Given(vec![Picked {
+                chosen: vec![index],
+                other: None,
+            }]));
+        }
         let Entry::Permission {
             options, chosen, ..
         } = &mut self.entries[at]
@@ -1071,6 +1098,35 @@ impl Conversation {
             None => self.drift.rebase = true,
         }
         Some(Command::Answer(PermissionAnswer::Select(index)))
+    }
+
+    /// Answers the questions the agent waits on the human to answer with
+    /// `answer`, when it answers each of them as it may be answered, and
+    /// returns the answer to send.
+    pub fn answer_question(&mut self, answer: QuestionAnswer) -> Option<Command> {
+        let at = self.asked_at()?;
+        let Entry::Question {
+            questions,
+            answer: answered,
+            ..
+        } = &mut self.entries[at]
+        else {
+            return None;
+        };
+        if let QuestionAnswer::Given(picked) = &answer {
+            let takes = picked.len() == questions.len()
+                && questions
+                    .iter()
+                    .zip(picked)
+                    .all(|(question, picked)| question.takes(picked));
+            if !takes {
+                return None;
+            }
+        }
+        *answered = Some(answer.clone());
+        self.changed.insert(at);
+        self.state = self.before_asking;
+        Some(Command::AnswerQuestion(answer))
     }
 
     /// Takes `steps` as the baseline, the plan told against from here.
@@ -1372,13 +1428,24 @@ impl Conversation {
         self.unoffered.as_deref()
     }
 
-    /// What the agent asks permission for, or that it asks the human to log
-    /// in, while it waits on the human.
+    /// What the agent asks permission for, what it asks the human, or that
+    /// it asks the human to log in, while it waits on the human.
     #[must_use]
     pub fn asking_for(&self) -> Option<&str> {
         match self.asked_entry() {
             Some(Entry::Permission { title, .. }) => Some(title),
             Some(Entry::Login { .. }) => Some("log in"),
+            Some(Entry::Question {
+                message, questions, ..
+            }) => Some(match questions.as_slice() {
+                [
+                    Question {
+                        header: Some(header),
+                        ..
+                    },
+                ] => header,
+                _ => message,
+            }),
             _ => None,
         }
     }
@@ -1553,6 +1620,14 @@ impl Conversation {
             } => self.ask(id, title, content, options, Some(chosen)),
             AgentEvent::TurnEnded(reason) => self.turn_ended(reason),
             AgentEvent::LoginNeeded { options, failed } => self.ask_to_log_in(options, failed),
+            AgentEvent::Question { message, questions } => {
+                self.push(Entry::Question {
+                    message,
+                    questions,
+                    answer: None,
+                });
+                self.wait_on_human();
+            }
             AgentEvent::Note(note) => self.push(Entry::Note(note)),
             AgentEvent::TurnFailed(error) => {
                 self.push(Entry::Note(format!("The turn failed: {error}")));
@@ -2606,6 +2681,136 @@ mod tests {
         assert_eq!(conversation.state(), State::Stopping);
         assert_eq!(conversation.asked(), None);
         assert_eq!(conversation.choose(0), None);
+    }
+
+    /// What the agent asks as Claude's `AskUserQuestion` does: one
+    /// question of which the human picks one, or several, the second
+    /// taking more than one option, each with room for other words.
+    fn asks(several: bool) -> AgentEvent {
+        let options = |labels: &[&str]| {
+            labels
+                .iter()
+                .map(|label| QuestionOption {
+                    label: (*label).to_owned(),
+                    description: None,
+                })
+                .collect()
+        };
+        let language = Question {
+            header: Some("Language".to_owned()),
+            text: several.then(|| "Which language?".to_owned()),
+            options: options(&["Rust", "Go"]),
+            multiple: false,
+            other: true,
+        };
+        let fruit = Question {
+            header: Some("Fruit".to_owned()),
+            text: Some("Which fruits?".to_owned()),
+            options: options(&["Apple", "Pear", "Plum"]),
+            multiple: true,
+            other: true,
+        };
+        AgentEvent::Question {
+            message: if several {
+                "Please answer the following questions.".to_owned()
+            } else {
+                "Which language?".to_owned()
+            },
+            questions: if several {
+                vec![language, fruit]
+            } else {
+                vec![language]
+            },
+        }
+    }
+
+    #[test]
+    fn a_question_waits_for_the_human_and_their_pick_goes_to_the_agent() {
+        let mut conversation = Conversation::new();
+        conversation.submit("ask me");
+        conversation.apply(asks(false));
+        assert_eq!(conversation.state(), State::Asking);
+        assert_eq!(conversation.asked_at(), Some(1));
+        assert_eq!(conversation.asking_for(), Some("Language"));
+        // Its options are chosen by their numbers, as a permission's are.
+        assert_eq!(conversation.options_asked(), 2);
+        assert_eq!(conversation.choose(2), None);
+        let picked = QuestionAnswer::Given(vec![Picked {
+            chosen: vec![1],
+            other: None,
+        }]);
+        assert_eq!(
+            conversation.choose(1),
+            Some(Command::AnswerQuestion(picked.clone()))
+        );
+        assert_eq!(conversation.state(), State::Busy);
+        assert_eq!(conversation.asked_at(), None);
+        assert!(matches!(
+            &conversation.entries()[1],
+            Entry::Question { answer: Some(answer), .. } if *answer == picked
+        ));
+        // Answered, it is answered for good.
+        assert_eq!(conversation.answer_question(QuestionAnswer::Declined), None);
+    }
+
+    #[test]
+    fn questions_take_only_an_answer_they_may_be_answered_with() {
+        let mut conversation = Conversation::new();
+        conversation.submit("ask me twice");
+        conversation.apply(asks(true));
+        // Two questions are answered on the card, not by a number.
+        assert_eq!(conversation.options_asked(), 0);
+        assert_eq!(conversation.choose(0), None);
+        let given = |first: Vec<usize>, second: Vec<usize>| {
+            QuestionAnswer::Given(vec![
+                Picked {
+                    chosen: first,
+                    other: None,
+                },
+                Picked {
+                    chosen: second,
+                    other: Some("Kiwi".to_owned()),
+                },
+            ])
+        };
+        // Two options of a question that takes one, an option it has not,
+        // and an answer to one question of two, are no answers.
+        assert_eq!(
+            conversation.answer_question(given(vec![0, 1], vec![])),
+            None
+        );
+        assert_eq!(conversation.answer_question(given(vec![], vec![3])), None);
+        assert_eq!(
+            conversation.answer_question(QuestionAnswer::Given(vec![Picked::default()])),
+            None
+        );
+        assert_eq!(conversation.state(), State::Asking);
+
+        let answer = given(vec![], vec![0, 2]);
+        assert_eq!(
+            conversation.answer_question(answer.clone()),
+            Some(Command::AnswerQuestion(answer.clone()))
+        );
+        assert_eq!(
+            answer.said(match &conversation.entries()[1] {
+                Entry::Question { questions, .. } => questions,
+                _ => panic!("the question is not shown"),
+            }),
+            "skipped; Apple, Plum, Kiwi"
+        );
+    }
+
+    #[test]
+    fn stops_a_turn_that_waits_on_a_question() {
+        let mut conversation = Conversation::new();
+        conversation.submit("ask me");
+        conversation.apply(asks(false));
+        assert_eq!(conversation.cancel(), Some(Command::Cancel));
+        assert_eq!(conversation.state(), State::Stopping);
+        assert_eq!(conversation.choose(0), None);
+        assert_eq!(conversation.answer_question(QuestionAnswer::Declined), None);
+        conversation.apply(AgentEvent::TurnEnded(StopReason::Cancelled));
+        assert_eq!(conversation.state(), State::Idle);
     }
 
     #[test]

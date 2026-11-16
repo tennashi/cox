@@ -1227,6 +1227,7 @@ fn done_on_the_page(message: &mut ToDaemon) -> Option<Done<'_>> {
     match message {
         ToDaemon::Submit { key, attached, .. } => attached.is_empty().then_some(Done::In(key)),
         ToDaemon::Choose { key, .. }
+        | ToDaemon::AnswerQuestion { key, .. }
         | ToDaemon::Stop { key }
         | ToDaemon::SetGoal { key, .. }
         | ToDaemon::AnswerProposal { key, .. }

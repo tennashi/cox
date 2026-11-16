@@ -20,7 +20,8 @@ use std::path::{Path, PathBuf};
 use agent_client_protocol::schema::v1::{
     AgentCapabilities, AuthCapabilities, AuthMethod, AuthenticateRequest, AvailableCommand,
     AvailableCommandInput, AvailableCommandsUpdate, CancelNotification, ClientCapabilities,
-    ConfigOptionUpdate, Content, ContentBlock, ContentChunk, Diff, EmbeddedResource,
+    ConfigOptionUpdate, Content, ContentBlock, ContentChunk, CreateElicitationRequest, Diff,
+    ElicitationCapabilities, ElicitationFormCapabilities, EmbeddedResource,
     EmbeddedResourceResource, ImageContent, InitializeRequest, LoadSessionRequest,
     McpServer as AcpMcpServer, McpServerStdio, NewSessionRequest, PermissionOptionKind,
     Plan as AcpPlan, PlanEntry as AcpPlanEntry, PlanEntryStatus, PromptRequest, PromptResponse,
@@ -42,6 +43,10 @@ use anyhow::Context;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
+
+mod question;
+
+pub use question::{Picked, Question, QuestionAnswer, QuestionOption, QuestionRequest};
 
 /// A way to reach an agent: a process speaking ACP on its stdio, or, in
 /// tests, an in-memory channel.
@@ -132,6 +137,10 @@ pub type Meta = serde_json::Map<String, serde_json::Value>;
 ///
 /// Returns the error `talk` returns, or an error if the connection fails,
 /// the agent refuses to open a session, or `login` gives up.
+#[expect(
+    clippy::too_many_lines,
+    reason = "one handler for each kind of message the agent sends"
+)]
 pub async fn connect<T>(
     agent: impl Transport,
     opening: Opening,
@@ -203,6 +212,15 @@ pub async fn connect<T>(
             },
             agent_client_protocol::on_receive_request!(),
         )
+        .on_receive_request(
+            async |request: CreateElicitationRequest, responder, _cx| {
+                if let Some(request) = QuestionRequest::new(request, responder) {
+                    deliver(&updates, Received::Update(Update::Question(request)));
+                }
+                Ok(())
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
         .connect_with(agent, async |cx: ConnectionTo<Agent>| {
             let started = match start(&cx, opening, &login).await {
                 Ok(started) => started,
@@ -269,7 +287,9 @@ struct Takes {
 }
 
 /// Initializes the connection, saying Cox runs the agent's command in a
-/// terminal for the human to log in, and opens a session as `opening`
+/// terminal for the human to log in, and asks the human the agent's
+/// questions (form elicitation, which `claude-agent-acp` needs to offer
+/// Claude `AskUserQuestion` at all), and opens a session as `opening`
 /// asks, or resumes the session it names when the agent can. When the
 /// agent asks the human to log in first, `login` says how, and the session
 /// is asked for again once they have.
@@ -280,6 +300,7 @@ async fn start(
 ) -> anyhow::Result<Started> {
     let capabilities = ClientCapabilities::new()
         .auth(AuthCapabilities::new().terminal(true))
+        .elicitation(ElicitationCapabilities::new().form(ElicitationFormCapabilities::new()))
         .meta(async_tasks_capability());
     let initialized = cx
         .send_request(InitializeRequest::new(ProtocolVersion::V1).client_capabilities(capabilities))
@@ -1260,6 +1281,9 @@ pub enum Update {
     Plan(Vec<PlanEntry>),
     /// The agent asks to be allowed to run a tool call.
     PermissionRequest(PermissionRequest),
+    /// The agent asks the human questions, for them to answer by choosing
+    /// among options, or in their own words.
+    Question(QuestionRequest),
     /// A tool call the agent made started, was retitled, changed what it
     /// shows, or ended.
     ToolCall(ToolCall),

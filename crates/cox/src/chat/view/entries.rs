@@ -27,8 +27,8 @@ use crate::ui::ellipsis::ellipsis;
 use crate::ui::text::Writer;
 use crate::vim::hints::Hinted as _;
 use coxd::chat::conversation::{
-    self, Answer, Attachment, Check, CheckState, Content, Entry, LoginOption, Proposal, Proposed,
-    State, Step, StepState, ToolCallResult,
+    self, Answer, Attachment, Check, CheckState, Content, Entry, LoginOption, Picked, Proposal,
+    Proposed, Question, QuestionAnswer, State, Step, StepState, ToolCallResult,
 };
 use coxd::theme::{
     ACCENT, ACCENT_GROUND, ADDED_GROUND, ASKING, ASKING_BUTTON, ASKING_EDGE, ASKING_GROUND, BORDER,
@@ -347,7 +347,7 @@ impl ChatView {
             let speaker = Speaker::of(entry);
             // A speaker is named where they start, and what asks the
             // human is marked wherever it is.
-            let asking = matches!(entry, Entry::Permission { .. })
+            let asking = matches!(entry, Entry::Permission { .. } | Entry::Question { .. })
                 && self.conversation.asked_at() == Some(first);
             let starts = speaker.is_some() && speaker != speaking;
             if speaker.is_some() {
@@ -899,6 +899,11 @@ impl ChatView {
                 failed,
                 chosen,
             } => self.render_login(index, options, failed.as_deref(), *chosen, &mut writer, cx),
+            Entry::Question {
+                message,
+                questions,
+                answer,
+            } => self.render_question(index, message, questions, answer.as_ref(), &mut writer, cx),
             Entry::Permission {
                 title,
                 content,
@@ -926,6 +931,73 @@ impl ChatView {
                 }
             }
         }
+    }
+
+    /// The questions the agent asks, `message` saying what: while it waits
+    /// on the human, a card of each question's options, to click, with
+    /// room for their own words where it takes them, and a way to decline;
+    /// once answered, a line of what they answered.
+    fn render_question(
+        &self,
+        index: usize,
+        message: &str,
+        questions: &[Question],
+        answer: Option<&QuestionAnswer>,
+        writer: &mut Writer,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        if self.conversation.asked_at() != Some(index) {
+            let said =
+                answer.map_or_else(|| "no answer".to_owned(), |answer| answer.said(questions));
+            return line_of(index, None, ("?", ASKING), message, writer)
+                .debug_selector(move || format!("question-{index}"))
+                .child(
+                    div()
+                        .flex_shrink_0()
+                        .max_w(px(280.))
+                        .text_color(rgb(DIM))
+                        .child(ellipsis(SharedString::from(said))),
+                )
+                .into_any_element();
+        }
+        let picked = self.picked(index);
+        let by_a_click = self.answered_by_a_click();
+        let head = line_of(index, None, ("?", ASKING), message, writer);
+        let shows: Vec<AnyElement> = questions
+            .iter()
+            .enumerate()
+            .map(|(at, question)| {
+                let picked = picked.get(at).cloned().unwrap_or_default();
+                render_one_question(index, at, question, &picked, by_a_click, writer, cx)
+            })
+            .collect();
+        let send = (!by_a_click).then(|| {
+            answer_button(
+                ("question-send", index),
+                format!("question-send-{index}"),
+                "Send",
+                true,
+                ASKING_TONE,
+            )
+            .on_hint_click(cx.listener(move |view, _, _, cx| view.send_answer(index, cx)))
+        });
+        let decline = answer_button(
+            ("question-decline", index),
+            format!("question-decline-{index}"),
+            "Decline",
+            false,
+            ASKING_TONE,
+        )
+        .on_hint_click(cx.listener(|view, _, _, cx| view.decline_questions(cx)));
+        answer_card(
+            ASKING_TONE,
+            head,
+            "waiting for you",
+            shows,
+            send.into_iter().chain([decline]),
+        )
+        .debug_selector(move || format!("question-{index}"))
+        .into_any_element()
     }
 
     /// A permission request answered with `answer`, on a line that opens
@@ -1652,6 +1724,118 @@ fn render_asking(
         "waiting for you"
     };
     answer_card(ASKING_TONE, head, tag, shows, options).into_any_element()
+}
+
+/// One of the questions the agent asks, the one at `at` on the card of
+/// the entry at `index`: its header and text, if it has them, its options,
+/// each with what it means, those `picked` lit, numbered when a click
+/// answers it, and a button to write the human's own answer, with what
+/// they wrote, where it takes one.
+fn render_one_question(
+    index: usize,
+    at: usize,
+    question: &Question,
+    picked: &Picked,
+    by_a_click: bool,
+    writer: &mut Writer,
+    cx: &mut Context<ChatView>,
+) -> AnyElement {
+    let header = question.header.as_deref().map(|header| {
+        div()
+            .text_size(px(11.))
+            .font_weight(FontWeight::SEMIBOLD)
+            .text_color(rgb(ASKING))
+            .child(header.to_uppercase())
+    });
+    let text = question
+        .text
+        .as_deref()
+        .map(|text| div().child(writer.plain(text, "\n")));
+    let options = question.options.iter().enumerate().map(|(option, choice)| {
+        let lit = picked.chosen.contains(&option);
+        let label = if by_a_click {
+            format!("{} · {}", option + 1, choice.label)
+        } else {
+            let mark = match (question.multiple, lit) {
+                (true, true) => "☑",
+                (true, false) => "☐",
+                (false, true) => "◉",
+                (false, false) => "○",
+            };
+            format!("{mark} {}", choice.label)
+        };
+        let description = choice.description.as_deref().map(|description| {
+            div()
+                .text_size(px(12.))
+                .text_color(rgb(if lit { GROUND } else { DIM }))
+                .child(writer.plain(description, "\n"))
+        });
+        let id = format!("question-{index}-{at}-option-{}", option + 1);
+        div()
+            .id(SharedString::from(id.clone()))
+            .debug_selector(move || id)
+            .flex()
+            .flex_col()
+            .gap(px(2.))
+            .px(px(10.))
+            .py(px(7.))
+            .rounded(px(10.))
+            .text_size(px(13.))
+            .cursor_pointer()
+            .map(|button| {
+                if lit {
+                    button
+                        .bg(rgb(ASKING))
+                        .text_color(rgb(GROUND))
+                        .font_weight(FontWeight::SEMIBOLD)
+                } else {
+                    button
+                        .bg(rgb(ASKING_BUTTON))
+                        .text_color(rgb(FOREGROUND))
+                        .hover(|style| style.bg(rgb(ASKING_EDGE)))
+                }
+            })
+            .child(SharedString::from(label))
+            .children(description)
+            .on_hint_click(cx.listener(move |view, _, _, cx| view.pick(index, at, option, cx)))
+    });
+    let other = question.other.then(|| {
+        let label = match &picked.other {
+            Some(words) => format!("✎ {words}"),
+            None if question.options.is_empty() => "✎ Write your answer…".to_owned(),
+            None => "✎ Other…".to_owned(),
+        };
+        let id = format!("question-{index}-{at}-other");
+        div()
+            .id(SharedString::from(id.clone()))
+            .debug_selector(move || id)
+            .px(px(10.))
+            .py(px(7.))
+            .rounded(px(10.))
+            .text_size(px(13.))
+            .cursor_pointer()
+            .border_1()
+            .border_color(rgb(ASKING_EDGE))
+            .text_color(rgb(if picked.other.is_some() {
+                FOREGROUND
+            } else {
+                DIM
+            }))
+            .hover(|style| style.bg(rgb(ASKING_BUTTON)))
+            .child(SharedString::from(label))
+            .on_hint_click(cx.listener(move |view, _, window, cx| {
+                view.open_other(index, at, window, cx);
+            }))
+    });
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(6.))
+        .children(header)
+        .children(text)
+        .children(options)
+        .children(other)
+        .into_any_element()
 }
 
 /// A picture shown in the conversation, as big as fits, or a video, on

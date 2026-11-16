@@ -135,6 +135,19 @@ pub enum Entry {
     /// The human switched the chat from the agent named `from` to the one
     /// named `to`, which goes on from the conversation so far.
     Switched { from: String, to: String },
+    /// The agent asks the human `questions`, as Claude's `AskUserQuestion`
+    /// does, for them to answer by choosing among options, or in their own
+    /// words. Cox never answers it in their place.
+    Question {
+        /// What the agent says as it asks: the question itself, when it
+        /// asks one.
+        message: String,
+        #[serde(default)]
+        questions: Vec<Question>,
+        /// How the human answered, once they did.
+        #[serde(default)]
+        answer: Option<QuestionAnswer>,
+    },
     /// The agent asks the human to log in, one of the ways of `options`.
     Login {
         options: Vec<LoginOption>,
@@ -405,6 +418,118 @@ pub enum Answer {
     Dismissed,
 }
 
+/// One question the agent asks the human (see [`Entry::Question`]).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Question {
+    /// A short label for it, as "Approach", if the agent gave one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub header: Option<String>,
+    /// The question, when the message the agent asks with does not say it,
+    /// as when it asks several.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    /// What the human chooses among: none for a question they answer in
+    /// their own words alone.
+    #[serde(default)]
+    pub options: Vec<QuestionOption>,
+    /// Whether the human may choose more than one option.
+    #[serde(default)]
+    pub multiple: bool,
+    /// Whether the human may answer in their own words, in place of an
+    /// option, or beside the options they chose.
+    #[serde(default)]
+    pub other: bool,
+}
+
+/// An option of a [`Question`].
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct QuestionOption {
+    pub label: String,
+    /// What choosing it means, if the agent said.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+}
+
+/// How the human answered the questions of an [`Entry::Question`].
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum QuestionAnswer {
+    /// What they picked of each question, in the order of the questions.
+    Given(Vec<Picked>),
+    /// They chose not to answer.
+    Declined,
+}
+
+/// What the human picked of one [`Question`]: the options at `chosen`,
+/// at most one where the question takes one, and their own words, if
+/// they wrote any. Neither, for a question they skipped.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Picked {
+    #[serde(default)]
+    pub chosen: Vec<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub other: Option<String>,
+}
+
+impl Question {
+    /// Whether `picked` answers this question as it may be answered: each
+    /// option chosen is one of its own, chosen once, one at most unless
+    /// it takes more, and words only where it takes them.
+    #[must_use]
+    pub fn takes(&self, picked: &Picked) -> bool {
+        let mut chosen = picked.chosen.clone();
+        chosen.sort_unstable();
+        chosen.dedup();
+        chosen.len() == picked.chosen.len()
+            && chosen.iter().all(|&index| index < self.options.len())
+            && (self.multiple || chosen.len() <= 1)
+            && (self.other || picked.other.is_none())
+    }
+
+    /// What `picked` says of this question, as a line reads it: the
+    /// labels of the options chosen, then the human's own words, if any.
+    #[must_use]
+    pub fn said(&self, picked: &Picked) -> String {
+        let mut said: Vec<&str> = picked
+            .chosen
+            .iter()
+            .filter_map(|&index| self.options.get(index))
+            .map(|choice| choice.label.as_str())
+            .collect();
+        if let Some(other) = &picked.other {
+            said.push(other);
+        }
+        said.join(", ")
+    }
+}
+
+impl QuestionAnswer {
+    /// How the human answered `questions`, as a line reads it.
+    #[must_use]
+    pub fn said(&self, questions: &[Question]) -> String {
+        let Self::Given(picked) = self else {
+            return "declined".to_owned();
+        };
+        let said: Vec<String> = questions
+            .iter()
+            .zip(picked)
+            .map(|(question, picked)| question.said(picked))
+            .map(|said| {
+                if said.is_empty() {
+                    "skipped".to_owned()
+                } else {
+                    said
+                }
+            })
+            .collect();
+        if said.is_empty() {
+            "answered".to_owned()
+        } else {
+            said.join("; ")
+        }
+    }
+}
+
 impl Entry {
     /// What ran, as a turn ended or as something else happened, if it is
     /// that.
@@ -590,6 +715,44 @@ mod tests {
             },
         ];
         assert_eq!(written(&entries), ["/work/a.rs", "/work/b.rs"]);
+    }
+
+    #[test]
+    fn a_question_reads_as_written_and_as_kept_with_less() {
+        let entry = Entry::Question {
+            message: "Which?".to_owned(),
+            questions: vec![Question {
+                header: Some("Pick".to_owned()),
+                text: None,
+                options: vec![QuestionOption {
+                    label: "A".to_owned(),
+                    description: Some("the first".to_owned()),
+                }],
+                multiple: false,
+                other: true,
+            }],
+            answer: Some(QuestionAnswer::Given(vec![Picked {
+                chosen: vec![0],
+                other: None,
+            }])),
+        };
+        let written = serde_json::to_string(&entry).unwrap();
+        assert_eq!(
+            written,
+            r#"{"question":{"message":"Which?","questions":[{"header":"Pick","options":[{"label":"A","description":"the first"}],"multiple":false,"other":true}],"answer":{"given":[{"chosen":[0]}]}}}"#
+        );
+        assert_eq!(serde_json::from_str::<Entry>(&written).unwrap(), entry);
+        let declined: Entry =
+            serde_json::from_str(r#"{"question":{"message":"Which?","answer":"declined"}}"#)
+                .unwrap();
+        assert_eq!(
+            declined,
+            Entry::Question {
+                message: "Which?".to_owned(),
+                questions: Vec::new(),
+                answer: Some(QuestionAnswer::Declined),
+            }
+        );
     }
 
     /// What Cox has written of each proposal, as chats on disk and the

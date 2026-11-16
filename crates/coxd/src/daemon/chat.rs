@@ -26,7 +26,7 @@ use crate::agent::{Agent, AgentEvent, AgentThread, Command};
 use crate::agents::Agents;
 use crate::chat::conversation::{
     self, Answer, Came, Conversation, Does, Due, Entry, Gathered, Goal, LoginOption, Patch,
-    Proposed, State, TerminalLogin,
+    Proposed, QuestionAnswer, State, TerminalLogin,
 };
 use crate::chat::judge::{Heard, Judge, Starts};
 use crate::daemon::Internal;
@@ -1520,6 +1520,16 @@ impl Chat {
             self.send(command);
         }
         self.settle_gathering();
+        if let Some(came) = self.conversation.take_held() {
+            self.came(came);
+        }
+    }
+
+    /// The human answered the questions the agent asks with `answer`.
+    pub fn answer_question(&mut self, answer: QuestionAnswer) {
+        if let Some(command) = self.conversation.answer_question(answer) {
+            self.send(command);
+        }
         if let Some(came) = self.conversation.take_held() {
             self.came(came);
         }
