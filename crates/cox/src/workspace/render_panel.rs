@@ -687,20 +687,26 @@ fn dot(chat: &Chat) -> Option<(u32, bool, &'static str)> {
 }
 
 /// What `chat` runs in the background, on its row after its name, named
-/// after `at`: the first of it, and how many more run, all of it where
+/// after `at`: the first of it, after the terminal's icon if it is a
+/// command, and how many more run, all of it, each with its kind, where
 /// the mouse rests.
 fn render_background(chat: &Chat, at: &str) -> AnyElement {
-    let shown = |background: &Background| background.what().to_owned();
     let background = chat.background();
-    let mut first = background.first().map_or_default(shown);
+    let mut first = background
+        .first()
+        .map_or_default(|first| first.what().to_owned());
     if background.len() > 1 {
         first = format!("{first} +{}", background.len() - 1);
     }
-    let all: Vec<String> = background.iter().map(shown).collect();
+    let command = background.first().is_some_and(Background::is_command);
+    let all: Vec<String> = background.iter().map(Background::labeled).collect();
     let selector = format!("{at}-in-background");
     div()
         .id(gpui::SharedString::from(selector.clone()))
         .debug_selector(move || selector.clone())
+        .flex()
+        .items_center()
+        .gap_1()
         .min_w_0()
         .max_w(px(160.))
         .overflow_hidden()
@@ -711,6 +717,9 @@ fn render_background(chat: &Chat, at: &str) -> AnyElement {
             "At work in the background:\n{}",
             all.join("\n")
         )))
-        .child(ellipsis(first))
+        .when(command, |row| {
+            row.child(icon(Icon::Terminal, 11., FAINT).flex_none())
+        })
+        .child(div().min_w_0().child(ellipsis(first)))
         .into_any_element()
 }

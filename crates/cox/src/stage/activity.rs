@@ -383,7 +383,12 @@ fn at_work(told: &Told, root: &Path, now: &dyn Fn(u64) -> Option<commands::Now>)
             "background": chat
                 .background
                 .iter()
-                .map(|background| json!({ "what": background.what() }))
+                .map(|background| {
+                    json!({
+                        "what": background.what(),
+                        "command": background.is_command(),
+                    })
+                })
                 .collect::<Vec<_>>(),
         }));
         under.extend(
@@ -804,7 +809,7 @@ mod tests {
         // A chat at work in the background tells what runs there.
         assert_eq!(
             json["working"][2]["background"],
-            json!([{"what": "sleep 120"}])
+            json!([{"what": "sleep 120", "command": true}])
         );
         let decided = json["decided"].as_array().unwrap();
         assert_eq!(decided.len(), 2);

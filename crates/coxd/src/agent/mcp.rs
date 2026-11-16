@@ -597,6 +597,8 @@ static STARTED: AtomicU64 = AtomicU64::new(0);
 /// in one, as `in_project` says, for a chat that hands its work off, or
 /// not, as `hands_off` says (see [`crate::daemon::hands_off`]): its
 /// subagents run in the background, and it waits for one only a while.
+/// `agent` takes the place of the agent's own tools for subagents, turned
+/// off, as `replaces_agent` says (see [`crate::daemon::session_meta`]).
 ///
 /// # Errors
 ///
@@ -606,6 +608,7 @@ pub fn start(
     only: Option<&[String]>,
     in_project: bool,
     hands_off: bool,
+    replaces_agent: bool,
 ) -> anyhow::Result<ToolServer> {
     let only = Some(calls::for_chat(only, in_project));
     let directory = private_directory()?;
@@ -620,6 +623,7 @@ pub fn start(
         cwd,
         only,
         hands_off,
+        replaces_agent,
         requests: sent,
         chats,
     });
@@ -718,19 +722,21 @@ pub fn serve(
 
 /// What one chat's server serves: the tools named in `only`, or all of
 /// them, working in `cwd`, for a chat that hands its work off, or not, as
-/// `hands_off` says, asking the chat's stage through `requests`, and the
-/// window through `chats`.
+/// `hands_off` says, and whose `agent` takes the place of the agent's own
+/// tools for subagents, or not, as `replaces_agent` says, asking the
+/// chat's stage through `requests`, and the window through `chats`.
 struct Served {
     cwd: PathBuf,
     only: Option<Vec<String>>,
     hands_off: bool,
+    replaces_agent: bool,
     requests: UnboundedSender<ToolRequest>,
     chats: UnboundedSender<ChatRequest>,
 }
 
 impl Serves for Served {
     fn tools(&self) -> Value {
-        calls::tools(self.only.as_deref())
+        calls::tools(self.only.as_deref(), self.replaces_agent)
     }
 
     fn call<'a>(
@@ -955,6 +961,7 @@ mod tests {
             cwd: cwd.to_owned(),
             only: None,
             hands_off: false,
+            replaces_agent: false,
             requests: requests.clone(),
             chats,
         };
@@ -1003,6 +1010,30 @@ mod tests {
         let called = ask("tools/call", &json!({ "name": "no_such_tool" }));
         let called = answer_now(&called, cwd, &sent).unwrap();
         assert_eq!(called["error"]["code"], INVALID_PARAMS);
+    }
+
+    #[test]
+    fn agent_is_loaded_always_and_says_so_where_it_takes_the_place_of_the_agents_own() {
+        let agent = |replaces_agent| {
+            calls::tools(None, replaces_agent)
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|tool| tool["name"] == AGENT_TOOL)
+                .unwrap()
+                .clone()
+        };
+        let in_place = agent(true);
+        assert_eq!(in_place["_meta"]["anthropic/alwaysLoad"], true);
+        let description = in_place["description"].as_str().unwrap();
+        assert!(
+            description.starts_with("The Agent and Task tools are not in this session"),
+            "{description}"
+        );
+        assert!(description.contains("`subagent_type` included"));
+        let beside = agent(false);
+        assert!(beside.get("_meta").is_none(), "deferred as the rest");
+        assert!(description.ends_with(beside["description"].as_str().unwrap()));
     }
 
     #[test]

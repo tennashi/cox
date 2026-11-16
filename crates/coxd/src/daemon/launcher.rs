@@ -68,7 +68,8 @@ impl Spawns for Launcher {
         // 1. The server of Cox's own tools, with the `cox` that reaches it.
         let only = start.setup().and_then(|setup| setup.tools.as_deref());
         let hands_off = hands_off(top_level, subagents, only, self.exe.is_some());
-        let server = self.server(&cwd, only, in_project, hands_off);
+        let replaces_agent = runs_chats(subagents, only, self.exe.is_some());
+        let server = self.server(&cwd, only, in_project, hands_off, replaces_agent);
         // What the agent gets: the MCP servers it starts to reach both.
         let tools = self.tools(&cwd, relay, server.as_ref());
         let meta = session_meta(subagents, only, server.is_some());
@@ -106,18 +107,22 @@ impl Launcher {
     /// Starts the server of Cox's own tools for a chat working in `cwd`,
     /// serving the tools named in `only`, or all of them, but those of a
     /// project when the chat is in none, as `in_project` says, for a chat
-    /// that hands its work off, or not, as `hands_off` says, and answers it
-    /// with the `cox` the agent runs to reach it, or `None` when it did not
-    /// start.
+    /// that hands its work off, or not, as `hands_off` says, whose `agent`
+    /// takes the place of the agent's own, or not, as `replaces_agent`
+    /// says, and answers it with the `cox` the agent runs to reach it, or
+    /// `None` when it did not start.
     fn server(
         &self,
         cwd: &std::path::Path,
         only: Option<&[String]>,
         in_project: bool,
         hands_off: bool,
+        replaces_agent: bool,
     ) -> Option<(PathBuf, ToolServer)> {
         let exe = self.exe.clone()?;
-        match crate::agent::mcp::start(cwd.to_owned(), only, in_project, hands_off) {
+        let started =
+            crate::agent::mcp::start(cwd.to_owned(), only, in_project, hands_off, replaces_agent);
+        match started {
             Ok(server) => Some((exe, server)),
             Err(error) => {
                 tracing::error!("the agent gets no tools of Cox's own: {error:#}");

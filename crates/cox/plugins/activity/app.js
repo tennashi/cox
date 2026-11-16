@@ -59,7 +59,10 @@ function working(chat) {
   const background = (chat.background ?? []).length
     ? `<div class="line">in the background:</div>` +
       chat.background
-        .map((what) => `<div class="running">${esc(what.what)}</div>`)
+        .map(
+          (what) =>
+            `<div class="background">${what.command ? `<span class="cue" title="a command left running">&gt;_</span>` : ""}${esc(what.what)}</div>`,
+        )
         .join("")
     : "";
   return (

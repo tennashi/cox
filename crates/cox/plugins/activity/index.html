@@ -145,6 +145,19 @@
       .row .running .prompt {
         color: var(--faint);
       }
+      /* What runs in the background is named by what the agent said it
+         does, not by the command, so it reads as words, a command marked
+         as one by the cue of the stage's terminal. */
+      .row .background {
+        font-size: 12px;
+        color: var(--foreground);
+        overflow-wrap: anywhere;
+      }
+      .row .background .cue {
+        font: 600 10.5px var(--mono);
+        color: var(--faint);
+        margin-right: 6px;
+      }
       .decision {
         padding: 7px 10px;
         border-bottom: 1px solid var(--border);
