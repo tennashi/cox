@@ -1237,6 +1237,7 @@ impl Conversation {
         &mut self,
         id: String,
         title: Option<String>,
+        command: bool,
         content: Option<Vec<Content>>,
         result: Option<ToolCallResult>,
     ) {
@@ -1244,6 +1245,7 @@ impl Conversation {
             self.push(Entry::ToolCall {
                 id,
                 title: title.unwrap_or_else(|| "a tool call".to_owned()),
+                command,
                 content: content.unwrap_or_default(),
                 result,
             });
@@ -1259,6 +1261,7 @@ impl Conversation {
         self.changed.insert(index);
         if let Entry::ToolCall {
             title: shown_title,
+            command: shown_command,
             content: shown_content,
             result: shown_result,
             ..
@@ -1267,6 +1270,7 @@ impl Conversation {
             if let Some(title) = title {
                 *shown_title = title;
             }
+            *shown_command |= command;
             if let Some(content) = content {
                 *shown_content = content;
             }
@@ -1525,9 +1529,10 @@ impl Conversation {
             AgentEvent::ToolCall {
                 id,
                 title,
+                command,
                 content,
                 result,
-            } => self.show_tool_call(id, title, content, result),
+            } => self.show_tool_call(id, title, command, content, result),
             AgentEvent::PermissionRequest {
                 id,
                 title,
@@ -2197,6 +2202,7 @@ mod tests {
         let tool_call = |title: Option<&str>, result| AgentEvent::ToolCall {
             id: "call-1".to_owned(),
             title: title.map(str::to_owned),
+            command: false,
             content: None,
             result,
         };
@@ -2207,6 +2213,7 @@ mod tests {
             Entry::ToolCall {
                 id: "call-1".to_owned(),
                 title: "ls".to_owned(),
+                command: false,
                 content: Vec::new(),
                 result: None,
             }
@@ -2220,6 +2227,7 @@ mod tests {
                 Entry::ToolCall {
                     id: "call-1".to_owned(),
                     title: "ls".to_owned(),
+                    command: false,
                     content: Vec::new(),
                     result: Some(ToolCallResult::Completed),
                 },
@@ -2228,11 +2236,37 @@ mod tests {
         );
     }
 
+    #[test]
+    fn a_tool_call_the_agent_said_runs_a_command_stays_one_until_it_ends() {
+        let mut conversation = Conversation::new();
+        conversation.submit("test");
+        let news = |command, result| AgentEvent::ToolCall {
+            id: "call-1".to_owned(),
+            title: Some("cargo test".to_owned()),
+            command,
+            content: None,
+            result,
+        };
+
+        conversation.apply(news(true, None));
+        conversation.apply(news(false, Some(ToolCallResult::Completed)));
+
+        assert!(matches!(
+            conversation.entries()[1],
+            Entry::ToolCall {
+                command: true,
+                result: Some(ToolCallResult::Completed),
+                ..
+            }
+        ));
+    }
+
     /// News of tool call `call-1`, showing `content` when it is given.
     fn tool_call(content: Option<Vec<Content>>, result: Option<ToolCallResult>) -> AgentEvent {
         AgentEvent::ToolCall {
             id: "call-1".to_owned(),
             title: Some("cargo xtask ci".to_owned()),
+            command: false,
             content,
             result,
         }

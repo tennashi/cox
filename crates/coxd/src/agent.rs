@@ -85,6 +85,8 @@ pub enum AgentEvent {
         /// The same for every event of one call.
         id: String,
         title: Option<String>,
+        /// Whether the call runs a command, as the agent said of it.
+        command: bool,
         /// What the call shows from now on, or `None` when that stays as it
         /// was.
         content: Option<Vec<Content>>,
@@ -1029,6 +1031,7 @@ fn update_event(update: Update) -> Result<AgentEvent, cox_acp::PermissionRequest
         Update::ToolCall(call) => AgentEvent::ToolCall {
             id: call.id,
             title: call.title,
+            command: call.kind == Some(cox_acp::ToolKind::Execute),
             content: call.content.map(shown),
             result: call.result.map(ended),
         },
@@ -1473,6 +1476,7 @@ mod tests {
             Entry::ToolCall {
                 id: "call-1".to_owned(),
                 title: "Edit x.txt".to_owned(),
+                command: false,
                 content: Vec::new(),
                 result: Some(ToolCallResult::Completed),
             },

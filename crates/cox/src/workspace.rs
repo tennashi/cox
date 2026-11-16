@@ -729,6 +729,7 @@ impl Workspace {
         self.follow_project_card(cx);
         self.sight(cx);
         self.at_work(cx);
+        self.follow_commands(cx);
         self.badge(cx);
         cx.notify();
     }
@@ -878,8 +879,13 @@ impl Workspace {
         let link = self.link.clone();
         let agents = self.agents.clone();
         let view = cx.new(|cx| ChatView::new(key, link, row, agents, cx));
-        // The list of chats redraws as the chat changes.
-        cx.observe(&view, |_, _, cx| cx.notify()).detach();
+        // The list of chats redraws as the chat changes, and the Commands
+        // pages follow what its agent runs.
+        cx.observe(&view, move |workspace, _, cx| {
+            workspace.tell_commands(key, cx);
+            cx.notify();
+        })
+        .detach();
         if let Some(chat) = self.chat_mut(key) {
             chat.view = Some(view);
         }

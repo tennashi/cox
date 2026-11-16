@@ -1,0 +1,201 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Commands</title>
+    <link rel="stylesheet" href="cox://api/theme.css" />
+    <style>
+      /* The colors of the window, which Cox gives every plugin as
+         `cox://api/theme.css` (see `ui::theme`). */
+      :root {
+        --sans: -apple-system, "Segoe UI", "Noto Sans", "Helvetica Neue", Arial, sans-serif;
+        --mono: Menlo, "DejaVu Sans Mono", monospace;
+      }
+      html,
+      body {
+        margin: 0;
+        background: var(--surface);
+        color: var(--foreground);
+        font: 13px/1.5 var(--sans);
+      }
+      #app {
+        padding: 12px 16px 40px;
+        box-sizing: border-box;
+      }
+      a {
+        color: var(--link);
+        text-decoration: none;
+      }
+      .head {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 0 4px;
+        min-height: 26px;
+        margin-bottom: 4px;
+        white-space: nowrap;
+      }
+      .head h1 {
+        flex: none;
+        margin: 0;
+        font-size: 15px;
+        font-weight: 600;
+      }
+      .head .summary {
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        color: var(--dim);
+      }
+      .head .where {
+        flex: 1;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        text-align: right;
+        font: 11.5px var(--mono);
+        color: var(--faint);
+      }
+      .chat {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin: 18px 0 6px;
+        padding: 0 4px;
+        font-weight: 600;
+      }
+      .chat a {
+        color: var(--foreground);
+      }
+      .chat a:hover {
+        color: var(--link);
+      }
+      .dot {
+        flex: none;
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        background: var(--disabled);
+      }
+      .dot.working {
+        background: var(--link);
+      }
+      .step {
+        margin: 0 0 8px;
+      }
+      .said {
+        display: flex;
+        gap: 6px;
+        padding: 3px 4px;
+        color: var(--dim);
+        font-size: 12.5px;
+        cursor: pointer;
+        user-select: none;
+      }
+      .said:hover {
+        color: var(--foreground);
+      }
+      .said .fold {
+        flex: none;
+        width: 10px;
+        color: var(--faint);
+      }
+      .said .text {
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .said .count {
+        flex: none;
+        color: var(--faint);
+      }
+      .small {
+        display: flex;
+        gap: 8px;
+        align-items: baseline;
+        margin-left: 16px;
+        padding: 1px 6px;
+        border-radius: 4px;
+        font: 12px/1.6 var(--mono);
+        color: var(--dim);
+      }
+      .small:hover {
+        background: var(--hover);
+      }
+      .small .line {
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .mark {
+        flex: none;
+      }
+      .running {
+        color: var(--link);
+      }
+      .done {
+        color: var(--accent);
+      }
+      .failed {
+        color: var(--failed);
+      }
+      .cancelled {
+        color: var(--faint);
+      }
+      .secs {
+        flex: none;
+        color: var(--faint);
+      }
+      .big {
+        margin: 6px 0 8px 16px;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        overflow: hidden;
+      }
+      .big.running {
+        border-color: var(--border-strong);
+      }
+      .big .top {
+        display: flex;
+        gap: 12px;
+        justify-content: space-between;
+        padding: 6px 10px;
+        background: var(--raised);
+        font: 12px var(--mono);
+        color: var(--foreground);
+      }
+      .big .top .line {
+        min-width: 0;
+        overflow-wrap: anywhere;
+      }
+      .big .top .state {
+        flex: none;
+      }
+      .big pre {
+        margin: 0;
+        padding: 8px 10px;
+        font: 11.5px/1.5 var(--mono);
+        color: var(--dim);
+        background: var(--ground);
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+      }
+      .big .why {
+        padding: 8px 10px;
+        color: var(--dim);
+        background: var(--ground);
+        font-size: 12px;
+      }
+      .none {
+        color: var(--dim);
+        padding: 6px 10px;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script src="app.js"></script>
+  </body>
+</html>

@@ -825,6 +825,7 @@ impl ChatView {
             Entry::ToolCall {
                 id,
                 title,
+                command: _,
                 content,
                 result,
             } => {
@@ -2329,6 +2330,7 @@ mod tests {
         Entry::ToolCall {
             id: id.to_owned(),
             title: "ls".to_owned(),
+            command: false,
             content: Vec::new(),
             result: None,
         }

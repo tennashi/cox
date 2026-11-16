@@ -48,6 +48,9 @@
 //! - `cox://api/activity`: what goes on in the folder, what waits for
 //!   the human and what happened without them (see
 //!   [`crate::stage::activity`]).
+//! - `cox://api/commands`: what the agents of the folder's chats run,
+//!   step by step, and what a command that ran long printed (see
+//!   [`crate::stage::commands`]).
 //! - `cox://api/triggers`: the triggers of the folder, in the order they
 //!   run in there, each with whether it runs there and how it last ran,
 //!   those on a schedule with when they run next, and in the home, those
@@ -95,8 +98,8 @@ const PROJECT_PLUGINS: &str = "plugins";
 /// The files of a plugin, by their paths within it.
 type Files = &'static [(&'static str, &'static [u8])];
 
-/// What is built into Cox at `cox://<name>/`: the Activity, Map,
-/// Knowledge and Triggers plugins, with their files.
+/// What is built into Cox at `cox://<name>/`: the Activity, Commands,
+/// Map, Knowledge and Triggers plugins, with their files.
 const BUILT_IN: &[(&str, Files)] = &[
     (
         "activity",
@@ -110,6 +113,20 @@ const BUILT_IN: &[(&str, Files)] = &[
                 include_bytes!("../../plugins/activity/index.html"),
             ),
             ("app.js", include_bytes!("../../plugins/activity/app.js")),
+        ],
+    ),
+    (
+        "commands",
+        &[
+            (
+                "plugin.json",
+                include_bytes!("../../plugins/commands/plugin.json"),
+            ),
+            (
+                "index.html",
+                include_bytes!("../../plugins/commands/index.html"),
+            ),
+            ("app.js", include_bytes!("../../plugins/commands/app.js")),
         ],
     ),
     (
@@ -313,6 +330,7 @@ impl Plugins {
                     self.triggers()
                 }
             }
+            "commands" if rest.is_empty() => crate::stage::commands::told(&self.root),
             "activity" if rest.is_empty() => crate::stage::activity::told(
                 &self.root,
                 &coxd::settings::wiki(),
@@ -733,13 +751,17 @@ mod tests {
 
         let listed = plugins.list();
         let names: Vec<&str> = listed.iter().map(|plugin| plugin.name.as_str()).collect();
-        assert_eq!(names, ["activity", "map", "wiki", "triggers", "tour"]);
+        assert_eq!(
+            names,
+            ["activity", "commands", "map", "wiki", "triggers", "tour"]
+        );
         assert_eq!(listed[0].title, "Activity");
-        assert_eq!(listed[1].title, "Map");
-        assert_eq!(listed[2].title, "Knowledge");
-        assert_eq!(listed[3].title, "Triggers");
-        assert_eq!(listed[4].title, "A tour");
-        assert_eq!(listed[4].url(), "cox://tour/");
+        assert_eq!(listed[1].title, "Commands");
+        assert_eq!(listed[2].title, "Map");
+        assert_eq!(listed[3].title, "Knowledge");
+        assert_eq!(listed[4].title, "Triggers");
+        assert_eq!(listed[5].title, "A tour");
+        assert_eq!(listed[5].url(), "cox://tour/");
         assert_eq!(
             plugins.resource("cox://tour/").unwrap().body,
             b"<h1>Tour</h1>"

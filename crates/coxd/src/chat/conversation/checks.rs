@@ -1016,6 +1016,7 @@ mod tests {
             conversation.apply(AgentEvent::ToolCall {
                 id,
                 title: Some("Edit x.txt".to_owned()),
+                command: false,
                 content: None,
                 result: Some(ToolCallResult::Completed),
             });

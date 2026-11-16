@@ -1221,6 +1221,7 @@ mod tests {
         let call = |result| Entry::ToolCall {
             id: "call-1".to_owned(),
             title: "Edit x.txt".to_owned(),
+            command: false,
             content: vec![Content::Diff {
                 path: "/work/x.txt".to_owned(),
                 lines: vec![Line::Removed("one".to_owned()), Line::Added("1".to_owned())],

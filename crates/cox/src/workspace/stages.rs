@@ -176,6 +176,55 @@ impl Workspace {
         }
     }
 
+    /// Tells the stages' Commands pages what the agent of the chat `key`
+    /// runs, as its view has the conversation (see
+    /// [`crate::stage::commands`]).
+    pub(super) fn tell_commands(&self, key: u64, cx: &App) {
+        let Some(chat) = self.chat(key) else {
+            return;
+        };
+        let Some(view) = &chat.view else {
+            return;
+        };
+        crate::stage::commands::tell(crate::stage::commands::Chat {
+            key,
+            name: chat.name.to_string(),
+            cwd: self.cwd_of(chat),
+            project: self.projects[chat.project].folder.clone(),
+            working: matches!(
+                chat.state,
+                State::Busy | State::Asking | State::Stopping | State::Checking
+            ),
+            steps: crate::stage::commands::steps(view.read(cx).conversation().entries()),
+        });
+    }
+
+    /// Tells the stages' Commands pages of every chat with a view, as the
+    /// list of chats changed, having the conversation of each subagent
+    /// at work told, for its commands to show while no one looks at it.
+    pub(super) fn follow_commands(&mut self, cx: &mut Context<Self>) {
+        let subagents: Vec<u64> = self
+            .chats
+            .iter()
+            .filter(|chat| chat.parent.is_some() && chat.view.is_none())
+            .filter(|chat| matches!(chat.state, State::Busy | State::Checking))
+            .map(|chat| chat.key)
+            .collect();
+        for key in subagents {
+            self.view(key, cx);
+        }
+        let keys: Vec<u64> = self
+            .chats
+            .iter()
+            .chain(&self.archived)
+            .map(|chat| chat.key)
+            .collect();
+        crate::stage::commands::keep(&keys);
+        for &key in &keys {
+            self.tell_commands(key, cx);
+        }
+    }
+
     /// Tells each stage whether it is in sight now.
     pub(super) fn sight(&self, cx: &mut App) {
         let centered = self.centered().map(|stage| stage.panel.clone());

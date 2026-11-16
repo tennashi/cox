@@ -78,6 +78,7 @@ pub mod calls;
 pub mod changes;
 pub mod code;
 mod column;
+pub mod commands;
 pub mod devices;
 pub mod document;
 pub mod flow;
