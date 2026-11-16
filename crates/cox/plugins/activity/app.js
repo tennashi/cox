@@ -4,7 +4,8 @@
 // what is asked of the human, the chats of the folder, and of its
 // sketches, that ask them something, with what they ask, or whose turn
 // ended while they were not looking; and what is at work, the chats whose
-// agents take a turn, each with what it does now, its subagents under it.
+// agents take a turn, or work in the background once it ended, each with
+// what it does now, or runs in the background, its subagents under it.
 // On the right, what was decided, the questions agents asked that the
 // human answered, each with what they chose and why, the last first. A
 // click on a chat shows it, by going to `cox://chat/<key>`. Below, what
@@ -55,11 +56,17 @@ function working(chat) {
   const goal = chat.goal ? `<div class="goal">◎ ${esc(chat.goal)}</div>` : "";
   const said = chat.said ? `<div class="line">${esc(chat.said)}</div>` : "";
   const running = chat.running ? `<div class="running"><span class="prompt">$</span> ${esc(chat.running)}</div>` : "";
+  const background = (chat.background ?? []).length
+    ? `<div class="line">in the background:</div>` +
+      chat.background
+        .map((what) => `<div class="running">${esc(what.what)}</div>`)
+        .join("")
+    : "";
   return (
     `<a class="row" href="cox://chat/${chat.key}" title="shows the chat" style="margin-left: ${chat.depth * 18}px">` +
     `<span class="dot busy"></span>` +
     `<span class="what"><span class="name">${chat.depth || chat.sketch ? "↳ " : ""}${esc(chat.name)}</span>` +
-    `${where(chat)}${goal}${said || running ? "" : `<div class="line">at work</div>`}${said}${running}</span></a>`
+    `${where(chat)}${goal}${said || running || background ? "" : `<div class="line">at work</div>`}${said}${running}${background}</span></a>`
   );
 }
 

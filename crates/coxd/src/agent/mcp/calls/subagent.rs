@@ -409,13 +409,19 @@ pub(super) async fn agent(
         return Ok(told);
     }
     let waited = wait(number, chats).await?;
-    let mut told = match (&waited.asking, &waited.said) {
-        (Some(asking), _) => format!(
+    let mut told = match (&waited.asking, waited.ended_but(), &waited.said) {
+        (Some(asking), _, _) => format!(
             "The subagent in chat {number} waits for the human to answer: {asking}. Get its \
              report with agent_report, giving {number}, once it goes on."
         ),
-        (None, Some(said)) => format!("The subagent in chat {number} reports:\n\n{said}"),
-        (None, None) => format!("The subagent in chat {number} ended its turn and said nothing."),
+        (None, Some(but), Some(said)) => {
+            format!("The subagent in chat {number} {but}. It reports:\n\n{said}")
+        }
+        (None, Some(but), None) => format!("The subagent in chat {number} {but}. It said nothing."),
+        (None, None, Some(said)) => format!("The subagent in chat {number} reports:\n\n{said}"),
+        (None, None, None) => {
+            format!("The subagent in chat {number} ended its turn and said nothing.")
+        }
     };
     let notes: Vec<String> = waited.unoffered.into_iter().chain(notes).collect();
     if !notes.is_empty() {
@@ -509,9 +515,10 @@ pub(super) async fn agent_report(
             }
         },
     };
-    let mut told = match &waited.asking {
-        Some(asking) => format!("Chat {chat} waits for the human to answer: {asking}."),
-        None => format!("Chat {chat} ended its turn."),
+    let mut told = match (&waited.asking, waited.ended_but()) {
+        (Some(asking), _) => format!("Chat {chat} waits for the human to answer: {asking}."),
+        (None, Some(but)) => format!("Chat {chat} {but}."),
+        (None, None) => format!("Chat {chat} ended its turn."),
     };
     match &waited.said {
         Some(said) => {
@@ -920,6 +927,15 @@ mod tests {
                     asking: Some("Edit src/main.rs".to_owned()),
                     ..Waited::default()
                 },
+                Waited {
+                    said: Some("The benchmark runs.".to_owned()),
+                    background: vec![crate::daemon::wire::Background {
+                        kind: crate::daemon::wire::BackgroundKind::Command,
+                        name: "cargo bench".to_owned(),
+                        description: None,
+                    }],
+                    ..Waited::default()
+                },
             ],
         );
         let report = |chat: Value| {
@@ -957,6 +973,16 @@ mod tests {
             (
                 false,
                 "Chat 7 waits for the human to answer: Edit src/main.rs. It said nothing."
+                    .to_owned()
+            )
+        );
+        assert_eq!(
+            report(json!(7)).await,
+            (
+                false,
+                "Chat 7 ended its turn, but still works in the background: the background command \
+                 \"cargo bench\". Cox tells you once that ends and your turn is not running. It last \
+                 said:\n\nThe benchmark runs."
                     .to_owned()
             )
         );

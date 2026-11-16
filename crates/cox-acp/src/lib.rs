@@ -650,24 +650,50 @@ fn async_tasks_capability() -> Meta {
 
 /// The async task `notification` tells of, when it is a `session/update`
 /// of `claude-agent-acp`'s async tasks: `async_task_spawned` starts a
-/// task, and `async_task_state_update` tells its state, of which
-/// `completed`, `failed` and `stopped` end it. Progress tells nothing of
-/// whether it runs, so it is left out, as is anything malformed.
+/// task, with its name, description and kind, `async_task_state_update`
+/// tells its state, of which `completed`, `failed` and `stopped` end it,
+/// and `async_task_progress` may tell what it does anew. Progress that
+/// tells nothing of what it does is left out, as is anything malformed.
 fn async_task(notification: &UntypedMessage) -> Option<Task> {
     if notification.method != "session/update" {
         return None;
     }
     let update = notification.params.get("update")?;
     let id = update.get("asyncTaskId")?.as_str()?.to_owned();
-    let running = match update.get("sessionUpdate")?.as_str()? {
-        "async_task_spawned" => true,
-        "async_task_state_update" => !matches!(
-            update.get("state")?.as_str()?,
-            "completed" | "failed" | "stopped"
-        ),
+    let told = |field: &str| {
+        update
+            .get(field)
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|told| !told.is_empty())
+            .map(str::to_owned)
+    };
+    let task = match update.get("sessionUpdate")?.as_str()? {
+        "async_task_spawned" => Task {
+            id,
+            running: true,
+            started: true,
+            name: told("name"),
+            description: told("description"),
+            kind: told("taskType"),
+        },
+        "async_task_state_update" => Task {
+            id,
+            running: !matches!(
+                update.get("state")?.as_str()?,
+                "completed" | "failed" | "stopped"
+            ),
+            ..Task::default()
+        },
+        "async_task_progress" => Task {
+            id,
+            running: true,
+            description: Some(told("description")?),
+            ..Task::default()
+        },
         _ => return None,
     };
-    Some(Task { id, running })
+    Some(task)
 }
 
 /// The paths of the files a tool call works on.
@@ -1297,13 +1323,27 @@ pub enum Update {
 /// of it to a client that asks for its async tasks: a command or a
 /// subagent left running in the background, or a turn Claude Code took
 /// by itself while no prompt ran.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Task {
     /// The same for every update of one task.
     pub id: String,
     /// Whether the task runs still: it ends once completed, failed or
     /// stopped.
     pub running: bool,
+    /// Whether this tells the task starts, as the agent tells first, with
+    /// what it is: an update of one that goes on, or ends, does not.
+    pub started: bool,
+    /// What it goes by, as the agent tells it starts: the command, for
+    /// one left running, or "Claude is working", for a turn it took by
+    /// itself.
+    pub name: Option<String>,
+    /// What it does, as the agent tells it starts, or anew as it goes on:
+    /// for a turn the agent took by itself, what started it.
+    pub description: Option<String>,
+    /// What kind of task it is, as the agent tells it starts: "shell" for
+    /// a command, "turn" for a turn the agent took by itself, or another,
+    /// as "monitor".
+    pub kind: Option<String>,
 }
 
 /// A tool call the agent made, as it stands.

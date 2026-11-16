@@ -16,6 +16,7 @@ use crate::ui::icons::{Icon, icon};
 use crate::ui::{card, tip};
 use crate::vim::hints::{self, Hinted as _, Part};
 use coxd::chat::conversation::State;
+use coxd::daemon::wire::Background;
 use coxd::theme::{
     ACCENT, ASKING, BORDER, BORDER_STRONG, DIM, DISABLED, FAINT, FOREGROUND, GAP, GROUND, HOVER,
     LINK, RAISED, SELECTED, chat_color,
@@ -394,6 +395,9 @@ impl Workspace {
             );
         }
         marks.push(name.into_any_element());
+        if chat.in_background() {
+            marks.push(render_background(chat, at));
+        }
         if chat.is_sketch() {
             marks.push(small("sketch", format!("{at}-sketch")));
         }
@@ -675,7 +679,38 @@ fn dot(chat: &Chat) -> Option<(u32, bool, &'static str)> {
         Some(State::Asking) => Some((ASKING, true, "asking")),
         _ if chat.unread => Some((color, true, "unread")),
         Some(State::Busy | State::Stopping | State::Checking) => Some((color, false, "working")),
+        // At work in the background, it is at work all the same.
+        Some(State::Idle) if chat.in_background() => Some((color, false, "background")),
         Some(State::Idle) => Some((DISABLED, false, "idle")),
         Some(State::Closed) | None => None,
     }
+}
+
+/// What `chat` runs in the background, on its row after its name, named
+/// after `at`: the first of it, and how many more run, all of it where
+/// the mouse rests.
+fn render_background(chat: &Chat, at: &str) -> AnyElement {
+    let shown = |background: &Background| background.what().to_owned();
+    let background = chat.background();
+    let mut first = background.first().map_or_default(shown);
+    if background.len() > 1 {
+        first = format!("{first} +{}", background.len() - 1);
+    }
+    let all: Vec<String> = background.iter().map(shown).collect();
+    let selector = format!("{at}-in-background");
+    div()
+        .id(gpui::SharedString::from(selector.clone()))
+        .debug_selector(move || selector.clone())
+        .min_w_0()
+        .max_w(px(160.))
+        .overflow_hidden()
+        .text_size(px(12.))
+        .font_weight(FontWeight::NORMAL)
+        .text_color(rgb(DIM))
+        .tooltip(tip(format!(
+            "At work in the background:\n{}",
+            all.join("\n")
+        )))
+        .child(ellipsis(first))
+        .into_any_element()
 }

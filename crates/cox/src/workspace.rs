@@ -65,7 +65,7 @@ use coxd::agents::Agents;
 use coxd::chat::conversation::State;
 use coxd::chat::sketch::{self, Sketch};
 use coxd::daemon::Link;
-use coxd::daemon::wire::{ChatRow, FromDaemon, Listing, ProjectRow, ToDaemon};
+use coxd::daemon::wire::{Background, ChatRow, FromDaemon, Listing, ProjectRow, ToDaemon};
 
 pub(crate) mod project_card;
 mod render;
@@ -260,6 +260,8 @@ pub struct Chat {
     agent: String,
     /// The folder it works in, when it is not its project's.
     folder: Option<PathBuf>,
+    /// What its agent runs in the background, apart from its turns.
+    background: Vec<Background>,
     /// Its view, once the window showed it, or something asked of its
     /// stage.
     view: Option<Entity<ChatView>>,
@@ -284,6 +286,7 @@ impl Chat {
             ending,
             agent,
             folder,
+            background,
         } = row;
         Self {
             key,
@@ -301,6 +304,7 @@ impl Chat {
             ending,
             agent,
             folder,
+            background,
             view,
         }
     }
@@ -337,6 +341,26 @@ impl Chat {
     #[must_use]
     pub fn state(&self) -> State {
         self.state
+    }
+
+    /// What its agent runs in the background, apart from its turns, as
+    /// it told it.
+    #[must_use]
+    pub fn background(&self) -> &[Background] {
+        &self.background
+    }
+
+    /// Whether it works in the background: its turn ended, and it waits
+    /// for no one, but something its agent runs goes on.
+    #[must_use]
+    pub fn in_background(&self) -> bool {
+        self.open && coxd::daemon::wire::in_background(self.state, &self.background)
+    }
+
+    /// Whether its agent is at work: in a turn, or in the background.
+    #[must_use]
+    pub fn at_work(&self) -> bool {
+        coxd::daemon::working(self.state) || self.in_background()
     }
 
     /// Whether it is a sketch, working in a folder of its own.
@@ -1161,7 +1185,7 @@ impl Workspace {
         self.chats
             .iter()
             .chain(&self.archived)
-            .any(|chat| chat.project == index && coxd::daemon::working(chat.state))
+            .any(|chat| chat.project == index && chat.at_work())
     }
 
     /// Reads again the icon of the project kept as `id`, as it is now.
@@ -1258,7 +1282,7 @@ impl Workspace {
                 .chats
                 .iter()
                 .chain(&self.archived)
-                .any(|chat| chat.project == index && coxd::daemon::working(chat.state)),
+                .any(|chat| chat.project == index && chat.at_work()),
         }
     }
 
@@ -1414,7 +1438,13 @@ impl Workspace {
                     asking: chat.state == State::Asking,
                     unread: chat.unread,
                     goal: chat.goal.as_ref().map(Goal::input),
-                    working: matches!(chat.state, State::Busy | State::Checking | State::Stopping),
+                    working: matches!(chat.state, State::Busy | State::Checking | State::Stopping)
+                        || chat.in_background(),
+                    background: if chat.in_background() {
+                        chat.background.clone()
+                    } else {
+                        Vec::new()
+                    },
                     parent: chat.parent,
                     kept: chat.kept,
                 })

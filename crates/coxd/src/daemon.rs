@@ -196,6 +196,9 @@ pub enum Internal {
     },
     /// The time the human waits on the triggers that gather is up.
     GatheredEnough { key: u64, generation: u64 },
+    /// [`chat::BACKGROUND_SETTLES`] passed since the last of what the
+    /// chat's agent ran in the background ended.
+    Settled { key: u64 },
     /// The command `id`, which the window runs, is not waited for any more.
     Cancel { id: u64 },
     /// A window came, as the connection `id`, saying `hello`, to hear
@@ -349,13 +352,39 @@ impl Report {
     /// The report of a chat that stood as `was` and stands as `now`: one
     /// that goes back to work has none, and one that stops working has
     /// one pending.
-    fn as_it_goes(self, was: State, now: State) -> Self {
-        match (at_work(was), at_work(now)) {
-            (_, true) => Self::Working,
+    /// What the agent heard of what the chat runs in the background goes
+    /// as `behind` does: back at work, it heard nothing of what it runs
+    /// now, and once what it heard of ended, and the background
+    /// `settled`, it hears so.
+    fn as_it_goes(self, was: State, now: State, behind: Behind, settled: bool) -> (Self, Behind) {
+        let report = match (at_work(was), at_work(now)) {
+            (_, true) => return (Self::Working, Behind::Untold),
             (true, false) => Self::Pending,
             (false, false) => self,
+        };
+        if behind == Behind::Told && settled {
+            let report = if report == Self::Heard {
+                Self::Pending
+            } else {
+                report
+            };
+            return (report, Behind::Ended);
         }
+        (report, behind)
     }
+}
+
+/// What the agent that opened a chat heard of what the chat's agent runs
+/// in the background, apart from its turns: once it heard its report
+/// while something ran, it hears again once all of that ended.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Behind {
+    /// It heard nothing of it.
+    Untold,
+    /// Its report said the chat works in the background.
+    Told,
+    /// What ran in the background ended since: its report says so.
+    Ended,
 }
 
 /// When the agent of the chat that opened subagents can hear their
@@ -387,6 +416,9 @@ struct Slot {
     /// Whether the human was told the chat's agent asks them, as it
     /// waits on them, once what the triggers gather for it came.
     asks: bool,
+    /// What the agent that opened the chat heard of what the chat's agent
+    /// runs in the background.
+    behind: Behind,
     goal: Option<Goal>,
     parent: Option<u64>,
     /// Whose it is; a line the human sends it makes it theirs.
@@ -454,6 +486,7 @@ impl Slot {
             ending: self.ending.is_some(),
             agent,
             folder: self.folder.clone(),
+            background: self.chat.as_ref().map_or_default(Chat::background),
         }
     }
 }
@@ -736,6 +769,7 @@ impl Daemon {
                 unread: false,
                 plan_changes: 0,
                 asks: false,
+                behind: Behind::Untold,
                 goal: chat.goal,
                 parent,
                 whose: Whose::opened(parent, setup.as_ref()),
@@ -1247,6 +1281,7 @@ impl Daemon {
             unread: false,
             plan_changes: 0,
             asks: false,
+            behind: Behind::Untold,
             goal: None,
             parent: from.map(|(parent, _)| parent),
             whose: Whose::opened(from.map(|(parent, _)| parent), setup.as_ref()),
@@ -1876,6 +1911,11 @@ impl Daemon {
                 }
             }
             Internal::Quit => self.done = true,
+            Internal::Settled { key } => {
+                if let Some(chat) = self.chat(key) {
+                    chat.background_settles();
+                }
+            }
             Internal::Schedules => {
                 self.run_schedules(&crate::settings::workflow(), &jiff::Zoned::now());
             }
@@ -2321,14 +2361,27 @@ impl Daemon {
 
     /// Marks the report of the chat `key` heard by the agent that opened
     /// it, so that Cox does not tell it again.
+    /// What it heard of what the chat runs in the background, it hears
+    /// again once that ended (see [`Behind`]).
     fn heard(&mut self, key: u64) {
+        let behind = if self
+            .chat(key)
+            .is_some_and(|chat| !chat.background().is_empty())
+        {
+            Behind::Told
+        } else {
+            Behind::Untold
+        };
         if let Some(Slot {
             whose: Whose::Agent { report, .. },
+            behind: heard,
             ..
         }) = self.slot_mut(key)
-            && *report == Report::Pending
         {
-            *report = Report::Heard;
+            if *report == Report::Pending {
+                *report = Report::Heard;
+            }
+            *heard = behind;
         }
     }
 
@@ -2357,9 +2410,10 @@ impl Daemon {
                     let reports: Vec<String> = children
                         .iter()
                         .filter_map(|&child| {
-                            let name = self.slot(child)?.name.clone();
+                            let slot = self.slot(child)?;
+                            let (name, ended) = (slot.name.clone(), slot.behind == Behind::Ended);
                             let stands = self.chat(child)?.stands();
-                            Some(workflow::subagent_report(child, &name, &stands))
+                            Some(workflow::subagent_report(child, &name, &stands, ended))
                         })
                         .collect();
                     let line =
@@ -2716,7 +2770,8 @@ impl Daemon {
             let state = conversation.state();
             let ended = working(slot.state) && !working(state) && slot.whose == Whose::Human;
             if let Whose::Agent { report, .. } = &mut slot.whose {
-                *report = report.as_it_goes(slot.state, state);
+                let settled = chat.background_settled();
+                (*report, slot.behind) = report.as_it_goes(slot.state, state, slot.behind, settled);
             }
             if ended && shown != Some(slot.key) {
                 slot.unread = true;
@@ -3533,10 +3588,12 @@ mod tests {
             tells(
                 agent,
                 [
-                    AgentEvent::Task {
+                    AgentEvent::Task(cox_acp::Task {
                         id: "ci".to_owned(),
                         running: true,
-                    },
+                        started: true,
+                        ..cox_acp::Task::default()
+                    }),
                     AgentEvent::TurnEnded(cox_acp::StopReason::EndTurn),
                 ],
             );
@@ -3549,9 +3606,13 @@ mod tests {
     fn a_window_of_another_build_moves_coxd_on_once_the_tool_call_and_the_task_ended() {
         let answers = answers_once_the_window_went(QUIET, |daemon, key, agent| {
             submit(daemon, key);
-            let task = |running| AgentEvent::Task {
-                id: "ci".to_owned(),
-                running,
+            let task = |running| {
+                AgentEvent::Task(cox_acp::Task {
+                    id: "ci".to_owned(),
+                    running,
+                    started: running,
+                    ..cox_acp::Task::default()
+                })
             };
             tells(
                 agent,
@@ -3771,6 +3832,86 @@ mod tests {
             // Asked again, it answers again.
             let again = opener.wait(0).await.unwrap().unwrap();
             assert_eq!(again.said.as_deref(), Some("Found it."));
+        });
+    }
+
+    #[test]
+    fn a_subagent_at_work_in_the_background_is_told_so_and_again_once_that_settled() {
+        on_daemon(async {
+            let mut opener = Opener::new(&["Look"]).await;
+            opener.prompts();
+            let number = opener.subagents[0];
+            let task = |running, name: Option<&str>| {
+                AgentEvent::Task(cox_acp::Task {
+                    id: "sleep".to_owned(),
+                    running,
+                    started: running,
+                    name: name.map(str::to_owned),
+                    description: name.map(str::to_owned),
+                    kind: name.map(|_| "shell".to_owned()),
+                })
+            };
+            tells(&opener.agent(Some(0)), [task(true, Some("sleep 120"))]);
+            opener.ends(0, "Started it.");
+            opener.pump().await;
+
+            let prompts = opener.prompts();
+            assert_eq!(prompts.len(), 1, "{prompts:?}");
+            assert!(
+                prompts[0].starts_with(&format!(
+                    "Subagent {number}, \"Look\", ended its turn, but still works in the \
+                     background: the background command \"sleep 120\". Cox tells you once that ends. It last \
+                     said:\n\nStarted it."
+                )),
+                "{prompts:?}"
+            );
+            let listed = opener.daemon.listed.clone().unwrap();
+            let row = listed.chats.iter().find(|row| row.key == number).unwrap();
+            assert_eq!(row.state, State::Idle);
+            assert_eq!(
+                row.background,
+                [wire::Background {
+                    kind: wire::BackgroundKind::Command,
+                    name: "sleep 120".to_owned(),
+                    description: None,
+                }]
+            );
+            tells(
+                &opener.agent(None),
+                [AgentEvent::TurnEnded(cox_acp::StopReason::EndTurn)],
+            );
+            opener.pump().await;
+
+            tells(&opener.agent(Some(0)), [task(false, None)]);
+            opener.pump().await;
+            assert_eq!(
+                opener.prompts(),
+                Vec::<String>::new(),
+                "not until it settled"
+            );
+            let listed = opener.daemon.listed.clone().unwrap();
+            let row = listed.chats.iter().find(|row| row.key == number).unwrap();
+            assert_eq!(row.background, []);
+
+            opener.daemon.hear(Internal::Settled { key: number });
+            opener.pump().await;
+            let prompts = opener.prompts();
+            assert_eq!(prompts.len(), 1, "{prompts:?}");
+            assert!(
+                prompts[0].starts_with(&format!(
+                    "Subagent {number}, \"Look\", is done with what it ran in the background. \
+                     It last said:\n\nStarted it."
+                )),
+                "{prompts:?}"
+            );
+            // It is told once.
+            tells(
+                &opener.agent(None),
+                [AgentEvent::TurnEnded(cox_acp::StopReason::EndTurn)],
+            );
+            opener.daemon.hear(Internal::Settled { key: number });
+            opener.pump().await;
+            assert_eq!(opener.prompts(), Vec::<String>::new());
         });
     }
 

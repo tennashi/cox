@@ -145,11 +145,11 @@ pub enum AgentEvent {
     /// as one in a turn does, and a [`Command::Cancel`] then ends as a
     /// turn stopped does, with an [`AgentEvent::TurnEnded`].
     WentOn,
-    /// Work the agent runs apart from its turns, `id`, started, or ended
-    /// when no longer `running`: a command or a subagent it left running
-    /// in the background, or a turn it took by itself (see
-    /// [`cox_acp::Task`]). It may run on after the turn that started it.
-    Task { id: String, running: bool },
+    /// Work the agent runs apart from its turns started, went on, or
+    /// ended, as [`cox_acp::Task`] tells: a command or a subagent it left
+    /// running in the background, or a turn it took by itself. It may run
+    /// on after the turn that started it.
+    Task(cox_acp::Task),
     /// The turn ended.
     TurnEnded(StopReason),
     /// The agent answered the prompt with an error.
@@ -1130,10 +1130,7 @@ fn update_event(update: Update) -> Result<AgentEvent, Ask> {
             content: call.content.map(shown),
             result: call.result.map(ended),
         },
-        Update::Task(task) => AgentEvent::Task {
-            id: task.id,
-            running: task.running,
-        },
+        Update::Task(task) => AgentEvent::Task(task),
         Update::PermissionRequest(request) => return Err(Ask::Permission(request)),
         Update::Question(request) => return Err(Ask::Question(request)),
     })

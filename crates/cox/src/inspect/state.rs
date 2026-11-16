@@ -300,7 +300,19 @@ fn row(chat: &Chat, workspace: &Workspace) -> String {
     if let Some(parent) = chat.parent() {
         let _ = write!(row, ", opened by chat {parent}");
     }
+    if chat.in_background() {
+        let _ = write!(row, ", in the background: {}", background(chat));
+    }
     row
+}
+
+/// What `chat` runs in the background, each as the window shows it.
+fn background(chat: &Chat) -> String {
+    chat.background()
+        .iter()
+        .map(coxd::daemon::wire::Background::what)
+        .collect::<Vec<_>>()
+        .join("; ")
 }
 
 /// How `chat` stands, as its row marks it.
@@ -309,6 +321,7 @@ fn stands(chat: &Chat) -> &'static str {
         return "closed";
     }
     match chat.state() {
+        State::Idle if chat.in_background() => "at work in the background",
         State::Idle => "idle",
         State::Busy => "busy",
         State::Asking => "asking",
@@ -330,6 +343,9 @@ fn tell(told: &mut String, chat: &Chat, workspace: &Workspace, cx: &App) {
         .shown()
         .is_some_and(|shown| shown.key() == chat.key());
     let _ = writeln!(told, "  {}", stands(chat));
+    if chat.in_background() {
+        let _ = writeln!(told, "  In the background: {}", background(chat));
+    }
     if !shown {
         told.push_str("  Not shown: its input and stage are as they were left.\n");
     }
