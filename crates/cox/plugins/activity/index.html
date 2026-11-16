@@ -286,6 +286,36 @@
         color: var(--dim);
         padding: 6px 10px;
       }
+      .pull {
+        font-size: 12px;
+        color: var(--foreground);
+        overflow-wrap: anywhere;
+      }
+      .pull .number {
+        font: 11.5px var(--mono);
+        color: var(--link);
+      }
+      .pull .draft,
+      .pull .ci {
+        font: 600 9.5px var(--sans);
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        color: var(--faint);
+      }
+      .pull .ci.running {
+        color: var(--link);
+      }
+      .pull .ci.passed {
+        color: var(--accent);
+      }
+      .pull .ci.failed {
+        color: var(--asking);
+      }
+      .notice {
+        color: var(--dim);
+        font-size: 12px;
+        padding: 0 0 8px;
+      }
     </style>
   </head>
   <body>

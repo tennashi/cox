@@ -3,13 +3,14 @@
 // every two seconds, as Cox's own tabs follow what they show. On the left,
 // what is asked of the human, the chats of the folder, and of its
 // sketches, that ask them something, with what they ask, or whose turn
-// ended while they were not looking; and the plans, of the chats whose
-// agents take a turn, or work in the background once it ended, or whose
-// plan is not done, or done while the human did not look yet, each with
-// what it does now, or runs in the background, and the steps of its plan,
-// each with the subagents' chats that work on it, and the subagents no
-// step has under it. A plan of a chat not at work the human may dismiss,
-// one by one or all at once, until its agent sends another.
+// ended while they were not looking, or whose CI ended; and the plans, of
+// the chats whose agents take a turn, or work in the background once it
+// ended, or wait on CI, or whose plan is not done, or done while the human
+// did not look yet, each with what it does now, or runs in the background,
+// its open pull requests, and the steps of its plan, each with the
+// subagents' chats that work on it, and the subagents no step has under
+// it. A plan of a chat not at work the human may dismiss, one by one or
+// all at once, until its agent sends another.
 // On the right, what was decided, the questions agents asked that the
 // human answered, each with what they chose and why, the last first. A
 // click on a chat shows it, by going to `cox://chat/<key>`. Below, what
@@ -56,6 +57,19 @@ function waiting(chat) {
   );
 }
 
+/// The pull requests `chat`'s agent opened that are still open, each with
+/// how its CI does.
+function pulls(chat) {
+  return (chat.pulls ?? [])
+    .map(
+      (pull) =>
+        `<div class="pull"><span class="number">#${pull.number}</span>${pull.draft ? ` <span class="draft">draft</span>` : ""} ${esc(pull.title)}` +
+        (pull.ci ? ` <span class="ci ${esc(pull.ci)}">CI ${esc(pull.ci)}</span>` : "") +
+        `</div>`,
+    )
+    .join("");
+}
+
 function working(chat) {
   const goal = chat.goal ? `<div class="goal">◎ ${esc(chat.goal)}</div>` : "";
   const said = chat.said ? `<div class="line">${esc(chat.said)}</div>` : "";
@@ -69,13 +83,14 @@ function working(chat) {
         )
         .join("")
     : "";
-  const dot = chat.working ? "busy" : { "asks you": "asks", "finished a turn": "unread" }[chat.waits] ?? "idle";
+  const pull = pulls(chat);
+  const dot = chat.working ? "busy" : { "asks you": "asks", "finished a turn": "unread", "waits on CI": "busy" }[chat.waits] ?? "idle";
   const why = chat.waits ? ` <span class="why">${esc(chat.waits)}</span>` : "";
   return (
     `<a class="row" href="cox://chat/${chat.key}" title="shows the chat" style="margin-left: ${chat.depth * 18}px">` +
     `<span class="dot ${dot}"></span>` +
     `<span class="what"><span class="name">${chat.depth || chat.sketch ? "↳ " : ""}${esc(chat.name)}</span>${why}` +
-    `${where(chat)}${goal}${said || running || background || chat.waits ? "" : `<div class="line">at work</div>`}${said}${running}${background}</span></a>` +
+    `${where(chat)}${goal}${said || running || background || chat.waits ? "" : `<div class="line">at work</div>`}${said}${running}${background}${pull}</span></a>` +
     plan(chat)
   );
 }
@@ -100,7 +115,8 @@ function plan(chat) {
           (sub) =>
             `<a class="sub" href="cox://chat/${sub.key}" title="shows the chat">` +
             `<span class="dot ${sub.working ? "busy" : "idle"}"></span>↳ ${esc(sub.name)}</a>` +
-            (sub.said ? `<div class="line">${esc(sub.said)}</div>` : ""),
+            (sub.said ? `<div class="line">${esc(sub.said)}</div>` : "") +
+            pulls(sub),
         )
         .join("");
       return (
@@ -163,6 +179,7 @@ function draw() {
   const here = told.home ? "" : "here ";
   app.innerHTML =
     `<div class="head"><h1>Activity</h1><span class="summary">${said}</span><span class="where" title="${esc(told.folder)}">${esc(told.folder)}</span></div>` +
+    (told.github ? `<div class="notice">${esc(told.github)}</div>` : "") +
     `<div class="columns"><div>` +
     `<div class="tier">Asked of you${count ? `<b>${count}</b>` : ""}</div>` +
     `<div class="waiting">${count ? told.waiting.map(waiting).join("") : `<div class="none">Nothing ${here}is asked of you.</div>`}</div>` +

@@ -78,6 +78,7 @@ use crate::vim::keymap::{Across, Motion, Place, Selects};
 mod complete;
 mod entries;
 mod find;
+mod pulls;
 mod settings;
 
 use crate::vim::hints::Hinted as _;
@@ -183,6 +184,8 @@ pub struct Row {
     /// it merges what it made when the human asks, as one that works in
     /// the project does, and a sketch's, which ends its own ways, does not.
     pub setup: Option<coxd::agent::setup::Setup>,
+    /// The pull requests its agent opened, as coxd last read them.
+    pub pulls: Vec<coxd::daemon::wire::PullRow>,
 }
 
 /// Where the frame after the next puts the cursor of Vim's keys in the
@@ -1388,6 +1391,7 @@ impl ChatView {
         let other_input = self.render_other_input(cx);
         let plan = self.render_plan(cx);
         let goal = self.render_goal();
+        let pulls = self.render_pulls(cx);
         div()
             .key_context(KEY_CONTEXT)
             .on_action(cx.listener(|view, _: &Stop, _, cx| view.stop(cx)))
@@ -1433,6 +1437,7 @@ impl ChatView {
             .flex()
             .flex_col()
             .children(goal)
+            .children(pulls)
             .child(
                 div()
                     .relative()

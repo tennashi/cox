@@ -215,6 +215,7 @@ fn waits(told: &mut String, workspace: &Workspace, cx: &App) {
                 _ => "asks, its card not here yet",
             },
             Wait::Unread => "its turn ended unseen, with Open",
+            Wait::Checked => "CI ended unseen on a pull request it opened, with Open",
         };
         let _ = writeln!(
             told,
