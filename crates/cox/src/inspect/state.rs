@@ -11,7 +11,7 @@ use gpui::{App, Focusable as _, Window};
 
 use crate::chat::view::ChatView;
 use crate::ui::translation::Shown;
-use crate::workspace::{Chat, Gives, Workspace};
+use crate::workspace::{Chat, Gives, Wait, Workspace};
 use coxd::chat::conversation::{
     Answer, Attachment, Check, CheckState, Content, Entry, GOAL_TURNS, Proposal, Proposed, State,
     Step, StepState, ToolCallResult,
@@ -75,6 +75,7 @@ pub fn describe(
     } else if workspace.is_switching() {
         told.push_str("The list of chats is open, over the conversation\n");
     }
+    waits(&mut told, workspace, cx);
     if let Some(settings) = workspace.settings() {
         let _ = writeln!(
             told,
@@ -156,6 +157,9 @@ fn focused(workspace: &Workspace, window: &Window, cx: &App) -> String {
             .to_owned();
         }
     }
+    if workspace.keys_in_waits(window, cx) {
+        return "the list of what waits".to_owned();
+    }
     if workspace.is_folded() && focused == workspace.focus_handle(cx) {
         return "the window, the chat folded away".to_owned();
     }
@@ -181,6 +185,43 @@ fn focused(workspace: &Workspace, window: &Window, cx: &App) -> String {
         "the sketch's input".to_owned()
     } else {
         "the stage, or a chat's name being changed".to_owned()
+    }
+}
+
+/// What the bell at the head of the rail counts, and, while its list is
+/// open, what the list shows: each chat that waits, and whether the card
+/// it asks on is drawn there.
+fn waits(told: &mut String, workspace: &Workspace, cx: &App) {
+    let waits = workspace.waits();
+    if !workspace.waits_open() {
+        if !waits.is_empty() {
+            let _ = writeln!(told, "The rail's bell counts {} waiting", waits.len());
+        }
+        return;
+    }
+    let _ = writeln!(
+        told,
+        "The list of what waits is open beside the rail, over the window, {} in it:",
+        waits.len()
+    );
+    for (chat, wait) in waits {
+        let project = workspace.projects()[chat.project()].name();
+        let how = match wait {
+            Wait::Asks => match chat
+                .view()
+                .map(|view| view.read(cx).conversation().asked_at())
+            {
+                Some(Some(_)) => "asks, its card drawn to answer",
+                _ => "asks, its card not here yet",
+            },
+            Wait::Unread => "its turn ended unseen, with Open",
+        };
+        let _ = writeln!(
+            told,
+            "  chat {} {:?} of {project}: {how}",
+            chat.key(),
+            chat.name()
+        );
     }
 }
 

@@ -73,6 +73,7 @@ mod render_rail;
 mod sheet;
 mod stages;
 mod vim;
+mod waits;
 
 use sheet::Sheet;
 
@@ -81,6 +82,7 @@ use crate::ui::input::{LineInput, Submitted};
 use coxd::workflow;
 pub use project_card::Gives;
 use project_card::{Drawing, ProjectCard, Rename, SetAbout, Standing, ToIcon};
+pub use waits::Wait;
 
 actions!(
     cox,
@@ -164,6 +166,7 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("secondary-p", OpenFile, Some("Workspace")),
         KeyBinding::new("secondary-\\", ToggleChat, Some("Workspace")),
         KeyBinding::new("escape", CancelRename, Some(RENAMING)),
+        KeyBinding::new("escape", waits::Close, Some(waits::WAITS)),
     ]);
 }
 
@@ -433,6 +436,9 @@ pub struct Workspace {
     /// The menu of the projects put away, where it opened in the window,
     /// while it is open.
     archived_projects: Option<Point<Pixels>>,
+    /// The list of what waits for the human, beside the rail, while it is
+    /// open, and where its keys go.
+    waits: Option<FocusHandle>,
     /// The projects an agent draws an icon for now, by how they are kept.
     drawing: HashSet<ProjectId>,
     /// Why the agent drew no icon for a project, the last time it was
@@ -549,6 +555,7 @@ impl Workspace {
             project_menu: None,
             deleting: None,
             archived_projects: None,
+            waits: None,
             drawing: HashSet::new(),
             not_drawn: HashMap::new(),
             renaming: None,
@@ -731,6 +738,7 @@ impl Workspace {
         self.at_work(cx);
         self.follow_commands(cx);
         self.badge(cx);
+        self.follow_waits(window, cx);
         cx.notify();
     }
 

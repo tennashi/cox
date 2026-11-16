@@ -441,6 +441,28 @@ impl ChatView {
             .into_any_element()
     }
 
+    /// The card of what the agent waits on the human to answer, while it
+    /// waits, as the conversation draws it, and under it the input of the
+    /// human's own answer while that is open: for a place other than the
+    /// conversation to show, its buttons answering as the conversation's
+    /// do.
+    pub fn render_asked(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let at = self.conversation.asked_at()?;
+        // The card's text takes the place of what a frame before laid out
+        // of its entry, rather than piling up while the chat is not shown.
+        self.reading.age(self.conversation.entries().len());
+        let card = self.render_entry(at, &self.conversation.entries()[at], cx);
+        Some(
+            div()
+                .flex()
+                .flex_col()
+                .gap_2()
+                .child(card)
+                .children(self.render_other_input(cx))
+                .into_any_element(),
+        )
+    }
+
     /// Whether the entry at `index` is still arriving: the last of a turn
     /// that runs.
     fn is_arriving(&self, index: usize) -> bool {

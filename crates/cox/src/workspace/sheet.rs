@@ -44,7 +44,7 @@ impl Workspace {
 
     /// Gives the keyboard to the input of the chat shown, as after the
     /// sheet is lifted.
-    fn give_back_keys(&self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn give_back_keys(&self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(view) = self.shown().and_then(Chat::view) {
             window.focus(&view.read(cx).input().focus_handle(cx));
         }
