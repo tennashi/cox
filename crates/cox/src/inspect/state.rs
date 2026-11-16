@@ -306,11 +306,11 @@ fn row(chat: &Chat, workspace: &Workspace) -> String {
     row
 }
 
-/// What `chat` runs in the background, each as the window shows it.
+/// What `chat` runs in the background, each with its kind.
 fn background(chat: &Chat) -> String {
     chat.background()
         .iter()
-        .map(coxd::daemon::wire::Background::what)
+        .map(coxd::daemon::wire::Background::labeled)
         .collect::<Vec<_>>()
         .join("; ")
 }

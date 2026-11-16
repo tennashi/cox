@@ -91,10 +91,18 @@ const FILES_TOLD: usize = 50;
 const OUTPUT_LENGTH: usize = 30_000;
 
 /// The tools, as the agent learns of them: those named in `only`, or all
-/// of them.
-pub(super) fn tools(only: Option<&[String]>) -> Value {
+/// of them, `agent` in the place of the agent's own tools for subagents,
+/// as `replaces_agent` says.
+pub(super) fn tools(only: Option<&[String]>, replaces_agent: bool) -> Value {
     let mut tools = all_tools();
     if let Some(tools) = tools.as_array_mut() {
+        if replaces_agent {
+            for tool in tools.iter_mut() {
+                if tool["name"] == subagent::AGENT {
+                    subagent::in_place_of_agent(tool);
+                }
+            }
+        }
         tools.extend(android::tools());
         // Only a Mac has the windows of other apps to show.
         if cfg!(target_os = "macos") {
@@ -125,7 +133,7 @@ pub(super) fn for_chat(only: Option<&[String]>, in_project: bool) -> Vec<String>
     } else {
         &[PROPOSE_NAME, PROPOSE_ABOUT, PROPOSE_ICON, READ_CHAT]
     };
-    tools(only)
+    tools(only, false)
         .as_array()
         .into_iter()
         .flatten()
@@ -2129,7 +2137,7 @@ mod tests {
                 "mac_window_scroll",
             ]);
         }
-        assert_eq!(names(tools(None)), expected);
+        assert_eq!(names(tools(None, false)), expected);
     }
 
     /// A project with one map, `map`, of two tiers: the whole, and the

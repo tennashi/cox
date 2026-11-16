@@ -354,7 +354,7 @@ impl Workspace {
                 workspace.open_waiting(key, window, cx);
             }));
         let background = chat.in_background().then(|| {
-            let what: Vec<&str> = chat.background().iter().map(Background::what).collect();
+            let what: Vec<String> = chat.background().iter().map(Background::labeled).collect();
             div()
                 .debug_selector(move || format!("waiting-{key}-in-background"))
                 .text_color(rgb(FAINT))

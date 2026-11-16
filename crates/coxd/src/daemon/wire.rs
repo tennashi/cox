@@ -135,6 +135,32 @@ impl Background {
         }
     }
 
+    /// Whether it is a command the agent left running. Its name is most
+    /// often what the agent said the command does, not the command, so
+    /// the window marks it as a command apart from its name, not as a
+    /// line of a shell.
+    #[must_use]
+    pub fn is_command(&self) -> bool {
+        self.kind == BackgroundKind::Command
+    }
+
+    /// What it is, with its kind, as a line of text says it where no mark
+    /// shows the kind: `command "Wait 120 seconds"`, or, for a turn the
+    /// agent took by itself, what started it.
+    #[must_use]
+    pub fn labeled(&self) -> String {
+        let name = &self.name;
+        match &self.kind {
+            BackgroundKind::Command => format!("command \"{name}\""),
+            BackgroundKind::Turn => match &self.description {
+                Some(description) => format!("its own turn ({description})"),
+                None => "its own turn".to_owned(),
+            },
+            BackgroundKind::ToolCall => format!("tool call \"{name}\""),
+            BackgroundKind::Task(kind) => format!("{kind} \"{name}\""),
+        }
+    }
+
     /// What it is, as an agent is told.
     #[must_use]
     pub fn told(&self) -> String {
@@ -554,6 +580,17 @@ mod tests {
         ];
         let what: Vec<&str> = all.iter().map(Background::what).collect();
         assert_eq!(what, ["sleep 120", "The command ended", "Read log", "CI"]);
+        let labeled: Vec<String> = all.iter().map(Background::labeled).collect();
+        assert_eq!(
+            labeled,
+            [
+                "command \"sleep 120\"",
+                "its own turn (The command ended)",
+                "tool call \"Read log\"",
+                "monitor \"CI\"",
+            ]
+        );
+        assert!(all[0].is_command() && !all[1].is_command());
         assert_eq!(
             told(&all),
             "the background command \"sleep 120\"; a turn it took by itself (The command ended); the tool \

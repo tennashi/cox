@@ -27,6 +27,28 @@ pub(super) const AGENT_REPORT: &str = "agent_report";
 /// left waiting. Cox tells the agent the report once it ends either way.
 pub(super) const HANDS_OFF_WAIT: Duration = Duration::from_secs(30);
 
+/// What the agent learns first of `agent` in a session whose own tools
+/// for subagents are turned off for it to take their place (see
+/// [`crate::daemon::session_meta`]): an agent that reaches for one of
+/// those, as a skill says to, finds no such tool, and may take it that it
+/// cannot run subagents, and do the work itself, in the human's way.
+const IN_PLACE_OF_AGENT: &str = "The Agent and Task tools are not in this session: this \
+    tool, mcp__cox__agent, takes their place, so that the human sees each subagent. Wherever \
+    a skill or an instruction says to use Agent or Task, or to spawn a subagent, call this \
+    instead, with the same arguments, `subagent_type` included, rather than doing the work \
+    yourself.";
+
+/// Has the agent learn of `tool`, `agent`, as taking the place of its own
+/// tools for subagents: told so first, and loaded always, rather than
+/// found only when the agent searches for it, as Claude Code defers the
+/// tools of an MCP server, so that an agent that looks for its own sees
+/// it.
+pub(super) fn in_place_of_agent(tool: &mut Value) {
+    let description = tool["description"].as_str().unwrap_or_default();
+    tool["description"] = Value::String(format!("{IN_PLACE_OF_AGENT} {description}"));
+    tool["_meta"] = json!({ "anthropic/alwaysLoad": true });
+}
+
 /// The tool that runs a subagent, as the agent learns of it.
 #[expect(clippy::too_many_lines, reason = "its arguments, one after another")]
 pub(super) fn agent_tool() -> Value {
