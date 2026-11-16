@@ -454,12 +454,12 @@ pub(super) async fn agent(
             format!("The subagent \"{name}\" ended its turn and said nothing.")
         }
     };
-    let notes: Vec<String> = waited.unoffered.into_iter().chain(notes).collect();
+    let notes: Vec<String> = waited.unoffered.iter().cloned().chain(notes).collect();
     if !notes.is_empty() {
         told.push_str("\n\n");
         told.push_str(&notes.join(" "));
     }
-    Ok(told)
+    Ok(waited.with_ci(told))
 }
 
 /// What the agent is told of the subagent's chat beside its report: the
@@ -592,7 +592,7 @@ pub(super) async fn agent_report(
         told.push_str("\n\n");
         told.push_str(unoffered);
     }
-    Ok(told)
+    Ok(waited.with_ci(told))
 }
 
 #[cfg(test)]

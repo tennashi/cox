@@ -65,7 +65,7 @@ use coxd::agents::Agents;
 use coxd::chat::conversation::State;
 use coxd::chat::sketch::{self, Sketch};
 use coxd::daemon::Link;
-use coxd::daemon::wire::{Background, ChatRow, FromDaemon, Listing, ProjectRow, ToDaemon};
+use coxd::daemon::wire::{Background, ChatRow, FromDaemon, Listing, ProjectRow, PullRow, ToDaemon};
 
 pub(crate) mod project_card;
 mod render;
@@ -262,6 +262,8 @@ pub struct Chat {
     folder: Option<PathBuf>,
     /// What its agent runs in the background, apart from its turns.
     background: Vec<Background>,
+    /// The pull requests its agent opened.
+    pulls: Vec<PullRow>,
     /// Its view, once the window showed it, or something asked of its
     /// stage.
     view: Option<Entity<ChatView>>,
@@ -287,6 +289,7 @@ impl Chat {
             agent,
             folder,
             background,
+            pulls,
         } = row;
         Self {
             key,
@@ -305,6 +308,7 @@ impl Chat {
             agent,
             folder,
             background,
+            pulls,
             view,
         }
     }
@@ -449,6 +453,8 @@ pub struct Workspace {
     chosen: usize,
     /// How many chats the app's icon counts.
     badged: usize,
+    /// Why no chat shows its pull requests, as coxd says, if that is so.
+    github: Option<String>,
     /// The menu of the right button, where it opened in the window, for
     /// the chat at an index in the list.
     menu: Option<(Point<Pixels>, usize)>,
@@ -580,6 +586,7 @@ impl Workspace {
             folded: false,
             chosen: 0,
             badged: 0,
+            github: None,
             menu: None,
             project_menu: None,
             deleting: None,
@@ -686,8 +693,10 @@ impl Workspace {
             projects,
             chats,
             archived,
+            github,
             ..
         } = listing;
+        self.github = github;
         self.list_projects(projects);
         self.project_menu = self
             .project_menu
@@ -850,6 +859,7 @@ impl Workspace {
                 && chat.folder.is_none()
                 && self.projects[chat.project].missing,
             setup: chat.setup.clone(),
+            pulls: chat.pulls.clone(),
         }
     }
 
@@ -1447,6 +1457,7 @@ impl Workspace {
                     },
                     parent: chat.parent,
                     kept: chat.kept,
+                    pulls: chat.pulls.clone(),
                 })
                 .collect(),
             projects: self
@@ -1456,12 +1467,17 @@ impl Workspace {
                 .map(|project| (project.folder.clone(), project.name.to_string()))
                 .collect(),
             home: self.projects[0].folder.clone(),
+            github: self.github.clone(),
         });
         let count = self
             .chats
             .iter()
             .chain(&self.archived)
-            .filter(|chat| chat.unread || chat.state == State::Asking)
+            .filter(|chat| {
+                chat.unread
+                    || chat.state == State::Asking
+                    || chat.pulls.iter().any(|row| row.unseen.is_some())
+            })
             .count();
         if count != self.badged {
             self.badged = count;

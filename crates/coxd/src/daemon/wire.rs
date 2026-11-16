@@ -17,6 +17,7 @@ use crate::agent::mcp::{AndroidAct, MacAct, Ran, Seen};
 use crate::agent::setup::Setup;
 use crate::chat::conversation::{Answer, Patch, QuestionAnswer, State};
 use crate::chat::sketch::Sketch;
+use crate::github::{CheckState, Pull, Status};
 
 /// A project, as the window lists it on its rail.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -84,6 +85,32 @@ pub struct ChatRow {
     /// anything runs, though its turn ended.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub background: Vec<Background>,
+    /// The pull requests its agent opened, the last few, the first opened
+    /// first, each as it stood when Cox last read it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pulls: Vec<PullRow>,
+}
+
+/// A pull request a chat's agent opened, as the window shows it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PullRow {
+    pub pull: Pull,
+    /// How it stood when Cox last read it, once it read it.
+    pub status: Option<Status>,
+    /// How its CI ended, once it ended while the human did not look at
+    /// the chat, until they do.
+    #[serde(default)]
+    pub unseen: Option<CheckState>,
+}
+
+impl PullRow {
+    /// Whether its CI runs, so that its chat waits on CI.
+    #[must_use]
+    pub fn waits_on_ci(&self) -> bool {
+        self.status
+            .as_ref()
+            .is_some_and(|status| !status.done() && status.checks() == Some(CheckState::Pending))
+    }
 }
 
 /// Whether a chat that stands as `state`, its agent running `background`,
@@ -202,6 +229,10 @@ pub struct Listing {
     /// ids, for a page that knows no agents, as the phone's.
     #[serde(default)]
     pub agents: BTreeMap<String, String>,
+    /// Why no chat shows its pull requests, as when `gh` is not logged
+    /// in, if that is so.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub github: Option<String>,
 }
 
 /// What an agent's tools ask of its chat's stage, as Cox's
@@ -623,9 +654,11 @@ mod tests {
             agent: "claude".to_owned(),
             folder: None,
             background: Vec::new(),
+            pulls: Vec::new(),
         };
         let line = serde_json::to_string(&row).unwrap();
         assert!(!line.contains("background"), "{line}");
+        assert!(!line.contains("pulls"), "{line}");
         assert_eq!(serde_json::from_str::<ChatRow>(&line).unwrap(), row);
     }
 

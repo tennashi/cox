@@ -3,17 +3,19 @@
 //! inbox, where they look first when they open Cox or have a moment. It
 //! tells, in tiers, what is asked of them, the chats of the folder that
 //! ask them something, with what they ask, or whose turn ended while they
-//! were not looking; the plans, of the chats whose agents take a turn, or
-//! work in the background once it ended, or whose plan, as the agent last
-//! sent it over ACP, is not done, or done while the human did not look
-//! yet, each with what it does now, or runs in the background, and the
-//! steps of its plan, each with the subagents' chats whose names read
-//! alike it (see [`linked`]), the other subagents at work under it; what
-//! was decided, the questions agents asked there that the human answered,
-//! each with what they chose and why, the last first; and what happened
-//! without them, the schedules that ran there, the pages of the wiki
-//! written from there, and the sources kept there, the last first. The
-//! home, where Cox lands, tells of every folder.
+//! were not looking, or CI ended on a pull request their agent opened;
+//! the plans, of the chats whose agents take a turn, or work in the
+//! background once it ended, or wait on CI, or whose plan, as the agent
+//! last sent it over ACP, is not done, or done while the human did not
+//! look yet, each with what it does now, or runs in the background, its
+//! open pull requests, and the steps of its plan, each with the
+//! subagents' chats whose names read alike it (see [`linked`]), the other
+//! subagents at work under it; what was decided, the questions agents
+//! asked there that the human answered, each with what they chose and
+//! why, the last first; and what happened without them, the schedules
+//! that ran there, the pages of the wiki written from there, and the
+//! sources kept there, the last first. The home, where Cox lands, tells
+//! of every folder.
 //!
 //! The window tells this module how its chats stand as they change (see
 //! [`tell`]), since the stage's pages are served apart from it; the bar
@@ -37,6 +39,8 @@ use jiff::tz::TimeZone;
 use serde_json::{Value, json};
 
 use crate::stage::commands;
+use coxd::daemon::wire::PullRow;
+use coxd::github::CheckState;
 
 /// How many of what happened the page is told of, the last first.
 const HAPPENED: usize = 50;
@@ -75,6 +79,55 @@ pub struct Chat {
     pub parent: Option<u64>,
     /// How coxd keeps it, which what it decided is read by.
     pub kept: Option<ChatId>,
+    /// The pull requests its agent opened, as coxd last read them.
+    pub pulls: Vec<PullRow>,
+}
+
+impl Chat {
+    /// Whether CI runs on a pull request its agent opened, which it waits
+    /// on, though its turn ended.
+    fn waits_on_ci(&self) -> bool {
+        self.pulls.iter().any(PullRow::waits_on_ci)
+    }
+
+    /// How CI ended on each pull request its agent opened whose CI ended
+    /// while the human did not look at it, as "CI passed on #423".
+    fn ci_ended(&self) -> Vec<String> {
+        self.pulls
+            .iter()
+            .filter_map(|row| {
+                let outcome = match row.unseen? {
+                    CheckState::Passed => "passed",
+                    CheckState::Failed => "failed",
+                    CheckState::Pending | CheckState::Skipped => "ended",
+                };
+                Some(format!("CI {outcome} on #{}", row.pull.number))
+            })
+            .collect()
+    }
+}
+
+/// The pull requests of `chat` the page shows, those still open, as JSON:
+/// each with its number, title, how it stands, and how its CI does.
+fn pulls_of(chat: &Chat) -> Vec<Value> {
+    chat.pulls
+        .iter()
+        .filter_map(|row| {
+            let status = row.status.as_ref().filter(|status| !status.done())?;
+            let ci = status.checks().map(|checks| match checks {
+                CheckState::Pending => "running",
+                CheckState::Passed => "passed",
+                CheckState::Failed => "failed",
+                CheckState::Skipped => "skipped",
+            });
+            Some(json!({
+                "number": row.pull.number,
+                "title": status.title,
+                "draft": status.state == coxd::github::PullState::Draft,
+                "ci": ci,
+            }))
+        })
+        .collect()
 }
 
 /// A question an agent asked in a chat, which the human answered: what
@@ -180,6 +233,8 @@ pub struct Told {
     pub chats: Vec<Chat>,
     pub projects: Vec<(PathBuf, String)>,
     pub home: PathBuf,
+    /// Why no chat shows its pull requests, as coxd says, if that is so.
+    pub github: Option<String>,
 }
 
 /// How the chats stood when the window last told.
@@ -278,7 +333,7 @@ fn of_folder(told: &Told, chat: &Chat, root: &Path) -> bool {
 /// Whether `chat` waits for the human and is of the folder `root`, or
 /// of any, when `root` is the home of `told`.
 fn waits_in(told: &Told, chat: &Chat, root: &Path) -> bool {
-    (chat.asking || chat.unread) && of_folder(told, chat, root)
+    (chat.asking || chat.unread || !chat.ci_ended().is_empty()) && of_folder(told, chat, root)
 }
 
 /// How many chats of the folder `root` wait for the human, for the bar.
@@ -509,7 +564,13 @@ fn waiting_in(told: &Told, root: &Path, now: &dyn Fn(u64) -> Option<commands::No
             json!({
                 "key": chat.key,
                 "name": chat.name,
-                "why": if chat.asking { "asks you" } else { "finished a turn" },
+                "why": if chat.asking {
+                    "asks you".to_owned()
+                } else if chat.unread {
+                    "finished a turn".to_owned()
+                } else {
+                    chat.ci_ended().join(", ")
+                },
                 "asks": chat.asking.then(|| now(chat.key).and_then(|now| now.asks)).flatten(),
                 "goal": chat.goal,
                 "sketch": chat.cwd != chat.project,
@@ -547,7 +608,7 @@ fn planned(
     let listed_chats: Vec<&Chat> = told
         .chats
         .iter()
-        .filter(|chat| of_folder(told, chat, root) && shown(chat))
+        .filter(|chat| of_folder(told, chat, root) && (shown(chat) || chat.waits_on_ci()))
         .collect();
     let mut listed = Vec::new();
     let mut under: Vec<(&Chat, usize)> = listed_chats
@@ -586,6 +647,8 @@ fn planned(
                 Some("asks you")
             } else if chat.unread {
                 Some("finished a turn")
+            } else if chat.waits_on_ci() {
+                Some("waits on CI")
             } else if depth > 0 {
                 Some("finished")
             } else {
@@ -595,6 +658,7 @@ fn planned(
             "where": where_of(told, &chat.project),
             "said": does.said,
             "running": does.running,
+            "pulls": pulls_of(chat),
             "background": chat
                 .background
                 .iter()
@@ -647,6 +711,7 @@ fn steps_of(
                         "key": chat.key,
                         "name": chat.name,
                         "working": chat.working,
+                        "pulls": pulls_of(chat),
                         "said": chat
                             .working
                             .then(|| now(chat.key).and_then(|now| now.said))
@@ -785,6 +850,7 @@ fn told_of(
     json!({
         "folder": root,
         "home": home,
+        "github": told.github,
         "waiting": waiting,
         "plans": planned,
         "busy": busy,
@@ -877,6 +943,7 @@ mod tests {
             background: Vec::new(),
             parent: None,
             kept: None,
+            pulls: Vec::new(),
         }
     }
 
@@ -911,6 +978,7 @@ mod tests {
             ],
             projects: vec![(root.to_path_buf(), "app".to_owned())],
             home: root.join("home"),
+            github: None,
         };
         let json = told_in(&told, &root, &root);
         let waiting = json["waiting"].as_array().unwrap();
@@ -1036,6 +1104,7 @@ mod tests {
                 (other.clone(), "other".to_owned()),
             ],
             home: home.clone(),
+            github: None,
         };
         let decided = |chat: u64, project: &Path, question: &str| Decided {
             chat: kept(chat),
@@ -1143,8 +1212,8 @@ mod tests {
                 asking,
                 listed(10, "done lately", false, None),
             ],
-            projects: Vec::new(),
             home: root.join("home"),
+            ..Told::default()
         };
         let at = 100 * DONE_SHOWS;
         let plan = |chat: u64, steps: Vec<Step>, ago: i64| KeptPlan {
@@ -1212,11 +1281,11 @@ mod tests {
         assert_eq!(plan[0]["state"], "in_progress");
         assert_eq!(
             plan[0]["chats"],
-            json!([{ "key": 3, "name": "Add the --shout flag", "working": true, "said": "step of 3" }])
+            json!([{ "key": 3, "name": "Add the --shout flag", "working": true, "pulls": [], "said": "step of 3" }])
         );
         assert_eq!(
             plan[1]["chats"],
-            json!([{ "key": 9, "name": "README docs update", "working": false, "said": null }])
+            json!([{ "key": 9, "name": "README docs update", "working": false, "pulls": [], "said": null }])
         );
         assert_eq!(plan[2]["chats"], json!([]));
         assert_eq!(json["plans"][2]["waits"], "finished");
@@ -1259,6 +1328,7 @@ mod tests {
             ],
             projects: Vec::new(),
             home: root.join("home"),
+            github: None,
         };
         // What the page is told after a restart: the plans and those
         // dismissed read again from where they are kept.
@@ -1352,6 +1422,7 @@ mod tests {
             chats,
             projects: Vec::new(),
             home: PathBuf::from("/home"),
+            github: None,
         };
         let asking = told(vec![
             chat(1, &root, &root, true, false),
@@ -1418,6 +1489,7 @@ mod tests {
                 (root.to_path_buf(), "app".to_owned()),
             ],
             home: home.clone(),
+            github: None,
         };
         let json = told_at(&told, &root, &wiki, &raw, &schedules);
         let kinds: Vec<(&str, &str)> = json["happened"]
@@ -1476,5 +1548,55 @@ mod tests {
                 ("wiki", "in app, chat \"one\""),
             ]
         );
+    }
+
+    fn pull(number: u64, checks: CheckState, unseen: Option<CheckState>) -> PullRow {
+        use coxd::github::{Check, Pull, PullState, Status};
+        PullRow {
+            pull: Pull {
+                repo: "tennashi/cox".to_owned(),
+                number,
+            },
+            status: Some(Status {
+                title: format!("pull {number}"),
+                state: PullState::Draft,
+                head: "a".to_owned(),
+                checks: vec![Check {
+                    name: "ci".to_owned(),
+                    state: checks,
+                    link: None,
+                }],
+            }),
+            unseen,
+        }
+    }
+
+    #[test]
+    fn a_chat_waiting_on_ci_is_listed_as_such_and_one_whose_ci_ended_unseen_waits() {
+        let root = TempDir::new();
+        let mut running = chat(1, &root, &root, false, false);
+        running.pulls = vec![pull(423, CheckState::Pending, None)];
+        let mut ended = chat(2, &root, &root, false, false);
+        ended.pulls = vec![pull(421, CheckState::Failed, Some(CheckState::Failed))];
+        let told = Told {
+            chats: vec![running, ended],
+            projects: vec![(root.to_path_buf(), "app".to_owned())],
+            home: root.join("home"),
+            github: Some("gh is not logged in".to_owned()),
+        };
+        let json = told_in(&told, &root, &root);
+        let plans = json["plans"].as_array().unwrap();
+        assert_eq!(plans.len(), 1);
+        assert_eq!(plans[0]["key"], 1);
+        assert_eq!(plans[0]["waits"], "waits on CI");
+        assert_eq!(
+            plans[0]["pulls"],
+            json!([{"number": 423, "title": "pull 423", "draft": true, "ci": "running"}])
+        );
+        let waiting = json["waiting"].as_array().unwrap();
+        assert_eq!(waiting.len(), 1);
+        assert_eq!(waiting[0]["key"], 2);
+        assert_eq!(waiting[0]["why"], "CI failed on #421");
+        assert_eq!(json["github"], "gh is not logged in");
     }
 }

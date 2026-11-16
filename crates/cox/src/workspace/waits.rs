@@ -18,6 +18,7 @@ use crate::ui::tip;
 use crate::vim::hints::Hinted as _;
 use coxd::chat::conversation::{Entry, State};
 use coxd::daemon::wire::Background;
+use coxd::github::CheckState;
 use coxd::theme::{ASKING, BUTTON, BUTTON_HOVER, DIM, FAINT, FOREGROUND, GAP};
 
 actions!(
@@ -46,16 +47,21 @@ pub enum Wait {
     Asks,
     /// A turn ended while it was not shown, and it has not been since.
     Unread,
+    /// CI ended on a pull request its agent opened while it was not
+    /// shown, and it has not been since.
+    Checked,
 }
 
 impl Wait {
-    /// How a chat in `state`, `unread` or not, waits for the human, if it
-    /// does.
-    fn of(state: State, unread: bool) -> Option<Self> {
+    /// How a chat in `state`, `unread` or not, and `checked` or not, as
+    /// when CI ended unseen, waits for the human, if it does.
+    fn of(state: State, unread: bool, checked: bool) -> Option<Self> {
         if state == State::Asking {
             Some(Self::Asks)
         } else if unread {
             Some(Self::Unread)
+        } else if checked {
+            Some(Self::Checked)
         } else {
             None
         }
@@ -101,7 +107,27 @@ fn start_of(reply: &str) -> String {
 impl Chat {
     /// How it waits for the human, if it does.
     fn wait(&self) -> Option<Wait> {
-        Wait::of(self.state, self.unread)
+        Wait::of(self.state, self.unread, !self.ci_ended().is_empty())
+    }
+
+    /// How CI ended on each pull request its agent opened whose CI ended
+    /// while it was not shown, as "CI passed on #423 Its title".
+    fn ci_ended(&self) -> Vec<String> {
+        self.pulls
+            .iter()
+            .filter_map(|row| {
+                let outcome = match row.unseen? {
+                    CheckState::Passed => "passed",
+                    CheckState::Failed => "failed",
+                    CheckState::Pending | CheckState::Skipped => "ended",
+                };
+                let title = row
+                    .status
+                    .as_ref()
+                    .map_or("", |status| status.title.as_str());
+                Some(format!("CI {outcome} on #{} {title}", row.pull.number))
+            })
+            .collect()
     }
 }
 
@@ -285,7 +311,7 @@ impl Workspace {
         );
         let body = match wait {
             Wait::Asks => Self::render_asks(chat, cx),
-            Wait::Unread => Self::render_unread(chat, cx),
+            Wait::Unread | Wait::Checked => Self::render_unread(chat, wait, cx),
         };
         div()
             .flex()
@@ -323,18 +349,33 @@ impl Workspace {
     /// The start of the last reply of `chat`, whose turn ended unseen, and
     /// what it runs in the background still, if anything, and a button
     /// that shows it.
-    fn render_unread(chat: &Chat, cx: &mut Context<Self>) -> AnyElement {
+    fn render_unread(chat: &Chat, wait: Wait, cx: &mut Context<Self>) -> AnyElement {
         let key = chat.key;
-        let reply = chat.view.as_ref().and_then(|view| {
-            view.read(cx)
-                .conversation()
-                .entries()
-                .iter()
-                .rev()
-                .find_map(|entry| match entry {
-                    Entry::Reply(text) => Some(start_of(text)),
-                    _ => None,
+        let ci = chat
+            .ci_ended()
+            .into_iter()
+            .enumerate()
+            .map(move |(at, ended)| {
+                div()
+                    .debug_selector(move || format!("waiting-{key}-ci-{at}"))
+                    .text_color(rgb(FOREGROUND))
+                    .child(ended)
+            });
+        let reply = (wait == Wait::Unread).then(|| {
+            chat.view
+                .as_ref()
+                .and_then(|view| {
+                    view.read(cx)
+                        .conversation()
+                        .entries()
+                        .iter()
+                        .rev()
+                        .find_map(|entry| match entry {
+                            Entry::Reply(text) => Some(start_of(text)),
+                            _ => None,
+                        })
                 })
+                .unwrap_or_else(|| "Its turn ended.".to_owned())
         });
         let open = div()
             .id(gpui::SharedString::from(format!("waiting-{key}-open")))
@@ -377,7 +418,8 @@ impl Workspace {
                     .text_size(px(12.))
                     .text_color(rgb(DIM))
                     .whitespace_normal()
-                    .child(reply.unwrap_or_else(|| "Its turn ended.".to_owned()))
+                    .children(reply)
+                    .children(ci)
                     .children(background),
             )
             .child(open)
@@ -390,12 +432,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_chat_that_asks_waits_before_one_unread_and_one_at_rest_does_not_wait() {
-        assert_eq!(Wait::of(State::Asking, true), Some(Wait::Asks));
-        assert_eq!(Wait::of(State::Asking, false), Some(Wait::Asks));
-        assert_eq!(Wait::of(State::Idle, true), Some(Wait::Unread));
-        assert_eq!(Wait::of(State::Idle, false), None);
-        assert_eq!(Wait::of(State::Busy, false), None);
+    fn a_chat_that_asks_waits_before_one_unread_then_one_whose_ci_ended_and_one_at_rest_does_not_wait()
+     {
+        assert_eq!(Wait::of(State::Asking, true, true), Some(Wait::Asks));
+        assert_eq!(Wait::of(State::Asking, false, false), Some(Wait::Asks));
+        assert_eq!(Wait::of(State::Idle, true, true), Some(Wait::Unread));
+        assert_eq!(Wait::of(State::Idle, false, true), Some(Wait::Checked));
+        assert_eq!(Wait::of(State::Idle, false, false), None);
+        assert_eq!(Wait::of(State::Busy, false, false), None);
     }
 
     #[test]
