@@ -8,7 +8,7 @@
 //! what it printed, and when it mentions "twice" too, runs it again. When the
 //! prompt mentions "think", it first thinks [`THOUGHT`], and when it mentions
 //! "plan", it first sends a plan of two steps, the first under way. When it
-//! mentions "title", it first titles its session [`TITLE`], and when it
+//! mentions "retitle", it first titles its session [`TITLE`], and when it
 //! mentions "slow", it waits before anything until the test lets it go on
 //! ([`FakeAgent::go_on`]). When the prompt mentions "background", it
 //! replies [`BACKGROUND_STARTED`] and ends the turn, and once the test lets
@@ -509,7 +509,7 @@ impl Login {
 /// What the agent does on its way to the reply, as the prompt asks: it
 /// thinks, plans and runs tools.
 fn work(cx: &ConnectionTo<Client>, session: &SessionId, text: &str) -> Result<()> {
-    if mentions(text, "title") {
+    if mentions(text, "retitle") {
         cx.send_notification(SessionNotification::new(
             session.clone(),
             SessionUpdate::SessionInfoUpdate(SessionInfoUpdate::new().title(TITLE)),

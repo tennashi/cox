@@ -3078,7 +3078,7 @@ async fn a_chat_is_named_by_its_agent_until_the_human_names_it(cx: &mut TestAppC
     let store = kept_store("chats-7");
     let (_, workspace, cx) = open_window_keeping(cx, scratch::folder("named"), store.clone());
     cx.simulate_keystrokes("secondary-n");
-    say(cx, &workspace, "a title, please").await;
+    say(cx, &workspace, "retitle it, please").await;
     assert_eq!(names(cx, &workspace), listed(&[("Cox", &[TITLE])]));
     assert_eq!(
         kept_names(&store),
@@ -3090,7 +3090,7 @@ async fn a_chat_is_named_by_its_agent_until_the_human_names_it(cx: &mut TestAppC
     double_click(cx, "chat-switcher");
     cx.simulate_input("Mine");
     cx.simulate_keystrokes("enter");
-    say(cx, &workspace, "another title").await;
+    say(cx, &workspace, "retitle it again").await;
     assert_eq!(names(cx, &workspace), listed(&[("Cox", &["Mine"])]));
     assert_eq!(
         kept_names(&store),
