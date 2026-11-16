@@ -19,6 +19,8 @@ use std::time::{Duration, Instant};
 use cox_core::entry::{Content, Entry, ToolCallResult};
 use serde_json::{Value, json};
 
+mod layout;
+
 /// How long a command runs before the page shows it big, with what it
 /// printed.
 const LONG: Duration = Duration::from_secs(5);
@@ -66,6 +68,8 @@ pub struct Command {
     pub id: String,
     /// The command, as the agent gave it.
     pub line: String,
+    /// What the agent said the command is for, if it said.
+    pub about: Option<String>,
     /// What the call shows: what the agent said the command is for while
     /// it runs, and what it printed once it ended.
     pub shows: String,
@@ -95,6 +99,7 @@ pub fn steps(entries: &[Entry]) -> Vec<Step> {
                 id,
                 title,
                 command: true,
+                about,
                 content,
                 result,
             } => {
@@ -109,6 +114,7 @@ pub fn steps(entries: &[Entry]) -> Vec<Step> {
                     step.commands.push(Command {
                         id: id.clone(),
                         line: title.clone(),
+                        about: about.clone(),
                         shows: text_of(content),
                         result: *result,
                     });
@@ -186,12 +192,16 @@ fn text_of(content: &[Content]) -> String {
 }
 
 /// When the window saw a command start, and end, by its chat and its
-/// id.
-#[derive(Clone, Copy, Debug)]
+/// id, and the command as the page lays it out.
+#[derive(Clone, Debug)]
 struct Seen {
     /// When the window first saw it run, if it saw it run.
     started: Option<Instant>,
     ended: Option<Instant>,
+    /// The command it was laid out from, and how it lays out (see
+    /// [`layout::told`]), once laid out, kept as the page reads it every
+    /// second.
+    shown: Option<(String, Value)>,
 }
 
 /// What the window told, by chat, and when it saw each command start
@@ -213,13 +223,23 @@ impl Told {
                     .iter()
                     .any(|step| step.commands.iter().any(|command| command.id == *id))
         });
+        let home = std::env::var_os("HOME").map(PathBuf::from);
         for command in chat.steps.iter().flat_map(|step| &step.commands) {
             let seen = self.seen.entry((key, command.id.clone())).or_insert(Seen {
                 started: command.result.is_none().then_some(now),
                 ended: None,
+                shown: None,
             });
             if command.result.is_some() && seen.ended.is_none() {
                 seen.ended = Some(now);
+            }
+            if seen
+                .shown
+                .as_ref()
+                .is_none_or(|(line, _)| *line != command.line)
+            {
+                let shown = layout::told(&command.line, &chat.cwd, home.as_deref());
+                seen.shown = Some((command.line.clone(), shown));
             }
         }
         self.chats.insert(key, chat);
@@ -362,7 +382,10 @@ fn command_of(command: &Command, seen: Option<&Seen>, now: Instant) -> Value {
         && (long || command.result == Some(ToolCallResult::Failed)))
     .then(|| last_lines(&command.shows));
     json!({
+        "id": command.id,
         "line": command.line,
+        "about": command.about,
+        "shown": seen.and_then(|seen| seen.shown.as_ref()).map(|(_, shown)| shown),
         "state": state,
         "why": command.result.is_none().then(|| first_line(&command.shows)).flatten(),
         "secs": ran.map(|ran| ran.as_secs()),
@@ -393,6 +416,7 @@ mod tests {
             id: id.to_owned(),
             title: line.to_owned(),
             command: true,
+            about: None,
             content: vec![Content::Text(shows.to_owned())],
             result,
         }
@@ -409,6 +433,7 @@ mod tests {
                 id: "3".to_owned(),
                 title: "Read a.rs".to_owned(),
                 command: false,
+                about: None,
                 content: Vec::new(),
                 result: Some(ToolCallResult::Completed),
             },
@@ -441,6 +466,7 @@ mod tests {
                     Command {
                         id: "1".to_owned(),
                         line: "cargo test".to_owned(),
+                        about: Some("Run the tests".to_owned()),
                         shows: if result.is_some() {
                             "ok\ntest result: ok"
                         } else {
@@ -452,6 +478,7 @@ mod tests {
                     Command {
                         id: "2".to_owned(),
                         line: "ls".to_owned(),
+                        about: None,
                         shows: "a\nb".to_owned(),
                         result: Some(ToolCallResult::Completed),
                     },
@@ -475,6 +502,9 @@ mod tests {
         assert_eq!(test["long"], true);
         assert_eq!(test["secs"], 7);
         let test = &ended["chats"][0]["steps"][0]["commands"][0];
+        assert_eq!(test["line"], "cargo test", "as the agent gave it, to copy");
+        assert_eq!(test["about"], "Run the tests");
+        assert_eq!(test["shown"][0]["code"][0][0], "cargo");
         assert_eq!(test["state"], "done");
         assert_eq!(test["secs"], 9);
         assert_eq!(test["printed"], "ok\ntest result: ok");

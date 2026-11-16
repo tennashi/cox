@@ -1597,6 +1597,7 @@ mod tests {
                 id: "call-1".to_owned(),
                 title: "Edit x.txt".to_owned(),
                 command: false,
+                about: None,
                 content: Vec::new(),
                 result: Some(ToolCallResult::Completed),
             },

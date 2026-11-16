@@ -76,6 +76,10 @@ pub enum Entry {
         /// does, whose title is then the command.
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         command: bool,
+        /// What the agent said a command is for, as the text the call
+        /// showed while it ran, before what it printed took its place.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        about: Option<String>,
         /// What the call shows, less what a permission request for it shows
         /// already.
         content: Vec<Content>,
@@ -693,6 +697,7 @@ mod tests {
                 id: "1".to_owned(),
                 title: "Edit".to_owned(),
                 command: false,
+                about: None,
                 content: Vec::new(),
                 result: Some(ToolCallResult::Completed),
             },
@@ -700,6 +705,7 @@ mod tests {
                 id: "2".to_owned(),
                 title: "Edit".to_owned(),
                 command: false,
+                about: None,
                 content: vec![diff("/work/b.rs"), diff("/work/a.rs")],
                 result: Some(ToolCallResult::Completed),
             },
@@ -707,6 +713,7 @@ mod tests {
                 id: "3".to_owned(),
                 title: "Edit".to_owned(),
                 command: false,
+                about: None,
                 content: vec![diff("/work/failed.rs")],
                 result: Some(ToolCallResult::Failed),
             },
@@ -714,6 +721,7 @@ mod tests {
                 id: "4".to_owned(),
                 title: "Edit".to_owned(),
                 command: false,
+                about: None,
                 content: vec![diff("/work/running.rs")],
                 result: None,
             },

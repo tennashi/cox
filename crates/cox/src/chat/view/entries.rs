@@ -847,9 +847,9 @@ impl ChatView {
             Entry::ToolCall {
                 id,
                 title,
-                command: _,
                 content,
                 result,
+                ..
             } => {
                 let (mark, color) = match result {
                     None => ("●", LINK),
@@ -2538,6 +2538,7 @@ mod tests {
             id: id.to_owned(),
             title: "ls".to_owned(),
             command: false,
+            about: None,
             content: Vec::new(),
             result: None,
         }

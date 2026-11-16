@@ -323,6 +323,7 @@ mod tests {
             id: title.to_owned(),
             title: title.to_owned(),
             command: true,
+            about: None,
             content: vec![Content::Text(output.to_owned())],
             result,
         }

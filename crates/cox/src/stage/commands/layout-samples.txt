@@ -1,0 +1,357 @@
+Real commands from this project, with how the Commands page lays them out
+(see `layout.rs`).
+
+%% sample heredoc-to-file
+cat > /tmp/rail-at-work/ci <<'EOF'
+#!/bin/sh
+exec /Users/me/cox-work/vim/shot/cox/target/debug/Cox.app/Contents/MacOS/Cox --data /tmp/rail-at-work/data --inspect "$@"
+EOF
+chmod +x /tmp/rail-at-work/ci; /tmp/rail-at-work/ci 2>&1 | head -40; /tmp/rail-at-work/ci state 2>&1 | head -40
+%% laid out
+cat > /tmp/rail-at-work/ci <<'EOF'[text, 2 lines]
+  > #!/bin/sh
+  > exec ~/cox-work/vim/shot/cox/target/debug/Cox.app/Contents/MacOS/Cox --data /tmp/rail-at-work/data --inspect "$@"
+chmod +x /tmp/rail-at-work/ci
+/tmp/rail-at-work/ci 2>&1 | head -40
+/tmp/rail-at-work/ci state 2>&1 | head -40
+
+%% sample python-heredoc-in-worktree
+cd /work/cox && python3 - <<'EOF'
+import pathlib
+p=pathlib.Path('crates/cox/src/stage/activity.rs'); s=p.read_text()
+s=s.replace('''    const NO_PLANS: Plans<'static> = Plans {
+        kept: &[],
+        dismissed: &[],
+        at: 0,
+    };
+''','''    const NO_PLANS: Plans<'static> = Plans {
+        kept: &[],
+        dismissed: &[],
+        at: 0,
+    };
+
+    /// The chat coxd keeps by `number`.
+    fn kept(number: u64) -> ChatId {
+        serde_json::from_value(json!(number)).unwrap()
+    }
+
+    fn step(text: &str, state: StepState) -> Step {
+        Step {
+            text: text.to_owned(),
+            state,
+        }
+    }
+''',1)
+for old in ['''        let kept = |number: u64| -> ChatId { serde_json::from_value(json!(number)).unwrap() };
+''','''        let kept = |number: i64| -> ChatId { serde_json::from_value(json!(number)).unwrap() };
+''','''        let step = |text: &str, state| Step {
+            text: text.to_owned(),
+            state,
+        };
+''']:
+    print(s.count(old)); s=s.replace(old,'')
+p.write_text(s)
+EOF
+cargo fmt --all && export CARGO_TARGET_DIR=/Users/me/cox-work/vim/shot/cox/target && cargo clippy -p cox-core -p coxd -p cox --all-targets -- -D warnings 2>&1 | grep -E "^error|-->|Finished" | head
+%% laid out
+cd .
+&& python3 - <<'EOF'[python, 34 lines]
+  > import pathlib
+  > p=pathlib.Path('crates/cox/src/stage/activity.rs'); s=p.read_text()
+  > s=s.replace('''    const NO_PLANS: Plans<'static> = Plans {
+  >         kept: &[],
+  >         dismissed: &[],
+  >         at: 0,
+  >     };
+  > ''','''    const NO_PLANS: Plans<'static> = Plans {
+  >         kept: &[],
+  >         dismissed: &[],
+  >         at: 0,
+  >     };
+  > 
+  >     /// The chat coxd keeps by `number`.
+  >     fn kept(number: u64) -> ChatId {
+  >         serde_json::from_value(json!(number)).unwrap()
+  >     }
+  > 
+  >     fn step(text: &str, state: StepState) -> Step {
+  >         Step {
+  >             text: text.to_owned(),
+  >             state,
+  >         }
+  >     }
+  > ''',1)
+  > for old in ['''        let kept = |number: u64| -> ChatId { serde_json::from_value(json!(number)).unwrap() };
+  > ''','''        let kept = |number: i64| -> ChatId { serde_json::from_value(json!(number)).unwrap() };
+  > ''','''        let step = |text: &str, state| Step {
+  >             text: text.to_owned(),
+  >             state,
+  >         };
+  > ''']:
+  >     print(s.count(old)); s=s.replace(old,'')
+  > p.write_text(s)
+cargo fmt --all
+&& export CARGO_TARGET_DIR=~/cox-work/vim/shot/cox/target
+&& cargo clippy -p cox-core -p coxd -p cox --all-targets -- -D warnings 2>&1
+| grep -E "^error|-->|Finished"
+| head
+
+%% sample inline-python-after-loop
+cd /tmp/rail-at-work/shots && C=/tmp/rail-at-work/ci; for i in 1 2 3 4; do $C screenshot arc-f$i.png >/dev/null; sleep 0.2; done; python3 -c "
+from PIL import Image
+ims=[Image.open(f'arc-f{i}.png').crop((0,40,150,560)) for i in range(1,5)]
+w=sum(i.width for i in ims); out=Image.new('RGB',(w,ims[0].height))
+x=0
+for i in ims: out.paste(i,(x,0)); x+=i.width
+out=out.resize((w*2,ims[0].height*2)); out.save('arc-frames.png')
+" && echo ok
+%% laid out
+cd /tmp/rail-at-work/shots
+&& C=/tmp/rail-at-work/ci
+for i in 1 2 3 4; do $C screenshot arc-f$i.png >/dev/null; sleep 0.2; done
+python3 -c[python, 6 lines]
+  > from PIL import Image
+  > ims=[Image.open(f'arc-f{i}.png').crop((0,40,150,560)) for i in range(1,5)]
+  > w=sum(i.width for i in ims); out=Image.new('RGB',(w,ims[0].height))
+  > x=0
+  > for i in ims: out.paste(i,(x,0)); x+=i.width
+  > out=out.resize((w*2,ims[0].height*2)); out.save('arc-frames.png')
+&& echo ok
+
+%% sample wait-loop
+for n in $(seq 40); do /tmp/cox-coord4-exp/bin/i state >/dev/null 2>&1 && break; grep -q "^Error" /tmp/cox-coord4-exp/run.log && break; sleep 5; done; grep -v Compiling /tmp/cox-coord4-exp/run.log | tail -3; /tmp/cox-coord4-exp/bin/i state 2>&1 | head -5
+%% laid out
+for n in $(seq 40); do
+  /tmp/cox-coord4-exp/bin/i state >/dev/null 2>&1 && break
+  grep -q "^Error" /tmp/cox-coord4-exp/run.log && break
+  sleep 5
+done
+grep -v Compiling /tmp/cox-coord4-exp/run.log | tail -3
+/tmp/cox-coord4-exp/bin/i state 2>&1 | head -5
+
+%% sample while-then-for
+cd /tmp/rail-at-work && rm -rf ./6 ./12 "rel-arc 12.log" "rel-arc 6.log" "rel-off 12.log"; pkill -f "Cox.app/Contents/MacOS/Cox --data /tmp/rail-at-work/data"; while pgrep -f "Cox --data /tmp/rail-at-work/data" >/dev/null; do sleep 1; done; for run in "off 12" "arc 12" "arc 6" "off 12" "arc 12" "arc 6"; do look=${run% *}; fps=${run#* }; FPS=$fps ./measure.sh $look 2>&1 | grep -E "cputime|answers"; done
+%% laid out
+cd /tmp/rail-at-work
+&& rm -rf ./6 ./12 "rel-arc 12.log" "rel-arc 6.log" "rel-off 12.log"
+pkill -f "Cox.app/Contents/MacOS/Cox --data /tmp/rail-at-work/data"
+while pgrep -f "Cox --data /tmp/rail-at-work/data" >/dev/null; do sleep 1; done
+for run in "off 12" "arc 12" "arc 6" "off 12" "arc 12" "arc 6"; do
+  look=${run% *}
+  fps=${run#* }
+  FPS=$fps ./measure.sh $look 2>&1 | grep -E "cputime|answers"
+done
+
+%% sample background-launch
+cd /Users/me/cox-work/vim/subagent-titles/cox && export PATH="$HOME/.cargo/bin:$PATH" CARGO_TARGET_DIR=/Users/me/cox-work/vim/shot/cox/target && nohup cargo xtask run --behind --data /tmp/cox-subtitles-exp/data -- npx -y @agentclientprotocol/claude-agent-acp > /tmp/cox-subtitles-exp/run.log 2>&1 &
+for n in $(seq 120); do /tmp/cox-subtitles-exp/bin/i state >/dev/null 2>&1 && break; grep -qE "^Error|^error" /tmp/cox-subtitles-exp/run.log && break; sleep 5; done; grep -v Compiling /tmp/cox-subtitles-exp/run.log | tail -3; /tmp/cox-subtitles-exp/bin/i state 2>&1 | head -10
+%% laid out
+cd ~/cox-work/vim/subagent-titles/cox
+&& export PATH="$HOME/.cargo/bin:$PATH" CARGO_TARGET_DIR=~/cox-work/vim/shot/cox/target
+&& nohup cargo xtask run --behind --data /tmp/cox-subtitles-exp/data -- npx -y @agentclientprotocol/claude-agent-acp > /tmp/cox-subtitles-exp/run.log 2>&1 &
+for n in $(seq 120); do
+  /tmp/cox-subtitles-exp/bin/i state >/dev/null 2>&1 && break
+  grep -qE "^Error|^error" /tmp/cox-subtitles-exp/run.log && break
+  sleep 5
+done
+grep -v Compiling /tmp/cox-subtitles-exp/run.log | tail -3
+/tmp/cox-subtitles-exp/bin/i state 2>&1 | head -10
+
+%% sample long-pipelines
+F=/tmp/rail-at-work/sample-rel.txt; grep -n "Thread_.*CrBrowserMain" $F | head -2; grep -E "gpui6window.*Window4draw|Window4draw" $F | head -3 | cut -c1-200; grep -oE "[0-9]+ [^ ]*(compute_layout|Window4draw|render|paint)[^ ]*" $F | awk '{a[$2]+=$1} END{for(k in a) print a[k], k}' | sort -rn | head -20 | cut -c1-170
+%% laid out
+F=/tmp/rail-at-work/sample-rel.txt
+grep -n "Thread_.*CrBrowserMain" $F | head -2
+grep -E "gpui6window.*Window4draw|Window4draw" $F | head -3 | cut -c1-200
+grep -oE "[0-9]+ [^ ]*(compute_layout|Window4draw|render|paint)[^ ]*" $F
+| awk '{a[$2]+=$1} END{for(k in a) print a[k], k}'
+| sort -rn
+| head -20
+| cut -c1-170
+
+%% sample export-after-heredoc
+cd /Users/me/cox-work/vim/shot/cox && python3 - <<'EOF'
+p='Cargo.toml'; s=open(p).read()
+assert s.count('version = "0.1.1"')>=1
+s=s.replace('version = "0.1.1"','version = "0.1.2"',1)
+open(p,'w').write(s)
+EOF
+export CARGO_TARGET_DIR=/Users/me/cox-work/vim/shot/target PATH="$HOME/.cargo/bin:$PATH"; cargo metadata --format-version 1 >/dev/null 2>&1; git diff --stat; git diff Cargo.lock | grep "^[-+]version" | sort | uniq -c
+%% laid out
+cd ~/cox-work/vim/shot/cox
+&& python3 - <<'EOF'[python, 4 lines]
+  > p='Cargo.toml'; s=open(p).read()
+  > assert s.count('version = "0.1.1"')>=1
+  > s=s.replace('version = "0.1.1"','version = "0.1.2"',1)
+  > open(p,'w').write(s)
+export CARGO_TARGET_DIR=~/cox-work/vim/shot/target PATH="$HOME/.cargo/bin:$PATH"
+cargo metadata --format-version 1 >/dev/null 2>&1
+git diff --stat
+git diff Cargo.lock | grep "^[-+]version" | sort | uniq -c
+
+%% sample dockerfile-heredoc
+mkdir -p /Users/me/cox-work/vim/devbox && cat > /Users/me/cox-work/vim/devbox/Dockerfile <<'EOF'
+FROM rust:1-bookworm
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libvulkan-dev libwayland-dev libx11-xcb-dev libxkbcommon-dev libxkbcommon-x11-dev \
+    mesa-vulkan-drivers xvfb xauth cmake ninja-build pkg-config clang \
+    libnss3 libnspr4 libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 libgbm1 libasound2 \
+    libxcomposite1 libxdamage1 libxrandr2 libxfixes3 libpango-1.0-0 libcairo2 libxshmfence1 \
+    libfontconfig1 fonts-dejavu-core git ca-certificates \
+ && rm -rf /var/lib/apt/lists/*
+EOF
+cd /Users/me/cox-work/vim/devbox && docker build -q -t cox-devbox . 2>&1 | tail -3
+%% laid out
+mkdir -p ~/cox-work/vim/devbox
+&& cat > ~/cox-work/vim/devbox/Dockerfile <<'EOF'[text, 8 lines]
+  > FROM rust:1-bookworm
+  > RUN apt-get update && apt-get install -y --no-install-recommends \
+  >     libvulkan-dev libwayland-dev libx11-xcb-dev libxkbcommon-dev libxkbcommon-x11-dev \
+  >     mesa-vulkan-drivers xvfb xauth cmake ninja-build pkg-config clang \
+  >     libnss3 libnspr4 libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 libgbm1 libasound2 \
+  >     libxcomposite1 libxdamage1 libxrandr2 libxfixes3 libpango-1.0-0 libcairo2 libxshmfence1 \
+  >     libfontconfig1 fonts-dejavu-core git ca-certificates \
+  >  && rm -rf /var/lib/apt/lists/*
+cd ~/cox-work/vim/devbox
+&& docker build -q -t cox-devbox . 2>&1
+| tail -3
+
+%% sample sed-in-place
+cd /Users/me/cox-work/vim/rail-at-work/cox && python3 - <<'EOF'
+p='crates/cox/src/workspace/at_work.rs'
+s=open(p).read()
+s=s.replace("""    pub(super) fn activity(&self, index: usize) -> Activity {
+""","""    pub(super) fn activity(&self, index: usize) -> Activity {
+        if index == 1 && std::env::var("COX_RAIL_FORCE").is_ok() {
+            return Activity::AtWork;
+        }
+""",1)
+open(p,'w').write(s)
+EOF
+sed -i '' 's/^COX_RAIL_FPS=\$FPS /COX_RAIL_FORCE=$FORCE COX_RAIL_FPS=$FPS /' /tmp/rail-at-work/start.sh; sed -i '' 's/^COX_RAIL_FORCE=\$FORCE /env ${FORCE:+COX_RAIL_FORCE=1} /' /tmp/rail-at-work/start.sh; cat /tmp/rail-at-work/start.sh | tail -1; export CARGO_TARGET_DIR=/Users/me/cox-work/vim/shot/cox/target && cargo xtask bundle --release > /tmp/rail-at-work/release4.log 2>&1; tail -1 /tmp/rail-at-work/release4.log
+%% laid out
+cd ~/cox-work/vim/rail-at-work/cox
+&& python3 - <<'EOF'[python, 9 lines]
+  > p='crates/cox/src/workspace/at_work.rs'
+  > s=open(p).read()
+  > s=s.replace("""    pub(super) fn activity(&self, index: usize) -> Activity {
+  > ""","""    pub(super) fn activity(&self, index: usize) -> Activity {
+  >         if index == 1 && std::env::var("COX_RAIL_FORCE").is_ok() {
+  >             return Activity::AtWork;
+  >         }
+  > """,1)
+  > open(p,'w').write(s)
+sed -i '' 's/^COX_RAIL_FPS=\$FPS /COX_RAIL_FORCE=$FORCE COX_RAIL_FPS=$FPS /' /tmp/rail-at-work/start.sh
+sed -i '' 's/^COX_RAIL_FORCE=\$FORCE /env ${FORCE:+COX_RAIL_FORCE=1} /' /tmp/rail-at-work/start.sh
+cat /tmp/rail-at-work/start.sh | tail -1
+export CARGO_TARGET_DIR=~/cox-work/vim/shot/cox/target
+&& cargo xtask bundle --release > /tmp/rail-at-work/release4.log 2>&1
+tail -1 /tmp/rail-at-work/release4.log
+
+%% sample braces-to-log
+cd /work/cox && touch crates/*/src/lib.rs && export CARGO_TARGET_DIR=/Users/me/cox-work/vim/shot/cox/target && { cargo test -p cox-core plan 2>&1 | tail -5; cargo test -p cox --lib stage:: 2>&1 | grep -E "test result|FAILED|panicked|error" | head -20; cargo test -p coxd --lib storage 2>&1 | tail -3; } > /tmp/plans-dismiss-tests.log 2>&1; echo exit $?
+%% laid out
+cd .
+&& touch crates/*/src/lib.rs
+&& export CARGO_TARGET_DIR=~/cox-work/vim/shot/cox/target
+&& {
+  cargo test -p cox-core plan 2>&1 | tail -5
+  cargo test -p cox --lib stage:: 2>&1
+  | grep -E "test result|FAILED|panicked|error"
+  | head -20
+  cargo test -p coxd --lib storage 2>&1 | tail -3
+} > /tmp/plans-dismiss-tests.log 2>&1
+echo exit $?
+
+%% sample pr-body-heredoc
+cat > /tmp/pr-look.md <<'EOF'
+## Why
+
+The human wants Vim's and Vimperator's keys in Cox, but drawn as Cox draws everything else. The Vim layer drew in Vim's own style instead:
+
+- a bordered bar across the foot with `-- NORMAL --` in Menlo,
+- Vimium's yellow labels with black uppercase letters,
+- a monospace list under a bar for `:`.
+
+## What
+
+No new colors or shapes. Each part takes the look of a Cox part that already exists:
+
+- **Mode.** A pill with a dot in the mode's color on the window's ground, as the chat's settings pill is. It reads Normal, Insert, Hint or Command. The bar's border and background are gone.
+- **Labels.** Drawn as the first button of a card that asks the human: amber ground, dark semibold letters, lowercase as typed, pill shaped. The window draws them in gpui. The pages draw them from CSS that `hints::page_look()` builds from the same constants, passed to `coxVim.show`.
+- **`:` and `/` line.** A rounded field on the ground. Its list is `ui::menu::menu()` with menu rows.
+
+## Checks
+
+- `cargo clippy -p cox -p cox-browser --all-targets` is clean.
+- Tests pass: `--test vim` (57), `--test window` (48), and the lib tests under `vim::` (44).
+- A headless CEF probe drew narrowed labels on a page as amber pills.
+EOF
+cd /Users/me/cox-work/vim/vim-look && gh pr create --base vim-status --head vim-look --title "feat(cox): Vim's mode, labels and line look as the rest of Cox does" --body-file /tmp/pr-look.md
+%% laid out
+cat > /tmp/pr-look.md <<'EOF'[markdown, 21 lines]
+  > ## Why
+  > 
+  > The human wants Vim's and Vimperator's keys in Cox, but drawn as Cox draws everything else. The Vim layer drew in Vim's own style instead:
+  > 
+  > - a bordered bar across the foot with `-- NORMAL --` in Menlo,
+  > - Vimium's yellow labels with black uppercase letters,
+  > - a monospace list under a bar for `:`.
+  > 
+  > ## What
+  > 
+  > No new colors or shapes. Each part takes the look of a Cox part that already exists:
+  > 
+  > - **Mode.** A pill with a dot in the mode's color on the window's ground, as the chat's settings pill is. It reads Normal, Insert, Hint or Command. The bar's border and background are gone.
+  > - **Labels.** Drawn as the first button of a card that asks the human: amber ground, dark semibold letters, lowercase as typed, pill shaped. The window draws them in gpui. The pages draw them from CSS that `hints::page_look()` builds from the same constants, passed to `coxVim.show`.
+  > - **`:` and `/` line.** A rounded field on the ground. Its list is `ui::menu::menu()` with menu rows.
+  > 
+  > ## Checks
+  > 
+  > - `cargo clippy -p cox -p cox-browser --all-targets` is clean.
+  > - Tests pass: `--test vim` (57), `--test window` (48), and the lib tests under `vim::` (44).
+  > - A headless CEF probe drew narrowed labels on a page as amber pills.
+cd ~/cox-work/vim/vim-look
+&& gh pr create --base vim-status --head vim-look --title "feat(cox): Vim's mode, labels and line look as the rest of Cox does" --body-file /tmp/pr-look.md
+
+%% sample if-else-in-chain
+cd /Users/me/cox-work/vim/shot/cox && gh pr checks 419 --repo tennashi/cox --watch --interval 30 >/dev/null 2>&1; if gh pr checks 419 --repo tennashi/cox 2>&1 | grep -qv pass; then echo "CI not green:"; gh pr checks 419 --repo tennashi/cox; else gh pr merge 419 --repo tennashi/cox --merge && gh pr view 419 --repo tennashi/cox --json state --jq .state; fi
+%% laid out
+cd ~/cox-work/vim/shot/cox
+&& gh pr checks 419 --repo tennashi/cox --watch --interval 30 >/dev/null 2>&1
+if gh pr checks 419 --repo tennashi/cox 2>&1 | grep -qv pass; then
+  echo "CI not green:"
+  gh pr checks 419 --repo tennashi/cox
+else
+  gh pr merge 419 --repo tennashi/cox --merge
+  && gh pr view 419 --repo tennashi/cox --json state --jq .state
+fi
+
+%% sample inline-python-one-line
+cd /Users/me/cox-work/vim/vim-input-normal && gh pr list --state open --json number,title,baseRefName,headRefName,mergeable,isDraft --limit 30 | python3 -c "import json,sys; [print(p['number'],p['baseRefName'],'<-',p['headRefName'],p['mergeable'],p['isDraft'],p['title'][:60]) for p in json.load(sys.stdin)]"; gh repo view --json defaultBranchRef -q .defaultBranchRef.name
+%% laid out
+cd ~/cox-work/vim/vim-input-normal
+&& gh pr list --state open --json number,title,baseRefName,headRefName,mergeable,isDraft --limit 30
+| python3 -c[python, 1 lines]
+  > import json,sys; [print(p['number'],p['baseRefName'],'<-',p['headRefName'],p['mergeable'],p['isDraft'],p['title'][:60]) for p in json.load(sys.stdin)]
+gh repo view --json defaultBranchRef -q .defaultBranchRef.name
+
+%% sample commit-message-made-up
+git add -A && git commit -q -m "$(cat <<'EOF'
+feat(cox): lay out commands to read
+
+The Commands page shows each command as rows.
+EOF
+)" && git log --oneline -1
+%% laid out
+git add -A
+&& git commit -q -m[text, 3 lines]
+  > feat(cox): lay out commands to read
+  > 
+  > The Commands page shows each command as rows.
+&& git log --oneline -1
+
+%% sample zsh-only-made-up
+print -l ${(f)"$(git ls-files)"} | head
+%% laid out
+print -l ${(f)"$(git ls-files)"} | head
