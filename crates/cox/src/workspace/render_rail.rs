@@ -23,9 +23,11 @@ use coxd::theme::{
 impl Workspace {
     /// The rail down the window's left side: at its head the bell that
     /// counts what waits for the human, then a button for each project,
-    /// which chooses it, marked when it is the one chosen and counting its
-    /// chats that wait for the human, and at its foot the button that
-    /// opens a folder, and the gear that opens the settings.
+    /// which chooses it, marked when it is the one chosen, counting its
+    /// chats that wait for the human, and with an arc running around it
+    /// while one of them is at work (see [`super::at_work`]), and at its
+    /// foot the button that opens a folder, and the gear that opens the
+    /// settings.
     pub(super) fn render_rail(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
         // Cox's own, a place of its own rather than a project, stands apart
         // from the projects under it, past a line.
@@ -355,6 +357,7 @@ impl Workspace {
                             .justify_center()
                             .map(|square| project_square(square, project, home, chosen, drawing)),
                     )
+                    .children(self.arc(index))
                     .when(waiting > 0, |square| {
                         square.child(waiting_badge(index, waiting, asking > 0))
                     })

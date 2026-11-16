@@ -115,6 +115,7 @@ impl Render for Workspace {
         // The parts mark again where they are drawn, for a region dragged.
         region::forget_marks();
         hints::forget_marks(window);
+        self.keep_rail_moving(cx);
         let stage = self.render_stage(window, cx);
         let chat = if self.folded {
             self.render_folded(cx).into_any_element()

@@ -67,6 +67,7 @@ use coxd::chat::sketch::{self, Sketch};
 use coxd::daemon::Link;
 use coxd::daemon::wire::{Background, ChatRow, FromDaemon, Listing, ProjectRow, ToDaemon};
 
+mod at_work;
 pub(crate) mod project_card;
 mod render;
 mod render_panel;
@@ -80,6 +81,7 @@ use sheet::Sheet;
 
 use crate::stage::{NewPage, NewTerminal, OpenFile};
 use crate::ui::input::{LineInput, Submitted};
+pub use at_work::arc_file;
 use coxd::workflow;
 pub use project_card::Gives;
 use project_card::{Drawing, ProjectCard, Rename, SetAbout, Standing, ToIcon};
@@ -501,6 +503,10 @@ pub struct Workspace {
     /// The commands the stages run for the daemon, by their numbers.
     /// Dropping one lets go of its answer, which stops it.
     running: HashMap<u64, Task<()>>,
+    /// Whether the arcs of the projects at work move on the rail, and the
+    /// step they are at (see [`at_work`]).
+    rail_moving: bool,
+    rail_step: u16,
     /// What waits for the daemon to settle, by the number it was asked
     /// with.
     syncs: HashMap<u64, tokio::sync::oneshot::Sender<()>>,
@@ -600,6 +606,8 @@ impl Workspace {
             asked_stages: HashSet::new(),
             waiting: HashMap::new(),
             running: HashMap::new(),
+            rail_moving: false,
+            rail_step: 0,
             syncs: HashMap::new(),
             last_sync: 0,
             focus_handle: cx.focus_handle(),
@@ -1182,10 +1190,7 @@ impl Workspace {
 
     /// Whether a chat of the project at `index` is at work.
     fn project_at_work(&self, index: usize) -> bool {
-        self.chats
-            .iter()
-            .chain(&self.archived)
-            .any(|chat| chat.project == index && chat.at_work())
+        self.activity(index) != at_work::Activity::Idle
     }
 
     /// Reads again the icon of the project kept as `id`, as it is now.
@@ -1278,11 +1283,7 @@ impl Workspace {
                     .map_or(Drawing::Ready, |why| Drawing::NotDrawn(why.clone())),
                 None => Drawing::Unable,
             },
-            at_work: self
-                .chats
-                .iter()
-                .chain(&self.archived)
-                .any(|chat| chat.project == index && chat.at_work()),
+            at_work: self.project_at_work(index),
         }
     }
 
