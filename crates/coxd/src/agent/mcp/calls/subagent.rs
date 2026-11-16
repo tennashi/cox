@@ -6,6 +6,7 @@
 
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use cox_core::goal::Goal;
 use serde_json::{Value, json};
@@ -18,6 +19,13 @@ use crate::chat::sketch::Sketch;
 
 pub(super) const AGENT: &str = crate::agent::mcp::AGENT_TOOL;
 pub(super) const AGENT_REPORT: &str = "agent_report";
+
+/// How long `agent_report` waits for a subagent in a chat that hands its
+/// work off (see [`crate::daemon::hands_off`]): long enough for a quick
+/// subagent to report in the turn, short enough that a line the human
+/// sends meanwhile, which the agent takes only once the call ends, is not
+/// left waiting. Cox tells the agent the report once it ends either way.
+pub(super) const HANDS_OFF_WAIT: Duration = Duration::from_secs(30);
 
 /// The tool that runs a subagent, as the agent learns of it.
 #[expect(clippy::too_many_lines, reason = "its arguments, one after another")]
@@ -323,21 +331,24 @@ fn setup(arguments: &Value, context: String) -> Result<Setup, String> {
 /// Runs a subagent as `arguments` say: asks the window to open its chat,
 /// with the definition of its kind found in `kinds`, and answers its
 /// report once its turn ends, or at once, in the background, the number
-/// its chat goes by.
+/// its chat goes by, as it always does for a chat that hands its work
+/// off, as `hands_off` says.
 pub(super) async fn agent(
     arguments: &Value,
     kinds: &Kinds<'_>,
+    hands_off: bool,
     chats: &UnboundedSender<ChatRequest>,
 ) -> Result<String, String> {
     let prompt = string(arguments, "prompt")?
         .ok_or("no prompt: say what the subagent is to do as `prompt`")?;
     let description = string(arguments, "description")?;
     let kind = string(arguments, "subagent_type")?;
-    let background = match arguments.get("run_in_background") {
+    let asked_background = match arguments.get("run_in_background") {
         None | Some(Value::Null) => false,
         Some(Value::Bool(background)) => *background,
         Some(_) => return Err("`run_in_background` is not true or false".to_owned()),
     };
+    let background = asked_background || hands_off;
     let definition = kind
         .as_deref()
         .and_then(|kind| kinds.definition(kind))
@@ -387,6 +398,13 @@ pub(super) async fn agent(
         }
         for note in notes {
             let _ = write!(told, " {note}");
+        }
+        if hands_off {
+            told.push_str(
+                " This chat talks with the human and hands the work off, so its subagents \
+                 run in the background: go on with the human, or end your turn, rather than \
+                 wait for the report.",
+            );
         }
         return Ok(told);
     }
@@ -464,16 +482,33 @@ async fn wait(chat: u64, chats: &UnboundedSender<ChatRequest>) -> Result<Waited,
 }
 
 /// Waits for the subagent's chat `arguments` name to end its turn, or to
-/// come to wait for the human, and tells how it stands.
+/// come to wait for the human, and tells how it stands, or, past `most`,
+/// when given, that it is at work still.
 pub(super) async fn agent_report(
     arguments: &Value,
+    most: Option<Duration>,
     chats: &UnboundedSender<ChatRequest>,
 ) -> Result<String, String> {
     let chat = arguments
         .get("chat")
         .and_then(Value::as_u64)
         .ok_or("no chat: give the number agent answered as `chat`")?;
-    let waited = wait(chat, chats).await?;
+    let waited = match most {
+        None => wait(chat, chats).await?,
+        // Past the time, the wait is dropped, and Cox tells the report
+        // unasked once it comes, as for one no one waited for.
+        Some(most) => match tokio::time::timeout(most, wait(chat, chats)).await {
+            Ok(waited) => waited?,
+            Err(_) => {
+                return Ok(format!(
+                    "Chat {chat} is at work still. This chat talks with the human and hands \
+                     the work off, so it does not wait longer: end your turn, or go on with \
+                     the human, and Cox tells you chat {chat}'s report once it ends and your \
+                     turn is not running. Do not call agent_report again to wait for it."
+                ));
+            }
+        },
+    };
     let mut told = match &waited.asking {
         Some(asking) => format!("Chat {chat} waits for the human to answer: {asking}."),
         None => format!("Chat {chat} ended its turn."),
@@ -563,7 +598,7 @@ mod tests {
         chats: &UnboundedSender<ChatRequest>,
     ) -> (bool, String) {
         let params = json!({ "name": AGENT, "arguments": arguments });
-        let answered = super::super::call(&params, cwd, None, &unbounded_channel().0, chats)
+        let answered = super::super::call(&params, cwd, None, false, &unbounded_channel().0, chats)
             .await
             .unwrap();
         (
@@ -747,6 +782,7 @@ mod tests {
                     "subagent_type": "pstack:poteto-agent",
                 }),
                 &kinds,
+                false,
                 &chats,
             )
             .await,
@@ -792,6 +828,83 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_chat_that_hands_its_work_off_runs_its_subagents_in_the_background() {
+        let (chats, asked) = unbounded_channel();
+        let window = window(asked, opened(4), Vec::new());
+        let params = json!({ "name": AGENT, "arguments": {
+            "description": "Build it",
+            "prompt": "Build it.",
+            "run_in_background": false,
+        } });
+
+        let answered = super::super::call(
+            &params,
+            Path::new("/nowhere"),
+            None,
+            true,
+            &unbounded_channel().0,
+            &chats,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            answered["content"][0]["text"],
+            "The subagent works in Review the parser, chat 4, under this one. Cox tells you \
+             its report once it ends its turn and your turn is not running; to wait for it \
+             sooner, call agent_report, giving 4. This chat talks with the human and hands the \
+             work off, so its subagents run in the background: go on with the human, or end \
+             your turn, rather than wait for the report."
+        );
+        drop(chats);
+        let heard = window.await.unwrap();
+        assert!(
+            !heard
+                .iter()
+                .any(|request| matches!(request, ChatRequest::WaitChat { .. })),
+            "it does not wait"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_chat_that_hands_its_work_off_waits_for_a_report_only_a_while() {
+        let (chats, mut asked) = unbounded_channel();
+        // The subagent is at work: the window holds the wait.
+        let held = tokio::spawn(async move {
+            let mut held = Vec::new();
+            while let Some(request) = asked.recv().await {
+                held.push(request);
+            }
+            held
+        });
+
+        let told = agent_report(
+            &json!({ "chat": 7 }),
+            Some(Duration::from_millis(10)),
+            &chats,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            told,
+            "Chat 7 is at work still. This chat talks with the human and hands the work off, \
+             so it does not wait longer: end your turn, or go on with the human, and Cox tells \
+             you chat 7's report once it ends and your turn is not running. Do not call \
+             agent_report again to wait for it."
+        );
+        drop(chats);
+        let held = held.await.unwrap();
+        let [ChatRequest::WaitChat { answer, .. }] = &held[..] else {
+            panic!("the window was asked {} times", held.len());
+        };
+        assert!(
+            answer.is_closed(),
+            "the wait is dropped, so the report is told unasked"
+        );
+    }
+
+    #[tokio::test]
     async fn reports_how_a_subagent_stands_once_it_waits() {
         let (chats, asked) = unbounded_channel();
         let window = window(
@@ -817,6 +930,7 @@ mod tests {
                     &params,
                     Path::new("/work"),
                     None,
+                    false,
                     &unbounded_channel().0,
                     &chats,
                 )

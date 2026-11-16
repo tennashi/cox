@@ -41,6 +41,7 @@ impl Spawns for NoAgents {
         _: Option<u16>,
         _: bool,
         _: Subagents,
+        _: bool,
     ) -> Spawned {
         unreachable!("no chat opens")
     }

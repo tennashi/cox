@@ -53,7 +53,8 @@ impl Spawns for Launcher {
     /// `relay`, when given, its subagents run as `subagents` says. The
     /// chat's setup, if it has one, says which of Cox's tools the agent
     /// gets, and a chat in no project, as `in_project` says, gets none of
-    /// a project's.
+    /// a project's. A chat the human opened, as `top_level` says, hands
+    /// its work off, when it can (see [`hands_off`]).
     fn chat(
         &self,
         cwd: PathBuf,
@@ -62,10 +63,12 @@ impl Spawns for Launcher {
         relay: Option<u16>,
         in_project: bool,
         subagents: Subagents,
+        top_level: bool,
     ) -> Spawned {
         // 1. The server of Cox's own tools, with the `cox` that reaches it.
         let only = start.setup().and_then(|setup| setup.tools.as_deref());
-        let server = self.server(&cwd, only, in_project);
+        let hands_off = hands_off(top_level, subagents, only, self.exe.is_some());
+        let server = self.server(&cwd, only, in_project, hands_off);
         // What the agent gets: the MCP servers it starts to reach both.
         let tools = self.tools(&cwd, relay, server.as_ref());
         let meta = session_meta(subagents, only, server.is_some());
@@ -102,17 +105,19 @@ impl Spawns for Launcher {
 impl Launcher {
     /// Starts the server of Cox's own tools for a chat working in `cwd`,
     /// serving the tools named in `only`, or all of them, but those of a
-    /// project when the chat is in none, as `in_project` says, and answers
-    /// it with the `cox` the agent runs to reach it, or `None` when it did
-    /// not start.
+    /// project when the chat is in none, as `in_project` says, for a chat
+    /// that hands its work off, or not, as `hands_off` says, and answers it
+    /// with the `cox` the agent runs to reach it, or `None` when it did not
+    /// start.
     fn server(
         &self,
         cwd: &std::path::Path,
         only: Option<&[String]>,
         in_project: bool,
+        hands_off: bool,
     ) -> Option<(PathBuf, ToolServer)> {
         let exe = self.exe.clone()?;
-        match crate::agent::mcp::start(cwd.to_owned(), only, in_project) {
+        match crate::agent::mcp::start(cwd.to_owned(), only, in_project, hands_off) {
             Ok(server) => Some((exe, server)),
             Err(error) => {
                 tracing::error!("the agent gets no tools of Cox's own: {error:#}");
@@ -153,6 +158,33 @@ impl Launcher {
     }
 }
 
+/// Whether the agent of a chat hands its work off: a chat the human
+/// opened, as `top_level` says, whose subagents run as chats, as
+/// `subagents` says, and which gets Cox's `agent` to run them, as Cox's
+/// tools are `served` to it, those named in `only` or all of them. Its
+/// agent talks with the human, and Cox's `agent` runs the subagents it
+/// hands the work to in the background, so that the human can talk with
+/// it while the work goes on (see `crate::agent::mcp::start`). It keeps
+/// all its tools: what it is told asks it to hand the work off, and does
+/// not hold it to that.
+#[must_use]
+pub fn hands_off(
+    top_level: bool,
+    subagents: Subagents,
+    only: Option<&[String]>,
+    served: bool,
+) -> bool {
+    top_level && runs_chats(subagents, only, served)
+}
+
+/// Whether the agent of a chat runs its subagents as chats, as
+/// `subagents` says, with Cox's `agent`, as Cox's tools are `served` to
+/// it, those named in `only` or all of them.
+fn runs_chats(subagents: Subagents, only: Option<&[String]>, served: bool) -> bool {
+    let gets_agent = served && only.is_none_or(|only| only.iter().any(|tool| tool == AGENT_TOOL));
+    subagents == Subagents::Chats && gets_agent
+}
+
 /// What the session of a chat's agent is asked for with, as its `_meta`:
 /// when its subagents run as chats, as `subagents`, the chat's, says,
 /// and it gets Cox's `agent`, as Cox's tools are `served` to it, those
@@ -165,8 +197,7 @@ pub fn session_meta(
     only: Option<&[String]>,
     served: bool,
 ) -> Option<cox_acp::Meta> {
-    let gets_agent = served && only.is_none_or(|only| only.iter().any(|tool| tool == AGENT_TOOL));
-    if subagents != Subagents::Chats || !gets_agent {
+    if !runs_chats(subagents, only, served) {
         return None;
     }
     serde_json::json!({
@@ -206,5 +237,21 @@ mod tests {
             None,
             "a chat whose tools of Cox's did not start keeps the agent's own"
         );
+    }
+
+    #[test]
+    fn a_chat_the_human_opened_hands_its_work_off() {
+        let only = ["show_file".to_owned()];
+        assert!(hands_off(true, Subagents::Chats, None, true));
+        assert!(
+            !hands_off(false, Subagents::Chats, None, true),
+            "a subagent works"
+        );
+        assert!(
+            !hands_off(true, Subagents::Agent, None, true),
+            "with nothing to hand it to"
+        );
+        assert!(!hands_off(true, Subagents::Chats, Some(&only), true));
+        assert!(!hands_off(true, Subagents::Chats, None, false));
     }
 }

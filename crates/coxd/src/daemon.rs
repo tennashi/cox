@@ -36,7 +36,7 @@ pub mod push;
 mod sketches;
 pub mod wire;
 
-pub use launcher::session_meta;
+pub use launcher::{hands_off, session_meta};
 
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
@@ -103,7 +103,10 @@ pub trait Spawns {
     /// chat's stage through the relay on `relay`, when given, and gives it
     /// Cox's own tools, unless the chat's setup says otherwise, but those
     /// of a project when the chat is in none, as `in_project` says, its
-    /// subagents run as `subagents` says.
+    /// subagents run as `subagents` says. A chat the human opened, not one
+    /// an agent or a sketch did, as `top_level` says, hands its work off
+    /// (see [`launcher::hands_off`]).
+    #[expect(clippy::too_many_arguments, reason = "what a chat's agent starts with")]
     fn chat(
         &self,
         cwd: PathBuf,
@@ -112,6 +115,7 @@ pub trait Spawns {
         relay: Option<u16>,
         in_project: bool,
         subagents: Subagents,
+        top_level: bool,
     ) -> Spawned;
 
     /// What starts an agent with no chat, as the judge of a goal, of the
@@ -1327,10 +1331,11 @@ impl Daemon {
         let agent = chat.agent_id().to_owned();
         // The first project is Cox's own chats', in none.
         let in_project = slot.project != 0;
+        let top_level = slot.parent.is_none();
         let subagents = self.subagents_of(slot.kept, &start);
         let Spawned { agent, stage } = self
             .spawns
-            .chat(cwd, start, &agent, relay, in_project, subagents);
+            .chat(cwd, start, &agent, relay, in_project, subagents, top_level);
         let also = stage.map_or_default(|mut stage| {
             let internal = self.internal.clone();
             vec![spawn(async move {
@@ -2913,6 +2918,7 @@ mod tests {
             _: Option<u16>,
             _: bool,
             _: Subagents,
+            _: bool,
         ) -> Spawned {
             unreachable!("no chat's agent starts")
         }
@@ -3311,6 +3317,7 @@ mod tests {
             _: Option<u16>,
             _: bool,
             _: Subagents,
+            _: bool,
         ) -> Spawned {
             let (commands, commands_got) = unbounded_channel();
             let (events_sent, events) = unbounded_channel();

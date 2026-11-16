@@ -75,7 +75,7 @@ impl Agent {
 fn the_agent_shows_a_file_on_its_chats_stage() {
     let cwd = scratch("show");
     std::fs::write(cwd.join("plan.md"), "# Plan\n").unwrap();
-    let server = coxd::agent::mcp::start(cwd.clone(), None, true).unwrap();
+    let server = coxd::agent::mcp::start(cwd.clone(), None, true, false).unwrap();
     let mut agent = Agent::start(&server);
     let ToolServer {
         socket,
@@ -105,7 +105,7 @@ fn the_agent_shows_a_file_on_its_chats_stage() {
 #[test]
 fn the_agent_runs_a_command_on_its_chats_stage_and_can_cancel_it() {
     let cwd = scratch("run");
-    let server = coxd::agent::mcp::start(cwd.clone(), None, true).unwrap();
+    let server = coxd::agent::mcp::start(cwd.clone(), None, true, false).unwrap();
     let mut agent = Agent::start(&server);
     let mut requests = server.requests;
 
@@ -156,7 +156,7 @@ fn the_agent_gets_only_the_tools_its_setup_names() {
     let cwd = scratch("only");
     std::fs::write(cwd.join("plan.md"), "# Plan\n").unwrap();
     let only = Some(vec!["show_markdown".to_owned()]);
-    let server = coxd::agent::mcp::start(cwd.clone(), only.as_deref(), true).unwrap();
+    let server = coxd::agent::mcp::start(cwd.clone(), only.as_deref(), true, false).unwrap();
     let mut agent = Agent::start(&server);
     let mut requests = server.requests;
 
@@ -187,7 +187,7 @@ fn the_agent_gets_only_the_tools_its_setup_names() {
 #[test]
 fn a_chat_in_a_project_gets_no_tool_to_make_one_of_it() {
     let cwd = scratch("in-project");
-    let server = coxd::agent::mcp::start(cwd.clone(), None, true).unwrap();
+    let server = coxd::agent::mcp::start(cwd.clone(), None, true, false).unwrap();
     let mut agent = Agent::start(&server);
 
     let listed = agent.ask(&json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list" }));
@@ -208,7 +208,7 @@ fn a_chat_in_a_project_gets_no_tool_to_make_one_of_it() {
 #[test]
 fn a_chat_in_no_project_gets_no_tool_to_name_its_project() {
     let cwd = scratch("no-project");
-    let server = coxd::agent::mcp::start(cwd.clone(), None, false).unwrap();
+    let server = coxd::agent::mcp::start(cwd.clone(), None, false, false).unwrap();
     let mut agent = Agent::start(&server);
 
     let listed = agent.ask(&json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list" }));
@@ -233,7 +233,7 @@ fn a_chat_in_no_project_gets_no_tool_to_name_its_project() {
 /// agent's end of the bridge to it.
 fn chat_in(cwd: &std::path::Path, project: &str, chat: &str) -> (Agent, ToolServer) {
     let folder = cwd.to_owned();
-    let mut server = coxd::agent::mcp::start(cwd.to_owned(), None, true).unwrap();
+    let mut server = coxd::agent::mcp::start(cwd.to_owned(), None, true, false).unwrap();
     let agent = Agent::start(&server);
     let mut chat_requests = std::mem::replace(
         &mut server.chat_requests,
