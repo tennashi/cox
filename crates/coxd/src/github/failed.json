@@ -1,0 +1,28 @@
+{
+ "headRefOid": "c328a36037409258fade373849980e31a843ecc7",
+ "isDraft": true,
+ "state": "OPEN",
+ "statusCheckRollup": [
+  {
+   "__typename": "CheckRun",
+   "completedAt": "2026-11-16T14:34:50Z",
+   "conclusion": "FAILURE",
+   "detailsUrl": "https://github.com/tennashi/cox/actions/runs/43886978381/job/133367668515",
+   "name": "ci (ubuntu-latest)",
+   "startedAt": "2026-11-16T14:33:35Z",
+   "status": "COMPLETED",
+   "workflowName": "CI"
+  },
+  {
+   "__typename": "CheckRun",
+   "completedAt": "2026-11-16T14:35:53Z",
+   "conclusion": "FAILURE",
+   "detailsUrl": "https://github.com/tennashi/cox/actions/runs/43886978381/job/133367668198",
+   "name": "ci (macos-latest)",
+   "startedAt": "2026-11-16T14:33:35Z",
+   "status": "COMPLETED",
+   "workflowName": "CI"
+  }
+ ],
+ "title": "Show each chat's ACP plan on the Activity page, with its subagents' chats"
+}

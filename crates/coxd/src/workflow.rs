@@ -106,6 +106,14 @@ pub const SUBAGENT_SETTLED: Text = Text {
     own: include_str!("workflow/subagent/settled.md"),
 };
 
+/// What follows a subagent's report, in [`SUBAGENT_REPORTS`], once CI
+/// ended on a pull request it opened: its `{url}` and `{title}`, how CI
+/// ended, as its `{outcome}`, and the checks that `{failed}`, if any.
+pub const SUBAGENT_CI: Text = Text {
+    name: "subagent/ci.md",
+    own: include_str!("workflow/subagent/ci.md"),
+};
+
 /// A subagent's report, in [`SUBAGENT_REPORTS`], as it waits for the human
 /// to answer what it `{asking}`, beside what [`SUBAGENT_ENDED`] says.
 pub const SUBAGENT_ASKS: Text = Text {
@@ -118,7 +126,7 @@ pub const SUBAGENT_ASKS: Text = Text {
 pub const REPORT_LENGTH: usize = 2000;
 
 /// The texts Cox has of its own, by where the human keeps theirs.
-const OWN: [&Text; 11] = [
+const OWN: [&Text; 12] = [
     &SKETCH_START,
     &SKETCH_OPENED,
     &SKETCH_DISCARD,
@@ -130,6 +138,7 @@ const OWN: [&Text; 11] = [
     &SUBAGENT_BACKGROUND,
     &SUBAGENT_SETTLED,
     &SUBAGENT_ASKS,
+    &SUBAGENT_CI,
 ];
 
 /// The report of the subagent in the chat `number`, named `name`, that

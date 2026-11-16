@@ -274,6 +274,7 @@ a good starting point to copy.
 | `subagent/background.md` | A subagent's report in `subagent/reports.md`, once it ended its turn while what it runs in the background, as a command it left running, goes on. `{background}` stands for what runs, beside what `subagent/ended.md` takes. | [`subagent/background.md`](../crates/coxd/src/workflow/subagent/background.md) |
 | `subagent/settled.md` | A subagent's report in `subagent/reports.md`, once what `subagent/background.md` told runs in the background ended. It takes what `subagent/ended.md` takes. | [`subagent/settled.md`](../crates/coxd/src/workflow/subagent/settled.md) |
 | `subagent/asks.md` | A subagent's report in `subagent/reports.md`, as it waits for you to answer. `{asking}` stands for what it asks, beside what `subagent/ended.md` takes. | [`subagent/asks.md`](../crates/coxd/src/workflow/subagent/asks.md) |
+| `subagent/ci.md` | What follows a subagent's report in `subagent/reports.md`, once CI ended on a pull request it opened with `gh pr create`. `{url}` and `{title}` stand for the pull request, `{outcome}` for `passed` or `failed`, and `{failed}` for the checks that failed, if any. | [`subagent/ci.md`](../crates/coxd/src/workflow/subagent/ci.md) |
 | `triggers/*.md` | Triggers that run in every project. See [Triggers](#triggers). | none |
 
 ## Triggers

@@ -28,7 +28,8 @@
 //!   learned, for those of every project to find again.
 //! - [`raw`] is what the agents read, kept as they read it, as the
 //!   sources of research, apart from what is made of it.
-//! - [`repositories`] is the repositories of a folder Cox works in.
+//! - [`repositories`] is the repositories of a folder Cox works in, and
+//!   [`github`] the pull requests the agents open there, and their CI.
 //! - [`media`] is the pictures and files the conversations show, kept as
 //!   they were shown.
 //! - [`theme`] is how Cox looks, which the window and the page coxd
@@ -49,6 +50,7 @@ pub mod agents;
 pub mod chat;
 pub mod daemon;
 pub mod diagram;
+pub mod github;
 pub mod home;
 pub mod login;
 pub mod logs;

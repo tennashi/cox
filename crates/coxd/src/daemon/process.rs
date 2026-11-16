@@ -70,6 +70,7 @@ pub fn run(
         tokio::task::spawn_local(accept(listener, to, internal.clone()));
         tokio::task::spawn_local(stop_when_asked(socket.to_owned(), bound, stop));
         tokio::task::spawn_local(schedules(internal.clone()));
+        tokio::task::spawn_local(super::pulls::look(internal.clone()));
         let mut phones = None;
         if let Some(port) = super::phone::port() {
             match super::phone::token() {

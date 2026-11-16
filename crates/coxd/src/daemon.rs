@@ -32,6 +32,7 @@ pub mod main;
 pub mod phone;
 pub mod process;
 mod project;
+mod pulls;
 pub mod push;
 mod sketches;
 pub mod wire;
@@ -275,6 +276,14 @@ pub enum Internal {
     /// It is time to look which of the triggers on a schedule are due,
     /// and run them (see [`crate::schedule`]).
     Schedules,
+    /// It is time to look which pull requests of the chats are due to be
+    /// read (see [`pulls`]).
+    Pulls,
+    /// `gh` read how `pull` stands, as `read` says.
+    Pulled {
+        pull: crate::github::Pull,
+        read: Result<crate::github::Status, crate::github::Problem>,
+    },
 }
 
 /// How many of the project's other chats a chat's agent is told of, at
@@ -374,6 +383,15 @@ impl Report {
         }
         (report, behind)
     }
+
+    /// The report of a chat one of whose pull requests' CI ended: the agent
+    /// that heard its last report hears it again, with how CI ended;
+    /// otherwise it hears so with the report it has yet to hear.
+    fn ci_ended(&mut self) {
+        if *self == Self::Heard {
+            *self = Self::Pending;
+        }
+    }
 }
 
 /// What the agent that opened a chat heard of what the chat's agent runs
@@ -430,6 +448,8 @@ struct Slot {
     /// opened before another folder of the project became the project's.
     folder: Option<PathBuf>,
     ending: Option<(Ends, workflow::Ending)>,
+    /// The pull requests its agent opened.
+    pulls: pulls::Pulls,
     /// The chat, once it was read or opened in this run.
     chat: Option<Chat>,
 }
@@ -489,6 +509,7 @@ impl Slot {
             agent,
             folder: self.folder.clone(),
             background: self.chat.as_ref().map_or_default(Chat::background),
+            pulls: Vec::new(),
         }
     }
 }
@@ -566,6 +587,11 @@ pub struct Daemon {
     /// The chat of the last run of each schedule, by the path of its
     /// file.
     scheduled: HashMap<String, u64>,
+    /// What coxd knows of the pull requests the chats' agents opened.
+    watches: pulls::Watches,
+    /// Why no chat shows its pull requests, as when `gh` is not logged
+    /// in, if that is so.
+    github: Option<String>,
 }
 
 /// How the daemon is reached: what to tell it.
@@ -707,6 +733,8 @@ impl Daemon {
             done: false,
             ran: None,
             scheduled: HashMap::new(),
+            watches: pulls::Watches::new(),
+            github: None,
         };
         daemon.read_kept();
         daemon
@@ -778,6 +806,7 @@ impl Daemon {
                 setup,
                 folder: chat.folder,
                 ending: None,
+                pulls: pulls::Pulls::default(),
                 chat: None,
             };
             if chat.archived {
@@ -1290,6 +1319,7 @@ impl Daemon {
             setup: setup.clone(),
             folder,
             ending: None,
+            pulls: pulls::Pulls::default(),
             chat: Some(chat),
         });
         // Its triggers run on its opening once its agent has started.
@@ -1457,6 +1487,7 @@ impl Daemon {
                 self.shown = key;
                 if let Some(slot) = key.and_then(|key| self.slot_mut(key)) {
                     slot.unread = false;
+                    slot.pulls.seen();
                 }
             }
             ToDaemon::Watch { key } => self.watch(key),
@@ -1860,6 +1891,7 @@ impl Daemon {
                 // The human looks at the chat, on their phone.
                 if let Some(slot) = key.and_then(|key| self.slot_mut(key)) {
                     slot.unread = false;
+                    slot.pulls.seen();
                 }
                 self.view_chat(id, key);
             }
@@ -1921,6 +1953,8 @@ impl Daemon {
             Internal::Schedules => {
                 self.run_schedules(&crate::settings::workflow(), &jiff::Zoned::now());
             }
+            Internal::Pulls => self.look_at_pulls(Instant::now()),
+            Internal::Pulled { pull, read } => self.pulled(&pull, read, Instant::now()),
         }
     }
 
@@ -2441,6 +2475,9 @@ impl Daemon {
             }
             *heard = behind;
         }
+        if let Some(slot) = self.slot_mut(key) {
+            slot.pulls.told.clear();
+        }
     }
 
     /// Tells the agent of each chat that opened subagents, in the human's
@@ -2470,8 +2507,14 @@ impl Daemon {
                         .filter_map(|&child| {
                             let slot = self.slot(child)?;
                             let (name, ended) = (slot.name.clone(), slot.behind == Behind::Ended);
+                            let ci = slot.pulls.told.join("\n");
                             let stands = self.chat(child)?.stands();
-                            Some(workflow::subagent_report(child, &name, &stands, ended))
+                            let report = workflow::subagent_report(child, &name, &stands, ended);
+                            Some(if ci.is_empty() {
+                                report
+                            } else {
+                                format!("{report}\n\n{ci}")
+                            })
                         })
                         .collect();
                     let line =
@@ -2750,6 +2793,7 @@ impl Daemon {
     fn row(&self, slot: &Slot, agents: &Agents) -> ChatRow {
         let mut row = slot.row(agents, &self.store);
         row.again &= slot.project == 0 || self.cwd(slot).is_dir();
+        row.pulls = self.pull_rows(&slot.pulls);
         row
     }
 
@@ -2782,6 +2826,7 @@ impl Daemon {
                 .map(|slot| self.row(slot, &agents))
                 .collect(),
             agents: std::collections::BTreeMap::new(),
+            github: self.github.clone(),
         };
         let ids: HashSet<&str> = listing
             .chats
@@ -4071,6 +4116,96 @@ mod tests {
             opener.pump().await;
             assert_eq!(unread(&opener), [true, true]);
             assert_eq!(opener.prompts(), ["work"]);
+        });
+    }
+
+    #[test]
+    fn ci_that_ends_on_a_subagent_s_pull_request_is_told_once_to_the_human_and_the_opener() {
+        use crate::github::{Check, CheckState, Pull, PullState, Status};
+        on_daemon(async {
+            let mut opener = Opener::new(&["Ship"]).await;
+            let (window, mut told) = unbounded_channel();
+            opener.daemon.window = Some(window);
+            submit(&mut opener.daemon, opener.key);
+            opener.pump().await;
+            tells(
+                &opener.agent(Some(0)),
+                [AgentEvent::ToolCall {
+                    id: "create".to_owned(),
+                    title: Some("git push -u origin b && gh pr create --draft --fill".to_owned()),
+                    command: true,
+                    content: Some(vec![cox_core::entry::Content::Text(
+                        "https://github.com/tennashi/cox/pull/423\n".to_owned(),
+                    )]),
+                    result: Some(ToolCallResult::Completed),
+                }],
+            );
+            opener.ends(0, "Opened the pull request.");
+            tells(
+                &opener.agent(None),
+                [AgentEvent::TurnEnded(cox_acp::StopReason::EndTurn)],
+            );
+            opener.pump().await;
+            assert_eq!(opener.prompts().len(), 2, "the line, then the report");
+            tells(
+                &opener.agent(None),
+                [AgentEvent::TurnEnded(cox_acp::StopReason::EndTurn)],
+            );
+            opener.pump().await;
+
+            let pull = Pull {
+                repo: "tennashi/cox".to_owned(),
+                number: 423,
+            };
+            let now = Instant::now();
+            assert_eq!(opener.daemon.due_pulls(now), std::slice::from_ref(&pull));
+            assert_eq!(opener.daemon.due_pulls(now), [], "read once at a time");
+            let status = |state| Status {
+                title: "Ship it".to_owned(),
+                state: PullState::Draft,
+                head: "a".to_owned(),
+                checks: vec![Check {
+                    name: "ci (macos-latest)".to_owned(),
+                    state,
+                    link: None,
+                }],
+            };
+            for state in [CheckState::Pending, CheckState::Failed, CheckState::Failed] {
+                opener.daemon.pulled(&pull, Ok(status(state)), now);
+                opener.pump().await;
+            }
+
+            let mut news = Vec::new();
+            while let Ok(message) = told.try_recv() {
+                if let FromDaemon::News { key, body, .. } = message {
+                    news.push((key, body));
+                }
+            }
+            let ship = opener.subagents[0];
+            let ci: Vec<_> = news
+                .iter()
+                .filter(|(_, body)| body.starts_with("CI"))
+                .collect();
+            assert_eq!(ci, [&(ship, "CI failed on #423 Ship it".to_owned())]);
+            let row = |opener: &Opener| {
+                let slot = opener.daemon.slot(ship).unwrap();
+                opener.daemon.pull_rows(&slot.pulls)
+            };
+            assert_eq!(row(&opener)[0].unseen, Some(CheckState::Failed));
+            assert!(!row(&opener)[0].waits_on_ci());
+            let prompts = opener.prompts();
+            assert_eq!(prompts.len(), 1, "{prompts:?}");
+            assert!(
+                prompts[0].contains(
+                    "CI failed on the pull request it opened, \
+                     https://github.com/tennashi/cox/pull/423 (\"Ship it\"). Failed: ci (macos-latest)."
+                ),
+                "{}",
+                prompts[0]
+            );
+
+            opener.daemon.act(ToDaemon::Shown { key: Some(ship) });
+            assert_eq!(row(&opener)[0].unseen, None, "seen");
         });
     }
 }

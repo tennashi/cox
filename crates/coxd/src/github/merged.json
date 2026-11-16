@@ -1,0 +1,28 @@
+{
+ "headRefOid": "cbe63e7a5f0b32e667f6f4143c8ea6d541ea1657",
+ "isDraft": false,
+ "state": "MERGED",
+ "statusCheckRollup": [
+  {
+   "__typename": "CheckRun",
+   "completedAt": "2026-11-16T14:14:36Z",
+   "conclusion": "SUCCESS",
+   "detailsUrl": "https://github.com/tennashi/cox/actions/runs/43882937319/job/133353330515",
+   "name": "ci (ubuntu-latest)",
+   "startedAt": "2026-11-16T14:10:19Z",
+   "status": "COMPLETED",
+   "workflowName": "CI"
+  },
+  {
+   "__typename": "CheckRun",
+   "completedAt": "2026-11-16T14:17:14Z",
+   "conclusion": "SUCCESS",
+   "detailsUrl": "https://github.com/tennashi/cox/actions/runs/43882937319/job/133353330188",
+   "name": "ci (macos-latest)",
+   "startedAt": "2026-11-16T14:10:19Z",
+   "status": "COMPLETED",
+   "workflowName": "CI"
+  }
+ ],
+ "title": "feat(coxd): name subagent chats by their title in the subagent tools"
+}
