@@ -230,7 +230,8 @@ pub struct KeptAnswer {
     pub project: Option<PathBuf>,
     /// The folder the chat works in, when it is not its project's.
     pub folder: Option<PathBuf>,
-    /// When it was asked, in milliseconds since the epoch.
+    /// When it was answered, or asked where an older Cox kept no time of
+    /// the answer, in milliseconds since the epoch.
     pub at: i64,
     /// The [`Entry::Question`], with its answer.
     pub entry: Entry,
@@ -726,7 +727,7 @@ impl Store {
     }
 
     /// The questions agents asked in any chat that the human answered,
-    /// the last asked first, each with the chat it was asked in. A
+    /// the last answered first, each with the chat it was asked in. A
     /// question declined, or still asked, is not one of them.
     ///
     /// # Errors
@@ -760,23 +761,23 @@ impl Store {
             let Ok(entry) = serde_json::from_str::<Entry>(&entry) else {
                 continue;
             };
-            if matches!(
-                entry,
-                Entry::Question {
-                    answer: Some(QuestionAnswer::Given(_)),
-                    ..
-                }
-            ) {
+            if let Entry::Question {
+                answer: Some(QuestionAnswer::Given(_)),
+                answered_at,
+                ..
+            } = entry
+            {
                 answered.push(KeptAnswer {
                     chat,
                     name,
                     project: project.map(PathBuf::from),
                     folder: folder.map(PathBuf::from),
-                    at,
+                    at: answered_at.unwrap_or(at),
                     entry,
                 });
             }
         }
+        answered.sort_by_key(|kept| std::cmp::Reverse(kept.at));
         Ok(answered)
     }
 
@@ -1273,7 +1274,7 @@ mod tests {
     }
 
     #[test]
-    fn reads_the_questions_the_human_answered_the_last_asked_first() {
+    fn reads_the_questions_the_human_answered_the_last_answered_first() {
         use crate::entry::{Picked, Question, QuestionOption};
 
         let scratch = scratch();
@@ -1282,7 +1283,7 @@ mod tests {
         let app = store.project(Path::new("/src/app"), "app").unwrap();
         let first = store.add_chat(Some(app), "plan").unwrap();
         let second = store.add_chat(None, "home").unwrap();
-        let question = |answer| Entry::Question {
+        let question = |answer, answered_at| Entry::Question {
             message: "Which way?".to_owned(),
             questions: vec![Question {
                 options: vec![QuestionOption {
@@ -1292,6 +1293,7 @@ mod tests {
                 ..Question::default()
             }],
             answer,
+            answered_at,
         };
         let given = || {
             Some(QuestionAnswer::Given(vec![Picked {
@@ -1302,12 +1304,22 @@ mod tests {
         store
             .keep_entry(first, 0, &Entry::Human("plan it".to_owned()))
             .unwrap();
-        store.keep_entry(first, 1, &question(given())).unwrap();
+        // The first chat's question was asked first and answered last;
+        // the second's answer was kept by a Cox that kept no time of it.
         store
-            .keep_entry(first, 2, &question(Some(QuestionAnswer::Declined)))
+            .keep_entry(first, 1, &question(given(), Some(1000)))
             .unwrap();
-        store.keep_entry(first, 3, &question(None)).unwrap();
-        store.keep_entry(second, 0, &question(given())).unwrap();
+        store
+            .keep_entry(
+                first,
+                2,
+                &question(Some(QuestionAnswer::Declined), Some(1001)),
+            )
+            .unwrap();
+        store.keep_entry(first, 3, &question(None, None)).unwrap();
+        store
+            .keep_entry(second, 0, &question(given(), None))
+            .unwrap();
         store
             .keep_folder(second, Some(Path::new("/elsewhere")))
             .unwrap();
@@ -1326,17 +1338,24 @@ mod tests {
                     kept.name.as_str(),
                     kept.project.clone(),
                     kept.folder.clone(),
+                    kept.at,
                 )
             })
             .collect();
         assert_eq!(
             read,
             [
-                (second, "home", None, Some(PathBuf::from("/elsewhere"))),
-                (first, "plan", Some(PathBuf::from("/src/app")), None),
+                (first, "plan", Some(PathBuf::from("/src/app")), None, 1000),
+                (
+                    second,
+                    "home",
+                    None,
+                    Some(PathBuf::from("/elsewhere")),
+                    second.0 * 10
+                ),
             ]
         );
-        assert_eq!(answered[1].entry, question(given()));
+        assert_eq!(answered[0].entry, question(given(), Some(1000)));
         assert!(Store::read(&scratch.path().join("none.sqlite")).is_err());
     }
 

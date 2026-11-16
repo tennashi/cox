@@ -130,6 +130,7 @@ pub fn asked(entries: &[Entry]) -> Option<String> {
         message,
         questions,
         answer: None,
+        ..
     }) = entries
         .iter()
         .rev()
@@ -495,6 +496,7 @@ mod tests {
                 ..Question::default()
             }],
             answer,
+            answered_at: None,
         };
         let entries = vec![
             call("1", "ls", "", Some(ToolCallResult::Completed)),
@@ -552,6 +554,7 @@ mod tests {
                 message: "Please answer the following questions.".to_owned(),
                 questions: both,
                 answer: None,
+                answered_at: None,
             }])
             .as_deref(),
             Some("Approach · Add")

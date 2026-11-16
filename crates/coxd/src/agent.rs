@@ -1295,6 +1295,26 @@ fn decided(policy: &Policy, request: &cox_acp::PermissionRequest) -> Option<usiz
 /// characters: past it, the start is left out.
 const RETOLD_LENGTH: usize = 100_000;
 
+/// How the agent is told of the permission it asked for `title`, with
+/// the option `chosen` of `options`, by the human or as the chat is set
+/// up, as `by_setup` says.
+fn told_of_permission(
+    title: &str,
+    options: &[String],
+    chosen: Option<usize>,
+    by_setup: bool,
+) -> String {
+    let chosen = chosen
+        .and_then(|chosen| options.get(chosen))
+        .map_or("nothing", String::as_str);
+    let who = if by_setup {
+        "Cox, as the chat is set up,"
+    } else {
+        "the human"
+    };
+    format!("[you asked permission for: {title}; {who} chose: {chosen}]")
+}
+
 /// What the agent is told of the questions it asked the human, saying
 /// `message`, and how they answered, if they did.
 fn told_of_question(
@@ -1424,23 +1444,12 @@ fn said(entries: &[Entry]) -> Option<(String, bool)> {
                 chosen,
                 by_setup,
                 ..
-            } => {
-                let chosen = chosen
-                    .and_then(|chosen| options.get(chosen))
-                    .map_or("nothing", String::as_str);
-                let who = if *by_setup {
-                    "Cox, as the chat is set up,"
-                } else {
-                    "the human"
-                };
-                Some(format!(
-                    "[you asked permission for: {title}; {who} chose: {chosen}]"
-                ))
-            }
+            } => Some(told_of_permission(title, options, *chosen, *by_setup)),
             Entry::Question {
                 message,
                 questions,
                 answer,
+                ..
             } => Some(told_of_question(message, questions, answer.as_ref())),
             Entry::Proposal(proposal) => Some(told_of_proposal(proposal)),
             Entry::Switched { from, to } => Some(format!(
@@ -1632,6 +1641,7 @@ mod tests {
                     chosen: vec![0],
                     other: Some("but slowly".to_owned()),
                 }])),
+                answered_at: Some(1),
             },
             Entry::Reply("Done".to_owned()),
             Entry::Proposal(Proposal {

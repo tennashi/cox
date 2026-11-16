@@ -1108,6 +1108,7 @@ impl Conversation {
         let Entry::Question {
             questions,
             answer: answered,
+            answered_at,
             ..
         } = &mut self.entries[at]
         else {
@@ -1124,6 +1125,10 @@ impl Conversation {
             }
         }
         *answered = Some(answer.clone());
+        *answered_at = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .ok()
+            .and_then(|since| i64::try_from(since.as_millis()).ok());
         self.changed.insert(at);
         self.state = self.before_asking;
         Some(Command::AnswerQuestion(answer))
@@ -1625,6 +1630,7 @@ impl Conversation {
                     message,
                     questions,
                     answer: None,
+                    answered_at: None,
                 });
                 self.wait_on_human();
             }
@@ -2724,11 +2730,19 @@ mod tests {
         }
     }
 
+    fn millis_now() -> i64 {
+        let since = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap();
+        i64::try_from(since.as_millis()).unwrap()
+    }
+
     #[test]
     fn a_question_waits_for_the_human_and_their_pick_goes_to_the_agent() {
         let mut conversation = Conversation::new();
         conversation.submit("ask me");
         conversation.apply(asks(false));
+        let asked = millis_now();
         assert_eq!(conversation.state(), State::Asking);
         assert_eq!(conversation.asked_at(), Some(1));
         assert_eq!(conversation.asking_for(), Some("Language"));
@@ -2745,10 +2759,17 @@ mod tests {
         );
         assert_eq!(conversation.state(), State::Busy);
         assert_eq!(conversation.asked_at(), None);
-        assert!(matches!(
-            &conversation.entries()[1],
-            Entry::Question { answer: Some(answer), .. } if *answer == picked
-        ));
+        // When it was answered is kept with it, for what was decided.
+        let Entry::Question {
+            answer: Some(answer),
+            answered_at: Some(at),
+            ..
+        } = &conversation.entries()[1]
+        else {
+            panic!("an answered question");
+        };
+        assert_eq!(*answer, picked);
+        assert!((asked..=millis_now()).contains(at));
         // Answered, it is answered for good.
         assert_eq!(conversation.answer_question(QuestionAnswer::Declined), None);
     }
