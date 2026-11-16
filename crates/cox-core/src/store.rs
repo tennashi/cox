@@ -15,14 +15,14 @@ use std::time::{Duration, SystemTime};
 use anyhow::{Context as _, bail};
 use rusqlite::{Connection, OptionalExtension as _, params};
 
-use crate::entry::{Entry, QuestionAnswer};
+use crate::entry::{Entry, QuestionAnswer, Step};
 use crate::goal::Goal;
 use crate::moved::Moved;
 use crate::settings::Setting;
 use crate::tabs::KeptTabs;
 
 /// The version of the tables below, as `SQLite`'s `user_version` holds it.
-const VERSION: i64 = 17;
+const VERSION: i64 = 18;
 
 const TABLES: &str = "
 CREATE TABLE projects (
@@ -90,6 +90,9 @@ CREATE TABLE entries (
     entry TEXT NOT NULL,
     PRIMARY KEY (chat, number)
 ) WITHOUT ROWID;
+-- The plans the agents sent, which the Activity page reads the last of
+-- each chat's of every two seconds.
+CREATE INDEX plans ON entries (chat, number) WHERE entry LIKE '{\"plan\":%';
 CREATE TABLE choices (
     -- The id of the agent whose session has the setting.
     agent TEXT NOT NULL,
@@ -148,6 +151,7 @@ const UPGRADES: &[&str] = &[
     "ALTER TABLE projects ADD COLUMN about TEXT;",
     "ALTER TABLE chats ADD COLUMN commands TEXT;",
     "ALTER TABLE chats ADD COLUMN subagents TEXT;",
+    "CREATE INDEX plans ON entries (chat, number) WHERE entry LIKE '{\"plan\":%';",
 ];
 
 /// How long a write waits for another Cox writing the same database.
@@ -988,6 +992,35 @@ impl Store {
         Ok(())
     }
 
+    /// The plan each chat's agent sent last, by the chat, for the chats
+    /// whose agent sent one.
+    ///
+    /// # Errors
+    ///
+    /// When the database cannot be read.
+    pub fn plans(&self) -> anyhow::Result<Vec<(ChatId, Vec<Step>)>> {
+        // The WHERE is the plans index's, word for word, for SQLite to
+        // read that index rather than every entry.
+        let mut statement = self.connection.prepare(
+            r#"SELECT entries.chat, entries.entry FROM entries JOIN
+             (SELECT chat, max(number) AS number FROM entries
+              WHERE entry LIKE '{"plan":%' GROUP BY chat) AS last
+             ON entries.chat = last.chat AND entries.number = last.number
+             ORDER BY entries.chat"#,
+        )?;
+        let rows = statement.query_map([], |row| {
+            Ok((ChatId(row.get(0)?), row.get::<_, String>(1)?))
+        })?;
+        let mut plans = Vec::new();
+        for row in rows {
+            let (chat, entry) = row?;
+            if let Ok(Entry::Plan(steps)) = serde_json::from_str(&entry) {
+                plans.push((chat, steps));
+            }
+        }
+        Ok(plans)
+    }
+
     /// The steps of the plan `chat`'s agent first sent after the human's
     /// last line, once it sent one.
     ///
@@ -1650,6 +1683,48 @@ mod tests {
 
         store.keep_subagents(chat, "chats").unwrap();
         assert_eq!(store.subagents(chat).unwrap().as_deref(), Some("chats"));
+    }
+
+    #[test]
+    fn reads_the_last_plan_of_each_chat_through_the_plans_index() {
+        let store = Store::in_memory().unwrap();
+        let planned = store.add_chat(None, "Chat 1").unwrap();
+        let quiet = store.add_chat(None, "Chat 2").unwrap();
+        let step = |text: &str, state| Step {
+            text: text.to_owned(),
+            state,
+        };
+        let first = vec![step("Read", StepState::Completed)];
+        let last = vec![
+            step("Read", StepState::Completed),
+            step("Fix", StepState::InProgress),
+        ];
+        let entries = [
+            Entry::Human("plan it".to_owned()),
+            Entry::Plan(first),
+            Entry::Reply("done".to_owned()),
+            Entry::Human("again".to_owned()),
+            Entry::Plan(last.clone()),
+            Entry::Reply("on it".to_owned()),
+        ];
+        for (number, entry) in entries.iter().enumerate() {
+            store.keep_entry(planned, number, entry).unwrap();
+        }
+        store
+            .keep_entry(quiet, 0, &Entry::Human("hi".to_owned()))
+            .unwrap();
+
+        assert_eq!(store.plans().unwrap(), [(planned, last)]);
+        let plan: String = store
+            .connection
+            .query_row(
+                r#"EXPLAIN QUERY PLAN SELECT chat, max(number) FROM entries
+                 WHERE entry LIKE '{"plan":%' GROUP BY chat"#,
+                [],
+                |row| row.get(3),
+            )
+            .unwrap();
+        assert!(plan.contains("plans"), "read by the index: {plan}");
     }
 
     #[test]
