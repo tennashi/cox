@@ -323,6 +323,9 @@ pub struct Waited {
     pub unoffered: Option<String>,
     /// What its agent runs in the background, though its turn ended.
     pub background: Vec<crate::daemon::wire::Background>,
+    /// How CI ended on the pull requests it opened, since the agent that
+    /// opened it last heard how it stands, a line for each.
+    pub ci: Vec<String>,
 }
 
 impl Waited {
@@ -339,6 +342,17 @@ impl Waited {
                 crate::daemon::wire::told(&self.background)
             )
         })
+    }
+
+    /// `told`, followed by how CI ended on the pull requests it opened, if
+    /// it ended on any.
+    #[must_use]
+    pub fn with_ci(&self, mut told: String) -> String {
+        if !self.ci.is_empty() {
+            told.push_str("\n\n");
+            told.push_str(&self.ci.join("\n"));
+        }
+        told
     }
 }
 

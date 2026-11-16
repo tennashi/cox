@@ -4,7 +4,8 @@
 //! learned in their wiki (see [`crate::wiki`]), and to merge what it made,
 //! and as it asks an agent to draw a project's icon (see
 //! [`crate::project_icon`]), and as it tells an agent the reports of the
-//! subagents it ran and did not wait for. Each is the human's to say,
+//! subagents it ran and did not wait for, and that CI ended on a pull
+//! request it opened. Each is the human's to say,
 //! since how they work with sketches is theirs: a file of their workflow's folder (see
 //! [`crate::settings::workflow`]), as `sketch/start.md`, or else Cox's own,
 //! in `workflow/` beside this file. A file says where Cox puts what it
@@ -114,6 +115,15 @@ pub const SUBAGENT_CI: Text = Text {
     own: include_str!("workflow/subagent/ci.md"),
 };
 
+/// What the agent of a chat the human opened is told, in a line of its
+/// own, once CI ended on a pull request it opened: its `{number}`,
+/// `{title}` and `{url}`, how CI ended, as its `{outcome}`, and the checks
+/// that `{failed}`, with their links, if any.
+pub const CI_ENDED: Text = Text {
+    name: "ci/ended.md",
+    own: include_str!("workflow/ci/ended.md"),
+};
+
 /// A subagent's report, in [`SUBAGENT_REPORTS`], as it waits for the human
 /// to answer what it `{asking}`, beside what [`SUBAGENT_ENDED`] says.
 pub const SUBAGENT_ASKS: Text = Text {
@@ -126,7 +136,7 @@ pub const SUBAGENT_ASKS: Text = Text {
 pub const REPORT_LENGTH: usize = 2000;
 
 /// The texts Cox has of its own, by where the human keeps theirs.
-const OWN: [&Text; 12] = [
+const OWN: [&Text; 13] = [
     &SKETCH_START,
     &SKETCH_OPENED,
     &SKETCH_DISCARD,
@@ -139,13 +149,15 @@ const OWN: [&Text; 12] = [
     &SUBAGENT_SETTLED,
     &SUBAGENT_ASKS,
     &SUBAGENT_CI,
+    &CI_ENDED,
 ];
 
 /// The report of the subagent in the chat `number`, named `name`, that
 /// stands as `stands`, as [`SUBAGENT_REPORTS`] holds it: what it last said
 /// cut to [`REPORT_LENGTH`], and what it runs in the background, if
 /// anything runs, or, as `settled` says, that what the agent was told ran
-/// there ended.
+/// there ended; then how CI ended on the pull requests it opened, if it
+/// ended on any.
 #[must_use]
 pub fn subagent_report(number: u64, name: &str, stands: &Waited, settled: bool) -> String {
     let said = match stands.said.as_deref() {
@@ -158,7 +170,7 @@ pub fn subagent_report(number: u64, name: &str, stands: &Waited, settled: bool) 
     let number = number.to_string();
     let mut values = vec![("number", number.as_str()), ("name", name), ("said", &said)];
     let background = crate::daemon::wire::told(&stands.background);
-    match stands.asking.as_deref() {
+    let report = match stands.asking.as_deref() {
         Some(asking) => {
             values.push(("asking", asking));
             SUBAGENT_ASKS.say(&values)
@@ -169,7 +181,8 @@ pub fn subagent_report(number: u64, name: &str, stands: &Waited, settled: bool) 
         }
         None if settled => SUBAGENT_SETTLED.say(&values),
         None => SUBAGENT_ENDED.say(&values),
-    }
+    };
+    stands.with_ci(report)
 }
 
 /// The text the human keeps as `name` in their workflow, or else Cox's

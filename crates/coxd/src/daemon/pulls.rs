@@ -1,14 +1,14 @@
 //! The pull requests the daemon's chats' agents opened, read now and
 //! then with `gh` (see [`crate::github`]), for the window to show each
 //! chat's, and to tell the human, and the agent that opened the chat,
-//! once CI ends.
+//! or, in a chat of the human's, its own agent, once CI ends.
 
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use tokio::sync::mpsc::UnboundedSender;
 
-use super::{Daemon, FromDaemon, Internal, Whose};
+use super::{Daemon, FromDaemon, Hears, Internal, Whose};
 use crate::daemon::wire::PullRow;
 use crate::github::{self, CheckState, Problem, Pull, Status};
 use crate::workflow;
@@ -47,8 +47,10 @@ pub(super) struct Pulls {
     /// How CI ended on each whose CI ended while the human did not look at
     /// the chat.
     unseen: Vec<(Pull, CheckState)>,
-    /// What the agent that opened the chat is to hear with its next
-    /// report, of CI that ended.
+    /// What is to be told of CI that ended: to the agent that opened the
+    /// chat, with its next report, or, in a chat of the human's, to its own
+    /// agent, in a line of its own once its turn is not running (see
+    /// [`Daemon::tell_ci`]).
     pub(super) told: Vec<String>,
 }
 
@@ -151,7 +153,8 @@ impl Daemon {
 
     /// Tells of the CI of `pull`, titled `title`, which ended as `ended`:
     /// the human, of each chat that opened it, unless they look at it, and
-    /// the agent that opened a chat that is a subagent's.
+    /// the agent that opened a chat that is a subagent's, or else the
+    /// chat's own agent.
     fn ci_ended(&mut self, pull: &Pull, title: &str, ended: CheckState) {
         let outcome = match ended {
             CheckState::Passed => "passed",
@@ -163,15 +166,31 @@ impl Daemon {
             .iter()
             .flat_map(|status| &status.checks)
             .filter(|check| check.state == CheckState::Failed)
-            .map(|check| check.name.clone())
+            .map(|check| match &check.link {
+                Some(link) => format!("{}, {link}", check.name),
+                None => check.name.clone(),
+            })
             .collect();
+        let failed = if failed.is_empty() {
+            String::new()
+        } else {
+            format!(" Failed: {}.", failed.join("; "))
+        };
+        let (url, number) = (pull.url(), pull.number.to_string());
+        let values = [
+            ("url", url.as_str()),
+            ("number", &number),
+            ("title", title),
+            ("outcome", outcome),
+            ("failed", &failed),
+        ];
         let shown = self.shown;
         let mut news = Vec::new();
         for slot in self.chats.iter_mut().chain(&mut self.archived) {
             if !slot.pulls.opened.contains(pull) {
                 continue;
             }
-            tracing::info!(pull = pull.url(), outcome, "CI ended");
+            tracing::info!(pull = url, outcome, "CI ended");
             if shown != Some(slot.key) {
                 slot.pulls.unseen.retain(|(unseen, _)| unseen != pull);
                 slot.pulls.unseen.push((pull.clone(), ended));
@@ -181,24 +200,48 @@ impl Daemon {
                 name: slot.name.clone(),
                 body: format!("CI {outcome} on #{} {title}", pull.number),
             });
-            if let Whose::Agent { report, .. } = &mut slot.whose {
-                let failed = if failed.is_empty() {
-                    String::new()
-                } else {
-                    format!(" Failed: {}.", failed.join(", "))
-                };
-                slot.pulls.told.push(workflow::SUBAGENT_CI.say(&[
-                    ("url", &pull.url()),
-                    ("title", title),
-                    ("outcome", outcome),
-                    ("failed", &failed),
-                ]));
-                report.ci_ended();
+            match &mut slot.whose {
+                Whose::Agent { report, .. } => {
+                    slot.pulls.told.push(workflow::SUBAGENT_CI.say(&values));
+                    report.ci_ended();
+                }
+                Whose::Human => slot.pulls.told.push(workflow::CI_ENDED.say(&values)),
             }
         }
         for message in news {
             self.tell_news(message);
         }
+    }
+
+    /// Tells the agent of each chat of the human's what it is to hear of
+    /// CI that ended (see [`Pulls::told`]), in a line of its own, once its
+    /// turn is not running, as [`Self::tell_reports`] tells reports; a
+    /// chat that never hears, as one archived or closed for good, hears
+    /// nothing of it. Answers whether it told any agent.
+    pub(super) fn tell_ci(&mut self) -> bool {
+        let keys: Vec<u64> = self
+            .chats
+            .iter()
+            .chain(&self.archived)
+            .filter(|slot| slot.whose == Whose::Human && !slot.pulls.told.is_empty())
+            .map(|slot| slot.key)
+            .collect();
+        let mut told = false;
+        for key in keys {
+            let line = match self.hears(key) {
+                Hears::Later => continue,
+                Hears::Now => self.slot(key).map(|slot| slot.pulls.told.join("\n\n")),
+                Hears::Never => None,
+            };
+            if let Some(slot) = self.slot_mut(key) {
+                slot.pulls.told.clear();
+            }
+            if let Some(line) = line {
+                self.go_on(key, &line);
+                told = true;
+            }
+        }
+        told
     }
 
     /// The pull requests of the chat whose pull requests `pulls` holds, as
