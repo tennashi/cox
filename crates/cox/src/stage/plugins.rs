@@ -45,9 +45,10 @@
 //!   its folder, as the human's are told, and whether the folder is the
 //!   home, which has none; and `cox://api/project-raw/<name>`, a source.
 //!
-//! - `cox://api/activity`: what goes on in the folder, what waits for
-//!   the human and what happened without them (see
-//!   [`crate::stage::activity`]).
+//! - `cox://api/activity`: what goes on in the folder, the human's
+//!   inbox: what is asked of them, what is at work and what each chat
+//!   there does now, what they decided when agents asked, and what
+//!   happened without them (see [`crate::stage::activity`]).
 //! - `cox://api/commands`: what the agents of the folder's chats run,
 //!   step by step, and what a command that ran long printed (see
 //!   [`crate::stage::commands`]).

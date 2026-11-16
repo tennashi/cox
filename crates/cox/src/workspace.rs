@@ -1407,6 +1407,9 @@ impl Workspace {
                     asking: chat.state == State::Asking,
                     unread: chat.unread,
                     goal: chat.goal.as_ref().map(Goal::input),
+                    working: matches!(chat.state, State::Busy | State::Checking | State::Stopping),
+                    parent: chat.parent,
+                    kept: chat.kept,
                 })
                 .collect(),
             projects: self
