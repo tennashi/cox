@@ -144,6 +144,22 @@
         color: var(--faint);
         margin-bottom: 2px;
       }
+      /* Hides a plan, or every plan not at work, as a word in the line
+         it sits in. */
+      .dismiss {
+        font: inherit;
+        letter-spacing: inherit;
+        text-transform: inherit;
+        color: var(--faint);
+        background: none;
+        border: 0;
+        padding: 0;
+        margin-left: 10px;
+        cursor: pointer;
+      }
+      .dismiss:hover {
+        color: var(--link);
+      }
       .plan .step {
         display: flex;
         align-items: baseline;

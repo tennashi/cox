@@ -24,7 +24,9 @@
 //! (see [`Store::answered`] and [`Store::plans`]), so they hold for chats
 //! the window never showed, and last as long as their conversations do:
 //! what was decided read again once a chat stops asking, as when the
-//! human answers, and once one goes, and the plans each time.
+//! human answers, and once one goes, and the plans each time. A plan the
+//! human dismissed from the page stays hidden until the chat's agent
+//! sends another (see [`dismiss`]).
 
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -302,6 +304,7 @@ pub fn told(root: &Path, wiki: &Path, raw: &Path, triggers: &Value) -> Value {
         &decided(),
         &Plans {
             kept: &plans(),
+            dismissed: &Dismissed::read(),
             at: jiff::Timestamp::now().as_millisecond(),
         },
         &commands::now,
@@ -322,6 +325,78 @@ fn plans() -> Vec<KeptPlan> {
         tracing::warn!("the plans of the chats are not read: {error:#}");
         Vec::new()
     })
+}
+
+/// A plan the human dismissed from the Plans tier, as they saw it: its
+/// chat, the number of its entry there, and its steps, since the agent's
+/// updates in the same turn keep the number. Hidden until the chat's last
+/// plan is another.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+struct Dismissed {
+    chat: ChatId,
+    number: usize,
+    steps: Vec<Step>,
+}
+
+/// A plan the page asks to dismiss, by its chat and its entry's number.
+#[derive(Clone, Copy, Debug, serde::Deserialize)]
+struct Dismiss {
+    chat: ChatId,
+    plan: usize,
+}
+
+impl Dismissed {
+    /// Whether `plan` is the one dismissed.
+    fn hides(&self, plan: &KeptPlan) -> bool {
+        self.chat == plan.chat && self.number == plan.number && self.steps == plan.steps
+    }
+
+    /// The plans dismissed, as kept, or none when nothing is kept.
+    fn read() -> Vec<Self> {
+        coxd::storage::path(coxd::storage::Kept::DismissedPlans)
+            .and_then(|path| std::fs::read(path).ok())
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+            .unwrap_or_default()
+    }
+
+    /// Those of `was` that still hide a plan of `kept`, and those of
+    /// `kept` that `asked` names, as the page saw them.
+    fn now(was: Vec<Self>, asked: &[Dismiss], kept: &[KeptPlan]) -> Vec<Self> {
+        let mut now: Vec<Self> = was
+            .into_iter()
+            .filter(|dismissed| kept.iter().any(|plan| dismissed.hides(plan)))
+            .collect();
+        for plan in kept {
+            if asked
+                .iter()
+                .any(|asked| asked.chat == plan.chat && asked.plan == plan.number)
+                && !now.iter().any(|dismissed| dismissed.hides(plan))
+            {
+                now.push(Self {
+                    chat: plan.chat,
+                    number: plan.number,
+                    steps: plan.steps.clone(),
+                });
+            }
+        }
+        now
+    }
+}
+
+/// Dismisses the plans `asked`, as the JSON list of [`Dismiss`] the page
+/// sent says, for them to be hidden, across restarts too, until each
+/// chat's agent sends another.
+pub fn dismiss(asked: &str) {
+    let Ok(asked) = serde_json::from_str::<Vec<Dismiss>>(asked) else {
+        return;
+    };
+    let Some(path) = coxd::storage::path(coxd::storage::Kept::DismissedPlans) else {
+        return;
+    };
+    let now = Dismissed::now(Dismissed::read(), &asked, &plans());
+    if let Err(error) = coxd::storage::write_json(&path, &now) {
+        tracing::warn!("the plans dismissed are not kept: {error}");
+    }
 }
 
 /// How alike a step of a plan must be to a subagent's chat, by its name,
@@ -381,11 +456,20 @@ fn linked(plan: &[Step], subagents: &[&Chat]) -> Vec<Option<usize>> {
         .collect()
 }
 
-/// The plans each chat's agent sent last, and when, in milliseconds
-/// since the epoch, they are told.
+/// The plans each chat's agent sent last, those the human dismissed,
+/// and when, in milliseconds since the epoch, they are told.
 struct Plans<'a> {
     kept: &'a [KeptPlan],
+    dismissed: &'a [Dismissed],
     at: i64,
+}
+
+impl Plans<'_> {
+    /// The plan `chat`'s agent sent last, unless the human dismissed it.
+    fn of(&self, chat: &Chat) -> Option<&KeptPlan> {
+        let plan = self.kept.iter().find(|plan| Some(plan.chat) == chat.kept)?;
+        (!self.dismissed.iter().any(|dismissed| dismissed.hides(plan))).then_some(plan)
+    }
 }
 
 /// Where what happened in a folder is read from: the human's wiki, their
@@ -447,13 +531,9 @@ fn planned(
     plans: &Plans<'_>,
     now: &dyn Fn(u64) -> Option<commands::Now>,
 ) -> Vec<Value> {
-    let plan_of = |chat: &Chat| {
-        chat.kept
-            .and_then(|kept| plans.kept.iter().find(|plan| plan.chat == kept))
-    };
     let shown = |chat: &Chat| {
         chat.working
-            || plan_of(chat).is_some_and(|plan| {
+            || plans.of(chat).is_some_and(|plan| {
                 !plan.steps.is_empty()
                     && (plan
                         .steps
@@ -486,7 +566,8 @@ fn planned(
             .then(|| now(chat.key))
             .flatten()
             .unwrap_or_default();
-        let steps = plan_of(chat).map_or(&[][..], |plan| plan.steps.as_slice());
+        let plan = plans.of(chat);
+        let steps = plan.map_or(&[][..], |plan| plan.steps.as_slice());
         let subagents: Vec<&Chat> = told
             .chats
             .iter()
@@ -525,6 +606,11 @@ fn planned(
                 })
                 .collect::<Vec<_>>(),
             "plan": steps_of(steps, &subagents, &links, now),
+            // Only a plan that keeps a chat listed on its own is
+            // dismissed: one at work shows anyway.
+            "dismiss": plan
+                .filter(|_| !chat.working && !steps.is_empty())
+                .map(|plan| json!({ "chat": plan.chat, "plan": plan.number })),
         }));
         under.extend(
             subagents
@@ -760,6 +846,24 @@ mod tests {
     use super::*;
     use coxd::testing::TempDir;
 
+    const NO_PLANS: Plans<'static> = Plans {
+        kept: &[],
+        dismissed: &[],
+        at: 0,
+    };
+
+    /// The chat coxd keeps by `number`.
+    fn kept(number: u64) -> ChatId {
+        serde_json::from_value(json!(number)).unwrap()
+    }
+
+    fn step(text: &str, state: StepState) -> Step {
+        Step {
+            text: text.to_owned(),
+            state,
+        }
+    }
+
     fn chat(key: u64, cwd: &Path, project: &Path, asking: bool, unread: bool) -> Chat {
         Chat {
             key,
@@ -785,14 +889,7 @@ mod tests {
             raw,
             triggers,
         };
-        told_of(
-            told,
-            root,
-            &[],
-            &Plans { kept: &[], at: 0 },
-            &|_| None,
-            &places,
-        )
+        told_of(told, root, &[], &NO_PLANS, &|_| None, &places)
     }
 
     /// What goes on in the folder `root`, where nothing happened.
@@ -914,7 +1011,6 @@ mod tests {
         let root = TempDir::new();
         let other = root.join("other");
         let home = root.join("home");
-        let kept = |number: i64| -> ChatId { serde_json::from_value(json!(number)).unwrap() };
         let mut asking = chat(1, &root, &root, true, false);
         asking.kept = Some(kept(1));
         let mut parent = chat(2, &root, &root, false, false);
@@ -941,7 +1037,7 @@ mod tests {
             ],
             home: home.clone(),
         };
-        let decided = |chat: i64, project: &Path, question: &str| Decided {
+        let decided = |chat: u64, project: &Path, question: &str| Decided {
             chat: kept(chat),
             name: format!("kept {chat}"),
             project: Some(project.to_owned()),
@@ -971,14 +1067,7 @@ mod tests {
             triggers: &json!({}),
         };
 
-        let json = told_of(
-            &told,
-            &root,
-            &decisions,
-            &Plans { kept: &[], at: 0 },
-            &now,
-            &places,
-        );
+        let json = told_of(&told, &root, &decisions, &NO_PLANS, &now, &places);
 
         assert_eq!(json["waiting"][0]["asks"], "Which way?");
         let working: Vec<(u64, u64)> = json["plans"]
@@ -1013,14 +1102,7 @@ mod tests {
         assert_eq!(decided[1]["chat"], "kept 6");
 
         // The home tells of every folder.
-        let json = told_of(
-            &told,
-            &home,
-            &decisions,
-            &Plans { kept: &[], at: 0 },
-            &now,
-            &places,
-        );
+        let json = told_of(&told, &home, &decisions, &NO_PLANS, &now, &places);
         assert_eq!(json["plans"].as_array().unwrap().len(), 4);
         assert_eq!(json["busy"], 4);
         let questions: Vec<&str> = json["decided"]
@@ -1036,7 +1118,6 @@ mod tests {
     #[test]
     fn a_chat_shows_its_plan_while_at_work_not_done_or_done_lately() {
         let root = TempDir::new();
-        let kept = |number: u64| -> ChatId { serde_json::from_value(json!(number)).unwrap() };
         let listed = |key: u64, name: &str, working: bool, parent: Option<u64>| {
             let mut listed = chat(key, &root, &root, false, false);
             listed.name = name.to_owned();
@@ -1044,10 +1125,6 @@ mod tests {
             listed.parent = parent;
             listed.kept = Some(kept(key));
             listed
-        };
-        let step = |text: &str, state| Step {
-            text: text.to_owned(),
-            state,
         };
         let mut unseen = listed(6, "unseen", false, None);
         unseen.unread = true;
@@ -1072,6 +1149,7 @@ mod tests {
         let at = 100 * DONE_SHOWS;
         let plan = |chat: u64, steps: Vec<Step>, ago: i64| KeptPlan {
             chat: kept(chat),
+            number: 1,
             steps,
             at: at - ago,
         };
@@ -1095,6 +1173,7 @@ mod tests {
         let plans = Plans {
             kept: &kept_plans,
             at,
+            ..NO_PLANS
         };
         let now = |key: u64| {
             Some(commands::Now {
@@ -1144,6 +1223,99 @@ mod tests {
         assert_eq!(json["plans"][3]["waits"], "waits");
         // Only the chats at work count as at work.
         assert_eq!(json["busy"], 3);
+    }
+
+    #[test]
+    fn a_dismissed_plan_stays_hidden_across_restarts_until_another_comes() {
+        let root = TempDir::new();
+        coxd::storage::keep_on_this_thread(Some(root.join("data")));
+        let store = Store::open(&coxd::storage::path(coxd::storage::Kept::Chats).unwrap()).unwrap();
+        let half_done = vec![
+            step("Read", StepState::Completed),
+            step("Fix", StepState::InProgress),
+        ];
+        let stale = store.add_chat(None, "stale").unwrap();
+        let other = store.add_chat(None, "other").unwrap();
+        let busy = store.add_chat(None, "busy").unwrap();
+        for chat in [stale, other, busy] {
+            store
+                .keep_entry(chat, 0, &Entry::Human("plan it".to_owned()))
+                .unwrap();
+            store
+                .keep_entry(chat, 1, &Entry::Plan(half_done.clone()))
+                .unwrap();
+        }
+        let listed = |key: u64, kept: ChatId, working: bool| {
+            let mut listed = chat(key, &root, &root, false, false);
+            listed.kept = Some(kept);
+            listed.working = working;
+            listed
+        };
+        let told = Told {
+            chats: vec![
+                listed(1, stale, false),
+                listed(2, other, false),
+                listed(3, busy, true),
+            ],
+            projects: Vec::new(),
+            home: root.join("home"),
+        };
+        // What the page is told after a restart: the plans and those
+        // dismissed read again from where they are kept.
+        let page = || {
+            told_of(
+                &told,
+                &root,
+                &[],
+                &Plans {
+                    kept: &plans(),
+                    dismissed: &Dismissed::read(),
+                    at: 0,
+                },
+                &|_| None,
+                &Places {
+                    wiki: &root.join("wiki"),
+                    raw: &root.join("raw"),
+                    triggers: &json!({}),
+                },
+            )
+        };
+        let rows = || -> Vec<u64> {
+            page()["plans"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|chat| chat["key"].as_u64().unwrap())
+                .collect()
+        };
+        // As the page's button asks, with what it was told of the first.
+        let dismiss_first = || dismiss(&json!([page()["plans"][0]["dismiss"]]).to_string());
+        assert_eq!(rows(), [1, 2, 3]);
+        assert_eq!(page()["plans"][2]["dismiss"], Value::Null, "at work");
+
+        dismiss_first();
+        assert_eq!(rows(), [2, 3], "dismissed, read again as after a restart");
+        assert_eq!(page()["busy"], 1);
+
+        // The agent's update to the plan in the same turn shows it again.
+        let updated = vec![
+            step("Read", StepState::Completed),
+            step("Fix", StepState::Completed),
+            step("Test", StepState::Pending),
+        ];
+        store
+            .keep_entry(stale, 1, &Entry::Plan(updated.clone()))
+            .unwrap();
+        assert_eq!(rows(), [1, 2, 3], "an update shows it again");
+        dismiss_first();
+        assert_eq!(rows(), [2, 3]);
+        // So does the same plan sent again in a later turn.
+        store
+            .keep_entry(stale, 2, &Entry::Human("again".to_owned()))
+            .unwrap();
+        store.keep_entry(stale, 3, &Entry::Plan(updated)).unwrap();
+        assert_eq!(rows(), [1, 2, 3], "a new plan shows again");
+        coxd::storage::keep_on_this_thread(None);
     }
 
     #[test]

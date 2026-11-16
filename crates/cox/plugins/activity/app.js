@@ -8,7 +8,8 @@
 // plan is not done, or done while the human did not look yet, each with
 // what it does now, or runs in the background, and the steps of its plan,
 // each with the subagents' chats that work on it, and the subagents no
-// step has under it.
+// step has under it. A plan of a chat not at work the human may dismiss,
+// one by one or all at once, until its agent sends another.
 // On the right, what was decided, the questions agents asked that the
 // human answered, each with what they chose and why, the last first. A
 // click on a chat shows it, by going to `cox://chat/<key>`. Below, what
@@ -27,10 +28,10 @@ let toldText = null;
 const esc = (s) =>
   String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 
-async function load() {
+async function load(url = API) {
   let text = null;
   try {
-    const answer = await fetch(API);
+    const answer = await fetch(url, { cache: "no-store" });
     text = answer.ok ? await answer.text() : null;
   } catch {
     text = null;
@@ -110,9 +111,14 @@ function plan(chat) {
     .join("");
   return (
     `<div class="plan" style="margin-left: ${chat.depth * 18 + 28}px">` +
-    `<div class="count">plan · ${done}/${chat.plan.length} done</div>${steps}</div>`
+    `<div class="count">plan · ${done}/${chat.plan.length} done${chat.dismiss ? dismiss([chat.dismiss], "dismiss", "hides this plan until the agent sends another") : ""}</div>${steps}</div>`
   );
 }
+
+/// A button that hides the plans `plans` name, as the page was told of
+/// them, until their agents send others.
+const dismiss = (plans, label, title) =>
+  `<button class="dismiss" data-dismiss="${esc(JSON.stringify(plans))}" title="${esc(title)}">${esc(label)}</button>`;
 
 function decided(decision) {
   const chat = decision.key != null
@@ -149,6 +155,7 @@ function draw() {
   const count = told.waiting.length;
   const busy = told.busy;
   const plans = told.plans.length;
+  const dismissable = told.plans.filter((chat) => chat.dismiss).map((chat) => chat.dismiss);
   const said = [
     count === 1 ? "1 chat waits for you" : count ? `${count} chats wait for you` : "nothing waits for you",
     busy === 1 ? "1 at work" : busy ? `${busy} at work` : "",
@@ -159,7 +166,8 @@ function draw() {
     `<div class="columns"><div>` +
     `<div class="tier">Asked of you${count ? `<b>${count}</b>` : ""}</div>` +
     `<div class="waiting">${count ? told.waiting.map(waiting).join("") : `<div class="none">Nothing ${here}is asked of you.</div>`}</div>` +
-    `<div class="tier">Plans${busy ? `<i title="chats at work">${busy}</i>` : ""}</div>` +
+    `<div class="tier">Plans${busy ? `<i title="chats at work">${busy}</i>` : ""}` +
+    `${dismissable.length > 1 ? dismiss(dismissable, `dismiss ${dismissable.length} not at work`, "hides each plan of a chat not at work until its agent sends another") : ""}</div>` +
     `<div class="waiting">${plans ? told.plans.map(working).join("") : `<div class="none">No chat ${here}is at work or has a plan to finish.</div>`}</div>` +
     `</div><div>` +
     `<div class="tier">Decided</div>` +
@@ -173,5 +181,12 @@ function draw() {
       : `<div class="none">Nothing yet: the schedules that run ${told.home ? "anywhere" : "here"}, the pages of the wiki written from ${told.home ? "any chat" : "here"}, and the sources kept ${here}show as they come.</div>`);
 }
 
+app.addEventListener("click", (event) => {
+  const button = event.target.closest("[data-dismiss]");
+  if (!button) return;
+  button.disabled = true;
+  load(`${API}/dismiss/${encodeURIComponent(button.dataset.dismiss)}`);
+});
+
 load();
-setInterval(load, EVERY);
+setInterval(() => load(), EVERY);

@@ -227,6 +227,9 @@ pub struct KeptChat {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct KeptPlan {
     pub chat: ChatId,
+    /// The number of the plan's entry in the chat, which the agent's
+    /// updates to it in the same turn keep.
+    pub number: usize,
     pub steps: Vec<Step>,
     /// When the last entry of the chat was written, in milliseconds
     /// since the epoch: about when the agent last did anything.
@@ -1012,7 +1015,7 @@ impl Store {
         // The WHERE is the plans index's, word for word, for SQLite to
         // read that index rather than every entry.
         let mut statement = self.connection.prepare(
-            r#"SELECT entries.chat, entries.entry,
+            r#"SELECT entries.chat, entries.number, entries.entry,
              (SELECT at FROM entries AS later WHERE later.chat = entries.chat
               ORDER BY later.number DESC LIMIT 1)
              FROM entries JOIN
@@ -1022,13 +1025,24 @@ impl Store {
              ORDER BY entries.chat"#,
         )?;
         let rows = statement.query_map([], |row| {
-            Ok((ChatId(row.get(0)?), row.get::<_, String>(1)?, row.get(2)?))
+            Ok((
+                ChatId(row.get(0)?),
+                row.get::<_, i64>(1)?,
+                row.get::<_, String>(2)?,
+                row.get(3)?,
+            ))
         })?;
         let mut plans = Vec::new();
         for row in rows {
-            let (chat, entry, at) = row?;
+            let (chat, number, entry, at) = row?;
             if let Ok(Entry::Plan(steps)) = serde_json::from_str(&entry) {
-                plans.push(KeptPlan { chat, steps, at });
+                let number = usize::try_from(number)?;
+                plans.push(KeptPlan {
+                    chat,
+                    number,
+                    steps,
+                    at,
+                });
             }
         }
         Ok(plans)
@@ -1729,7 +1743,10 @@ mod tests {
 
         let plans = store.plans().unwrap();
         assert_eq!(plans.len(), 1);
-        assert_eq!((plans[0].chat, &plans[0].steps), (planned, &last));
+        assert_eq!(
+            (plans[0].chat, plans[0].number, &plans[0].steps),
+            (planned, 4, &last)
+        );
         let plan: String = store
             .connection
             .query_row(
