@@ -212,6 +212,7 @@ impl Stage {
             let glyph = match plugin.name.as_str() {
                 ACTIVITY => Icon::Inbox,
                 MAP => Icon::Map,
+                "commands" => Icon::Terminal,
                 "wiki" => Icon::Book,
                 "triggers" => Icon::Bolt,
                 _ => Icon::Plug,

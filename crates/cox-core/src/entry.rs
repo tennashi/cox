@@ -72,6 +72,10 @@ pub enum Entry {
     ToolCall {
         id: String,
         title: String,
+        /// Whether the call runs a command, as the agent's terminal tool
+        /// does, whose title is then the command.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        command: bool,
         /// What the call shows, less what a permission request for it shows
         /// already.
         content: Vec<Content>,
@@ -559,24 +563,28 @@ mod tests {
             Entry::ToolCall {
                 id: "1".to_owned(),
                 title: "Edit".to_owned(),
+                command: false,
                 content: Vec::new(),
                 result: Some(ToolCallResult::Completed),
             },
             Entry::ToolCall {
                 id: "2".to_owned(),
                 title: "Edit".to_owned(),
+                command: false,
                 content: vec![diff("/work/b.rs"), diff("/work/a.rs")],
                 result: Some(ToolCallResult::Completed),
             },
             Entry::ToolCall {
                 id: "3".to_owned(),
                 title: "Edit".to_owned(),
+                command: false,
                 content: vec![diff("/work/failed.rs")],
                 result: Some(ToolCallResult::Failed),
             },
             Entry::ToolCall {
                 id: "4".to_owned(),
                 title: "Edit".to_owned(),
+                command: false,
                 content: vec![diff("/work/running.rs")],
                 result: None,
             },

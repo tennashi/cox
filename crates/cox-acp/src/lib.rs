@@ -1083,10 +1083,11 @@ impl Turn<'_> {
     /// and returns it as cancelled.
     fn drop_tool_call(&mut self) -> Option<ToolCall> {
         let id = self.tool_calls.keys().next()?.clone();
-        let title = self.tool_calls.remove(&id).and_then(|known| known.title);
+        let known = self.tool_calls.remove(&id).unwrap_or_default();
         Some(ToolCall {
             id: id.to_string(),
-            title,
+            title: known.title,
+            kind: known.kind,
             content: None,
             result: Some(ToolCallResult::Cancelled),
         })
@@ -1201,6 +1202,7 @@ fn follow_tool_call(
     status: Option<ToolCallStatus>,
 ) -> Option<ToolCall> {
     let title = told.title;
+    let kind = told.kind;
     let result = match status {
         Some(ToolCallStatus::Completed) => Some(ToolCallResult::Completed),
         Some(ToolCallStatus::Failed) => Some(ToolCallResult::Failed),
@@ -1208,18 +1210,19 @@ fn follow_tool_call(
     };
     let shown_id = id.to_string();
     if result.is_some() {
-        let known = tool_calls.remove(&id).and_then(|known| known.title);
+        let known = tool_calls.remove(&id).unwrap_or_default();
         return Some(ToolCall {
             id: shown_id,
-            title: title.or(known),
+            title: title.or(known.title),
+            kind: kind.or(known.kind),
             content,
             result,
         });
     }
     let started = !tool_calls.contains_key(&id);
     let known = tool_calls.entry(id).or_default();
-    if told.kind.is_some() {
-        known.kind = told.kind;
+    if kind.is_some() {
+        known.kind = kind;
     }
     if !told.locations.is_empty() {
         known.locations = told.locations;
@@ -1231,6 +1234,7 @@ fn follow_tool_call(
     (started || retitled || content.is_some()).then(|| ToolCall {
         id: shown_id,
         title: known.title.clone(),
+        kind: known.kind,
         content,
         result: None,
     })
@@ -1285,6 +1289,8 @@ pub struct ToolCall {
     pub id: String,
     /// The title the agent gave the call, if any.
     pub title: Option<String>,
+    /// What kind of call it is, as running a command, if the agent said.
+    pub kind: Option<ToolKind>,
     /// What the call shows from now on, in place of what it showed before,
     /// or `None` when that stays as it was.
     pub content: Option<Vec<ToolCallContent>>,
@@ -1617,6 +1623,40 @@ impl From<AcpStopReason> for StopReason {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_tool_call_keeps_its_kind_to_its_end() {
+        let mut tool_calls = HashMap::new();
+        let id = ToolCallId::new("call-1");
+        let told = |kind| Known {
+            title: None,
+            kind,
+            locations: Vec::new(),
+        };
+
+        let started = follow_tool_call(
+            &mut tool_calls,
+            id.clone(),
+            Known {
+                title: Some("cargo test".to_owned()),
+                ..told(Some(ToolKind::Execute))
+            },
+            None,
+            Some(ToolCallStatus::InProgress),
+        );
+        let ended = follow_tool_call(
+            &mut tool_calls,
+            id,
+            told(None),
+            None,
+            Some(ToolCallStatus::Completed),
+        );
+
+        assert_eq!(started.and_then(|call| call.kind), Some(ToolKind::Execute));
+        let ended = ended.expect("the end shows");
+        assert_eq!(ended.kind, Some(ToolKind::Execute));
+        assert_eq!(ended.title.as_deref(), Some("cargo test"));
+    }
 
     #[test]
     fn a_quote_goes_as_a_resource_to_an_agent_that_embeds() {

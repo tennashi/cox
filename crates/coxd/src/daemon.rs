@@ -3488,6 +3488,7 @@ mod tests {
         AgentEvent::ToolCall {
             id: id.to_owned(),
             title: Some("gh pr checks --watch".to_owned()),
+            command: false,
             content: None,
             result,
         }
