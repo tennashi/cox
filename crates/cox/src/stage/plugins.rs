@@ -48,7 +48,10 @@
 //! - `cox://api/activity`: what goes on in the folder, the human's
 //!   inbox: what is asked of them, what is at work and what each chat
 //!   there does now, what they decided when agents asked, and what
-//!   happened without them (see [`crate::stage::activity`]).
+//!   happened without them (see [`crate::stage::activity`]);
+//!   `cox://api/activity/dismiss/<plans>` hides the plans the JSON of
+//!   `<plans>` names until their chats' agents send others, and answers
+//!   what goes on then. Only a plugin's own `fetch` has them hidden.
 //! - `cox://api/commands`: what the agents of the folder's chats run,
 //!   step by step, and what a command that ran long printed (see
 //!   [`crate::stage::commands`]).
@@ -332,12 +335,7 @@ impl Plugins {
                 }
             }
             "commands" if rest.is_empty() => crate::stage::commands::told(&self.root),
-            "activity" if rest.is_empty() => crate::stage::activity::told(
-                &self.root,
-                &coxd::settings::wiki(),
-                &coxd::settings::raw(),
-                &self.triggers(),
-            ),
+            "activity" => self.activity(rest)?,
             "project-wiki" => {
                 let root = self.root.join(coxd::wiki::PROJECT_WIKI);
                 if rest.is_empty() {
@@ -383,6 +381,21 @@ impl Plugins {
             mime: "application/json".to_owned(),
             body: serde_json::to_vec(&json).ok()?,
         })
+    }
+
+    /// What goes on in the folder, as `cox://api/activity` tells it, once
+    /// the plans `cox://api/activity/<rest>` dismisses are, if it does.
+    fn activity(&self, rest: &str) -> Option<serde_json::Value> {
+        if !rest.is_empty() {
+            let asked = rest.strip_prefix("dismiss/")?;
+            crate::stage::activity::dismiss(&percent_decoded(asked));
+        }
+        Some(crate::stage::activity::told(
+            &self.root,
+            &coxd::settings::wiki(),
+            &coxd::settings::raw(),
+            &self.triggers(),
+        ))
     }
 
     /// What the card of a trigger asks of `cox://api/triggers/<rest>`, if
@@ -534,8 +547,10 @@ fn acts(url: &str) -> bool {
     let Some(("api", path)) = split(url) else {
         return false;
     };
-    path.strip_prefix("triggers/")
-        .is_some_and(|ask| !ask.starts_with("discussion/") && !ask.starts_with("tried/"))
+    path.starts_with("activity/dismiss/")
+        || path
+            .strip_prefix("triggers/")
+            .is_some_and(|ask| !ask.starts_with("discussion/") && !ask.starts_with("tried/"))
 }
 
 /// The media type of a file, by its name.
@@ -602,6 +617,7 @@ mod tests {
             Some(b"{}".to_vec())
         );
         assert_eq!(body("cox://api/triggers/end/card", Asker::Anyone), None);
+        assert_eq!(body("cox://api/activity/dismiss/[]", Asker::Anyone), None);
         assert!(body("cox://api/triggers/tried/card", Asker::Anyone).is_some());
         assert!(body("cox://api/triggers/discussion/card", Asker::Anyone).is_some());
         assert!(body("cox://map/", Asker::Anyone).is_some());

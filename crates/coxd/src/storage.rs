@@ -110,11 +110,14 @@ pub enum Kept {
     Pushes,
     /// The pages the stage visited (see `cox::stage::page::history`).
     History,
+    /// The plans the human dismissed from the Activity page (see
+    /// `cox::stage::activity`).
+    DismissedPlans,
 }
 
 impl Kept {
     /// All that Cox keeps.
-    pub const ALL: [Self; 24] = [
+    pub const ALL: [Self; 25] = [
         Self::Settings,
         Self::Agents,
         Self::Servers,
@@ -139,6 +142,7 @@ impl Kept {
         Self::PushKey,
         Self::Pushes,
         Self::History,
+        Self::DismissedPlans,
     ];
 
     /// Where it is kept, from the folder Cox keeps what lasts in.
@@ -169,6 +173,7 @@ impl Kept {
             Self::PushKey => "state/push-key",
             Self::Pushes => "state/pushes.json",
             Self::History => "state/history.json",
+            Self::DismissedPlans => "state/dismissed-plans.json",
         }
     }
 }

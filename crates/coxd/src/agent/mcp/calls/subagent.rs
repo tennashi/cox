@@ -91,7 +91,9 @@ pub(super) fn agent_tool() -> Value {
                 "description": {
                     "type": "string",
                     "description": "A short title for the work, which the subagent's chat \
-                        goes by in the human's list.",
+                        goes by in the human's list. When the work is a step of your plan, \
+                        the step's own words, which the human's Activity page shows the \
+                        chat under.",
                 },
                 "prompt": {
                     "type": "string",

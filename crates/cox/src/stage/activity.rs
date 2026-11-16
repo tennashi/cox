@@ -3,30 +3,36 @@
 //! inbox, where they look first when they open Cox or have a moment. It
 //! tells, in tiers, what is asked of them, the chats of the folder that
 //! ask them something, with what they ask, or whose turn ended while they
-//! were not looking; what is at work, the chats whose agents take a turn,
-//! or work in the background once it ended, each with what it does now,
-//! or runs in the background, its subagents under it; what was decided,
-//! the questions agents asked there that the human answered, each with
-//! what they chose and why, the last first; and what happened without
-//! them, the schedules that ran there, the pages of the wiki written from
-//! there, and the sources kept there, the last first. The home, where Cox
-//! lands, tells of every folder.
+//! were not looking; the plans, of the chats whose agents take a turn, or
+//! work in the background once it ended, or whose plan, as the agent last
+//! sent it over ACP, is not done, or done while the human did not look
+//! yet, each with what it does now, or runs in the background, and the
+//! steps of its plan, each with the subagents' chats whose names read
+//! alike it (see [`linked`]), the other subagents at work under it; what
+//! was decided, the questions agents asked there that the human answered,
+//! each with what they chose and why, the last first; and what happened
+//! without them, the schedules that ran there, the pages of the wiki
+//! written from there, and the sources kept there, the last first. The
+//! home, where Cox lands, tells of every folder.
 //!
 //! The window tells this module how its chats stand as they change (see
 //! [`tell`]), since the stage's pages are served apart from it; the bar
 //! counts what waits on the Activity's button (see [`waiting`]). What a
 //! chat does now, and what it asks, come from what the window told the
 //! Commands page of its conversation (see [`commands::now`]). What was
-//! decided is read from the chats as coxd keeps them (see
-//! [`Store::answered`]), so it holds for chats the window never showed,
-//! and lasts as long as their conversations do: read again once a chat
-//! stops asking, as when the human answers, and once one goes.
+//! decided, and the plans, are read from the chats as coxd keeps them
+//! (see [`Store::answered`] and [`Store::plans`]), so they hold for chats
+//! the window never showed, and last as long as their conversations do:
+//! what was decided read again once a chat stops asking, as when the
+//! human answers, and once one goes, and the plans each time. A plan the
+//! human dismissed from the page stays hidden until the chat's agent
+//! sends another (see [`dismiss`]).
 
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-use cox_core::entry::{Entry, QuestionAnswer};
-use cox_core::store::{ChatId, KeptAnswer, Store};
+use cox_core::entry::{Entry, QuestionAnswer, Step, StepState};
+use cox_core::store::{ChatId, KeptAnswer, KeptPlan, Store};
 use jiff::tz::TimeZone;
 use serde_json::{Value, json};
 
@@ -36,6 +42,9 @@ use crate::stage::commands;
 const HAPPENED: usize = 50;
 /// How many of what was decided the page is told of, the last first.
 const DECIDED: usize = 20;
+/// How long, in milliseconds, a chat whose plan is done shows it after
+/// its agent last did anything, for the human to see what came of it.
+const DONE_SHOWS: i64 = 30 * 60 * 1000;
 /// How many times what was decided is read again after a chat stopped
 /// asking: coxd may tell the window so before it keeps the answer.
 const READ_AGAIN: u8 = 2;
@@ -293,6 +302,11 @@ pub fn told(root: &Path, wiki: &Path, raw: &Path, triggers: &Value) -> Value {
         &now(),
         root,
         &decided(),
+        &Plans {
+            kept: &plans(),
+            dismissed: &Dismissed::read(),
+            at: jiff::Timestamp::now().as_millisecond(),
+        },
         &commands::now,
         &Places {
             wiki,
@@ -300,6 +314,162 @@ pub fn told(root: &Path, wiki: &Path, raw: &Path, triggers: &Value) -> Value {
             triggers,
         },
     )
+}
+
+/// The plan each chat's agent sent last, as coxd keeps it, by the chat.
+fn plans() -> Vec<KeptPlan> {
+    let plans = coxd::storage::path(coxd::storage::Kept::Chats)
+        .ok_or_else(|| anyhow::anyhow!("no place keeps the chats"))
+        .and_then(|path| Store::read(&path)?.plans());
+    plans.unwrap_or_else(|error| {
+        tracing::warn!("the plans of the chats are not read: {error:#}");
+        Vec::new()
+    })
+}
+
+/// A plan the human dismissed from the Plans tier, as they saw it: its
+/// chat, the number of its entry there, and its steps, since the agent's
+/// updates in the same turn keep the number. Hidden until the chat's last
+/// plan is another.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+struct Dismissed {
+    chat: ChatId,
+    number: usize,
+    steps: Vec<Step>,
+}
+
+/// A plan the page asks to dismiss, by its chat and its entry's number.
+#[derive(Clone, Copy, Debug, serde::Deserialize)]
+struct Dismiss {
+    chat: ChatId,
+    plan: usize,
+}
+
+impl Dismissed {
+    /// Whether `plan` is the one dismissed.
+    fn hides(&self, plan: &KeptPlan) -> bool {
+        self.chat == plan.chat && self.number == plan.number && self.steps == plan.steps
+    }
+
+    /// The plans dismissed, as kept, or none when nothing is kept.
+    fn read() -> Vec<Self> {
+        coxd::storage::path(coxd::storage::Kept::DismissedPlans)
+            .and_then(|path| std::fs::read(path).ok())
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+            .unwrap_or_default()
+    }
+
+    /// Those of `was` that still hide a plan of `kept`, and those of
+    /// `kept` that `asked` names, as the page saw them.
+    fn now(was: Vec<Self>, asked: &[Dismiss], kept: &[KeptPlan]) -> Vec<Self> {
+        let mut now: Vec<Self> = was
+            .into_iter()
+            .filter(|dismissed| kept.iter().any(|plan| dismissed.hides(plan)))
+            .collect();
+        for plan in kept {
+            if asked
+                .iter()
+                .any(|asked| asked.chat == plan.chat && asked.plan == plan.number)
+                && !now.iter().any(|dismissed| dismissed.hides(plan))
+            {
+                now.push(Self {
+                    chat: plan.chat,
+                    number: plan.number,
+                    steps: plan.steps.clone(),
+                });
+            }
+        }
+        now
+    }
+}
+
+/// Dismisses the plans `asked`, as the JSON list of [`Dismiss`] the page
+/// sent says, for them to be hidden, across restarts too, until each
+/// chat's agent sends another.
+pub fn dismiss(asked: &str) {
+    let Ok(asked) = serde_json::from_str::<Vec<Dismiss>>(asked) else {
+        return;
+    };
+    let Some(path) = coxd::storage::path(coxd::storage::Kept::DismissedPlans) else {
+        return;
+    };
+    let now = Dismissed::now(Dismissed::read(), &asked, &plans());
+    if let Err(error) = coxd::storage::write_json(&path, &now) {
+        tracing::warn!("the plans dismissed are not kept: {error}");
+    }
+}
+
+/// How alike a step of a plan must be to a subagent's chat, by its name,
+/// as [`alike`] measures it, for the chat to show under the step.
+const LINKED: f64 = 0.3;
+
+/// How alike `one` and `other` read, from 0 to 1: the Dice coefficient of
+/// the pairs of letters in each of their words, which holds for words
+/// written without spaces between them, as Japanese is, too.
+fn alike(one: &str, other: &str) -> f64 {
+    let pairs = |text: &str| -> Vec<(char, char)> {
+        let mut pairs: Vec<(char, char)> = text
+            .split(|c: char| !c.is_alphanumeric())
+            .flat_map(|word| {
+                let letters: Vec<char> = word.chars().flat_map(char::to_lowercase).collect();
+                match letters.as_slice() {
+                    [] => Vec::new(),
+                    [only] => vec![(*only, ' ')],
+                    _ => letters.windows(2).map(|pair| (pair[0], pair[1])).collect(),
+                }
+            })
+            .collect();
+        pairs.sort_unstable();
+        pairs
+    };
+    let (one, other) = (pairs(one), pairs(other));
+    if one.is_empty() || other.is_empty() {
+        return 0.0;
+    }
+    let (mut both, mut at) = (0_u32, 0);
+    for pair in &one {
+        while at < other.len() && other[at] < *pair {
+            at += 1;
+        }
+        if at < other.len() && other[at] == *pair {
+            both += 1;
+            at += 1;
+        }
+    }
+    let all = u32::try_from(one.len() + other.len()).unwrap_or(u32::MAX);
+    f64::from(2 * both) / f64::from(all)
+}
+
+/// The step of `plan` each of `subagents` works on, by its place in the
+/// plan: the step its chat's name reads most alike, once alike enough.
+fn linked(plan: &[Step], subagents: &[&Chat]) -> Vec<Option<usize>> {
+    subagents
+        .iter()
+        .map(|chat| {
+            plan.iter()
+                .enumerate()
+                .map(|(at, step)| (at, alike(&step.text, &chat.name)))
+                .filter(|(_, score)| *score >= LINKED)
+                .max_by(|one, other| one.1.total_cmp(&other.1))
+                .map(|(at, _)| at)
+        })
+        .collect()
+}
+
+/// The plans each chat's agent sent last, those the human dismissed,
+/// and when, in milliseconds since the epoch, they are told.
+struct Plans<'a> {
+    kept: &'a [KeptPlan],
+    dismissed: &'a [Dismissed],
+    at: i64,
+}
+
+impl Plans<'_> {
+    /// The plan `chat`'s agent sent last, unless the human dismissed it.
+    fn of(&self, chat: &Chat) -> Option<&KeptPlan> {
+        let plan = self.kept.iter().find(|plan| Some(plan.chat) == chat.kept)?;
+        (!self.dismissed.iter().any(|dismissed| dismissed.hides(plan))).then_some(plan)
+    }
 }
 
 /// Where what happened in a folder is read from: the human's wiki, their
@@ -349,33 +519,78 @@ fn waiting_in(told: &Told, root: &Path, now: &dyn Fn(u64) -> Option<commands::No
         .collect()
 }
 
-/// The chats of the folder `root` at work, or of every folder in the
-/// home, each with what it does now, as `now` says, and after each the
-/// subagents at work it opened, as JSON.
-fn at_work(told: &Told, root: &Path, now: &dyn Fn(u64) -> Option<commands::Now>) -> Vec<Value> {
-    let working: Vec<&Chat> = told
+/// The chats of the folder `root`, or of every folder in the home, at
+/// work, or with a plan not done, or done not [`DONE_SHOWS`] ago, or
+/// while it asks the human or they did not look, as JSON: each with what
+/// it does now, as `now` says, and the steps of its plan, of `plans`,
+/// each with the subagents' chats that work on it, and after it its
+/// other subagents, all of them under a plan, those at work otherwise.
+fn planned(
+    told: &Told,
+    root: &Path,
+    plans: &Plans<'_>,
+    now: &dyn Fn(u64) -> Option<commands::Now>,
+) -> Vec<Value> {
+    let shown = |chat: &Chat| {
+        chat.working
+            || plans.of(chat).is_some_and(|plan| {
+                !plan.steps.is_empty()
+                    && (plan
+                        .steps
+                        .iter()
+                        .any(|step| step.state != StepState::Completed)
+                        || chat.asking
+                        || chat.unread
+                        || plans.at - plan.at < DONE_SHOWS)
+            })
+    };
+    let listed_chats: Vec<&Chat> = told
         .chats
         .iter()
-        .filter(|chat| chat.working && of_folder(told, chat, root))
+        .filter(|chat| of_folder(told, chat, root) && shown(chat))
         .collect();
     let mut listed = Vec::new();
-    let mut under: Vec<(&Chat, usize)> = working
+    let mut under: Vec<(&Chat, usize)> = listed_chats
         .iter()
         .rev()
         .filter(|chat| {
             !chat
                 .parent
-                .is_some_and(|parent| working.iter().any(|other| other.key == parent))
+                .is_some_and(|parent| listed_chats.iter().any(|other| other.key == parent))
         })
         .map(|chat| (*chat, 0))
         .collect();
     while let Some((chat, depth)) = under.pop() {
-        let does = now(chat.key).unwrap_or_default();
+        let does = chat
+            .working
+            .then(|| now(chat.key))
+            .flatten()
+            .unwrap_or_default();
+        let plan = plans.of(chat);
+        let steps = plan.map_or(&[][..], |plan| plan.steps.as_slice());
+        let subagents: Vec<&Chat> = told
+            .chats
+            .iter()
+            .filter(|other| other.parent == Some(chat.key))
+            .collect();
+        let links = linked(steps, &subagents);
         listed.push(json!({
             "key": chat.key,
             "name": chat.name,
             "goal": chat.goal,
             "depth": depth,
+            "working": chat.working,
+            "waits": if chat.working {
+                None
+            } else if chat.asking {
+                Some("asks you")
+            } else if chat.unread {
+                Some("finished a turn")
+            } else if depth > 0 {
+                Some("finished")
+            } else {
+                Some("waits")
+            },
             "sketch": chat.cwd != chat.project,
             "where": where_of(told, &chat.project),
             "said": does.said,
@@ -390,16 +605,58 @@ fn at_work(told: &Told, root: &Path, now: &dyn Fn(u64) -> Option<commands::Now>)
                     })
                 })
                 .collect::<Vec<_>>(),
+            "plan": steps_of(steps, &subagents, &links, now),
+            // Only a plan that keeps a chat listed on its own is
+            // dismissed: one at work shows anyway.
+            "dismiss": plan
+                .filter(|_| !chat.working && !steps.is_empty())
+                .map(|plan| json!({ "chat": plan.chat, "plan": plan.number })),
         }));
         under.extend(
-            working
+            subagents
                 .iter()
+                .zip(&links)
                 .rev()
-                .filter(|other| other.parent == Some(chat.key))
-                .map(|other| (*other, depth + 1)),
+                .filter(|(other, link)| {
+                    link.is_none() && (!steps.is_empty() || listed_chats.contains(other))
+                })
+                .map(|(other, _)| (*other, depth + 1)),
         );
     }
     listed
+}
+
+/// The steps of a plan, as JSON, each with those of `subagents` that
+/// `links` link to it, and what they do now, as `now` says.
+fn steps_of(
+    steps: &[Step],
+    subagents: &[&Chat],
+    links: &[Option<usize>],
+    now: &dyn Fn(u64) -> Option<commands::Now>,
+) -> Vec<Value> {
+    steps
+        .iter()
+        .enumerate()
+        .map(|(at, step)| {
+            let chats: Vec<Value> = subagents
+                .iter()
+                .zip(links)
+                .filter(|(_, link)| **link == Some(at))
+                .map(|(chat, _)| {
+                    json!({
+                        "key": chat.key,
+                        "name": chat.name,
+                        "working": chat.working,
+                        "said": chat
+                            .working
+                            .then(|| now(chat.key).and_then(|now| now.said))
+                            .flatten(),
+                    })
+                })
+                .collect();
+            json!({ "text": step.text, "state": step.state, "chats": chats })
+        })
+        .collect()
 }
 
 /// What was decided in the folder `root`, or in any in the home, the
@@ -440,6 +697,7 @@ fn told_of(
     told: &Told,
     root: &Path,
     decided: &[Decided],
+    plans: &Plans<'_>,
     now: &dyn Fn(u64) -> Option<commands::Now>,
     places: &Places<'_>,
 ) -> Value {
@@ -450,7 +708,12 @@ fn told_of(
     } = *places;
     let home = root == told.home;
     let waiting = waiting_in(told, root, now);
-    let working = at_work(told, root, now);
+    let planned = planned(told, root, plans, now);
+    let busy = told
+        .chats
+        .iter()
+        .filter(|chat| chat.working && of_folder(told, chat, root))
+        .count();
     let decided = decided_in(told, root, decided);
     let name = name_of(told, root);
     let mut happened = Vec::new();
@@ -523,7 +786,8 @@ fn told_of(
         "folder": root,
         "home": home,
         "waiting": waiting,
-        "working": working,
+        "plans": planned,
+        "busy": busy,
         "decided": decided,
         "happened": happened,
     })
@@ -582,6 +846,24 @@ mod tests {
     use super::*;
     use coxd::testing::TempDir;
 
+    const NO_PLANS: Plans<'static> = Plans {
+        kept: &[],
+        dismissed: &[],
+        at: 0,
+    };
+
+    /// The chat coxd keeps by `number`.
+    fn kept(number: u64) -> ChatId {
+        serde_json::from_value(json!(number)).unwrap()
+    }
+
+    fn step(text: &str, state: StepState) -> Step {
+        Step {
+            text: text.to_owned(),
+            state,
+        }
+    }
+
     fn chat(key: u64, cwd: &Path, project: &Path, asking: bool, unread: bool) -> Chat {
         Chat {
             key,
@@ -607,7 +889,7 @@ mod tests {
             raw,
             triggers,
         };
-        told_of(told, root, &[], &|_| None, &places)
+        told_of(told, root, &[], &NO_PLANS, &|_| None, &places)
     }
 
     /// What goes on in the folder `root`, where nothing happened.
@@ -729,7 +1011,6 @@ mod tests {
         let root = TempDir::new();
         let other = root.join("other");
         let home = root.join("home");
-        let kept = |number: i64| -> ChatId { serde_json::from_value(json!(number)).unwrap() };
         let mut asking = chat(1, &root, &root, true, false);
         asking.kept = Some(kept(1));
         let mut parent = chat(2, &root, &root, false, false);
@@ -756,7 +1037,7 @@ mod tests {
             ],
             home: home.clone(),
         };
-        let decided = |chat: i64, project: &Path, question: &str| Decided {
+        let decided = |chat: u64, project: &Path, question: &str| Decided {
             chat: kept(chat),
             name: format!("kept {chat}"),
             project: Some(project.to_owned()),
@@ -786,10 +1067,10 @@ mod tests {
             triggers: &json!({}),
         };
 
-        let json = told_of(&told, &root, &decisions, &now, &places);
+        let json = told_of(&told, &root, &decisions, &NO_PLANS, &now, &places);
 
         assert_eq!(json["waiting"][0]["asks"], "Which way?");
-        let working: Vec<(u64, u64)> = json["working"]
+        let working: Vec<(u64, u64)> = json["plans"]
             .as_array()
             .unwrap()
             .iter()
@@ -803,12 +1084,12 @@ mod tests {
         // A subagent comes under the chat that opened it, and one whose
         // opener is not at work comes on its own.
         assert_eq!(working, [(2, 0), (3, 1), (5, 0)]);
-        assert_eq!(json["working"][0]["goal"], "ship it");
-        assert_eq!(json["working"][0]["said"], "step of 2");
-        assert_eq!(json["working"][1]["running"], "sleep 30 && echo done");
+        assert_eq!(json["plans"][0]["goal"], "ship it");
+        assert_eq!(json["plans"][0]["said"], "step of 2");
+        assert_eq!(json["plans"][1]["running"], "sleep 30 && echo done");
         // A chat at work in the background tells what runs there.
         assert_eq!(
-            json["working"][2]["background"],
+            json["plans"][2]["background"],
             json!([{"what": "sleep 120", "command": true}])
         );
         let decided = json["decided"].as_array().unwrap();
@@ -821,8 +1102,9 @@ mod tests {
         assert_eq!(decided[1]["chat"], "kept 6");
 
         // The home tells of every folder.
-        let json = told_of(&told, &home, &decisions, &now, &places);
-        assert_eq!(json["working"].as_array().unwrap().len(), 4);
+        let json = told_of(&told, &home, &decisions, &NO_PLANS, &now, &places);
+        assert_eq!(json["plans"].as_array().unwrap().len(), 4);
+        assert_eq!(json["busy"], 4);
         let questions: Vec<&str> = json["decided"]
             .as_array()
             .unwrap()
@@ -831,6 +1113,236 @@ mod tests {
             .collect();
         assert_eq!(questions, ["Which way?", "Which name?", "Which store?"]);
         assert_eq!(json["decided"][1]["where"], "other");
+    }
+
+    #[test]
+    fn a_chat_shows_its_plan_while_at_work_not_done_or_done_lately() {
+        let root = TempDir::new();
+        let listed = |key: u64, name: &str, working: bool, parent: Option<u64>| {
+            let mut listed = chat(key, &root, &root, false, false);
+            listed.name = name.to_owned();
+            listed.working = working;
+            listed.parent = parent;
+            listed.kept = Some(kept(key));
+            listed
+        };
+        let mut unseen = listed(6, "unseen", false, None);
+        unseen.unread = true;
+        let mut asking = listed(8, "asking", false, None);
+        asking.asking = true;
+        let told = Told {
+            chats: vec![
+                listed(2, "main", true, None),
+                listed(3, "Add the --shout flag", true, Some(2)),
+                listed(4, "Look around", true, Some(2)),
+                listed(9, "README docs update", false, Some(2)),
+                listed(11, "Check CI", false, Some(2)),
+                listed(5, "waits", false, None),
+                unseen,
+                listed(7, "done long ago", false, None),
+                asking,
+                listed(10, "done lately", false, None),
+            ],
+            projects: Vec::new(),
+            home: root.join("home"),
+        };
+        let at = 100 * DONE_SHOWS;
+        let plan = |chat: u64, steps: Vec<Step>, ago: i64| KeptPlan {
+            chat: kept(chat),
+            number: 1,
+            steps,
+            at: at - ago,
+        };
+        let done = || vec![step("Ship it", StepState::Completed)];
+        let kept_plans = [
+            plan(
+                2,
+                vec![
+                    step("Add a --shout flag with tests", StepState::InProgress),
+                    step("Update the README", StepState::Completed),
+                    step("Commit", StepState::Pending),
+                ],
+                0,
+            ),
+            plan(5, vec![step("Later", StepState::Pending)], DONE_SHOWS * 2),
+            plan(6, done(), DONE_SHOWS * 2),
+            plan(7, done(), DONE_SHOWS * 2),
+            plan(8, done(), DONE_SHOWS * 2),
+            plan(10, done(), DONE_SHOWS / 2),
+        ];
+        let plans = Plans {
+            kept: &kept_plans,
+            at,
+            ..NO_PLANS
+        };
+        let now = |key: u64| {
+            Some(commands::Now {
+                said: Some(format!("step of {key}")),
+                running: None,
+                asks: None,
+            })
+        };
+        let places = Places {
+            wiki: &root.join("wiki"),
+            raw: &root.join("raw"),
+            triggers: &json!({}),
+        };
+
+        let json = told_of(&told, &root, &[], &plans, &now, &places);
+
+        let rows: Vec<(u64, u64)> = json["plans"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|chat| {
+                (
+                    chat["key"].as_u64().unwrap(),
+                    chat["depth"].as_u64().unwrap(),
+                )
+            })
+            .collect();
+        // A subagent whose name reads as a step shows under the step, not
+        // again under the chat; the others show under the chat, done or
+        // not, while it has a plan.
+        assert_eq!(
+            rows,
+            [(2, 0), (4, 1), (11, 1), (5, 0), (6, 0), (8, 0), (10, 0)]
+        );
+        let plan = &json["plans"][0]["plan"];
+        assert_eq!(plan[0]["state"], "in_progress");
+        assert_eq!(
+            plan[0]["chats"],
+            json!([{ "key": 3, "name": "Add the --shout flag", "working": true, "said": "step of 3" }])
+        );
+        assert_eq!(
+            plan[1]["chats"],
+            json!([{ "key": 9, "name": "README docs update", "working": false, "said": null }])
+        );
+        assert_eq!(plan[2]["chats"], json!([]));
+        assert_eq!(json["plans"][2]["waits"], "finished");
+        assert_eq!(json["plans"][3]["waits"], "waits");
+        // Only the chats at work count as at work.
+        assert_eq!(json["busy"], 3);
+    }
+
+    #[test]
+    fn a_dismissed_plan_stays_hidden_across_restarts_until_another_comes() {
+        let root = TempDir::new();
+        coxd::storage::keep_on_this_thread(Some(root.join("data")));
+        let store = Store::open(&coxd::storage::path(coxd::storage::Kept::Chats).unwrap()).unwrap();
+        let half_done = vec![
+            step("Read", StepState::Completed),
+            step("Fix", StepState::InProgress),
+        ];
+        let stale = store.add_chat(None, "stale").unwrap();
+        let other = store.add_chat(None, "other").unwrap();
+        let busy = store.add_chat(None, "busy").unwrap();
+        for chat in [stale, other, busy] {
+            store
+                .keep_entry(chat, 0, &Entry::Human("plan it".to_owned()))
+                .unwrap();
+            store
+                .keep_entry(chat, 1, &Entry::Plan(half_done.clone()))
+                .unwrap();
+        }
+        let listed = |key: u64, kept: ChatId, working: bool| {
+            let mut listed = chat(key, &root, &root, false, false);
+            listed.kept = Some(kept);
+            listed.working = working;
+            listed
+        };
+        let told = Told {
+            chats: vec![
+                listed(1, stale, false),
+                listed(2, other, false),
+                listed(3, busy, true),
+            ],
+            projects: Vec::new(),
+            home: root.join("home"),
+        };
+        // What the page is told after a restart: the plans and those
+        // dismissed read again from where they are kept.
+        let page = || {
+            told_of(
+                &told,
+                &root,
+                &[],
+                &Plans {
+                    kept: &plans(),
+                    dismissed: &Dismissed::read(),
+                    at: 0,
+                },
+                &|_| None,
+                &Places {
+                    wiki: &root.join("wiki"),
+                    raw: &root.join("raw"),
+                    triggers: &json!({}),
+                },
+            )
+        };
+        let rows = || -> Vec<u64> {
+            page()["plans"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|chat| chat["key"].as_u64().unwrap())
+                .collect()
+        };
+        // As the page's button asks, with what it was told of the first.
+        let dismiss_first = || dismiss(&json!([page()["plans"][0]["dismiss"]]).to_string());
+        assert_eq!(rows(), [1, 2, 3]);
+        assert_eq!(page()["plans"][2]["dismiss"], Value::Null, "at work");
+
+        dismiss_first();
+        assert_eq!(rows(), [2, 3], "dismissed, read again as after a restart");
+        assert_eq!(page()["busy"], 1);
+
+        // The agent's update to the plan in the same turn shows it again.
+        let updated = vec![
+            step("Read", StepState::Completed),
+            step("Fix", StepState::Completed),
+            step("Test", StepState::Pending),
+        ];
+        store
+            .keep_entry(stale, 1, &Entry::Plan(updated.clone()))
+            .unwrap();
+        assert_eq!(rows(), [1, 2, 3], "an update shows it again");
+        dismiss_first();
+        assert_eq!(rows(), [2, 3]);
+        // So does the same plan sent again in a later turn.
+        store
+            .keep_entry(stale, 2, &Entry::Human("again".to_owned()))
+            .unwrap();
+        store.keep_entry(stale, 3, &Entry::Plan(updated)).unwrap();
+        assert_eq!(rows(), [1, 2, 3], "a new plan shows again");
+        coxd::storage::keep_on_this_thread(None);
+    }
+
+    #[test]
+    fn a_subagent_links_to_the_step_its_name_reads_most_alike() {
+        let step = |text: &str| Step {
+            text: text.to_owned(),
+            state: StepState::Pending,
+        };
+        let plan = [
+            step("--shout フラグを追加しテストを書く"),
+            step("README を更新する"),
+            step("GitHub Actions のワークフローを追加"),
+        ];
+        let root = Path::new("/p");
+        let named = |name: &str| {
+            let mut named = chat(1, root, root, false, false);
+            name.clone_into(&mut named.name);
+            named
+        };
+        let chats = [
+            named("README の更新"),
+            named("CI ワークフロー追加"),
+            named("Shout flag"),
+            named("全体のレビュー"),
+        ];
+        let chats: Vec<&Chat> = chats.iter().collect();
+        assert_eq!(linked(&plan, &chats), [Some(1), Some(2), Some(0), None]);
     }
 
     #[test]

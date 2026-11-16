@@ -3,9 +3,13 @@
 // every two seconds, as Cox's own tabs follow what they show. On the left,
 // what is asked of the human, the chats of the folder, and of its
 // sketches, that ask them something, with what they ask, or whose turn
-// ended while they were not looking; and what is at work, the chats whose
-// agents take a turn, or work in the background once it ended, each with
-// what it does now, or runs in the background, its subagents under it.
+// ended while they were not looking; and the plans, of the chats whose
+// agents take a turn, or work in the background once it ended, or whose
+// plan is not done, or done while the human did not look yet, each with
+// what it does now, or runs in the background, and the steps of its plan,
+// each with the subagents' chats that work on it, and the subagents no
+// step has under it. A plan of a chat not at work the human may dismiss,
+// one by one or all at once, until its agent sends another.
 // On the right, what was decided, the questions agents asked that the
 // human answered, each with what they chose and why, the last first. A
 // click on a chat shows it, by going to `cox://chat/<key>`. Below, what
@@ -24,10 +28,10 @@ let toldText = null;
 const esc = (s) =>
   String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 
-async function load() {
+async function load(url = API) {
   let text = null;
   try {
-    const answer = await fetch(API);
+    const answer = await fetch(url, { cache: "no-store" });
     text = answer.ok ? await answer.text() : null;
   } catch {
     text = null;
@@ -65,13 +69,56 @@ function working(chat) {
         )
         .join("")
     : "";
+  const dot = chat.working ? "busy" : { "asks you": "asks", "finished a turn": "unread" }[chat.waits] ?? "idle";
+  const why = chat.waits ? ` <span class="why">${esc(chat.waits)}</span>` : "";
   return (
     `<a class="row" href="cox://chat/${chat.key}" title="shows the chat" style="margin-left: ${chat.depth * 18}px">` +
-    `<span class="dot busy"></span>` +
-    `<span class="what"><span class="name">${chat.depth || chat.sketch ? "↳ " : ""}${esc(chat.name)}</span>` +
-    `${where(chat)}${goal}${said || running || background ? "" : `<div class="line">at work</div>`}${said}${running}${background}</span></a>`
+    `<span class="dot ${dot}"></span>` +
+    `<span class="what"><span class="name">${chat.depth || chat.sketch ? "↳ " : ""}${esc(chat.name)}</span>${why}` +
+    `${where(chat)}${goal}${said || running || background || chat.waits ? "" : `<div class="line">at work</div>`}${said}${running}${background}</span></a>` +
+    plan(chat)
   );
 }
+
+/// How each state of a step is marked, and named to the human.
+const STATES = {
+  pending: ["○", "not started"],
+  in_progress: ["◐", "in progress"],
+  completed: ["✓", "done"],
+};
+
+/// The steps of `chat`'s plan, each with how far it went and the
+/// subagents' chats that work on it, which a click shows.
+function plan(chat) {
+  if (!(chat.plan ?? []).length) return "";
+  const done = chat.plan.filter((step) => step.state === "completed").length;
+  const steps = chat.plan
+    .map((step) => {
+      const [mark, named] = STATES[step.state] ?? ["?", step.state];
+      const chats = step.chats
+        .map(
+          (sub) =>
+            `<a class="sub" href="cox://chat/${sub.key}" title="shows the chat">` +
+            `<span class="dot ${sub.working ? "busy" : "idle"}"></span>↳ ${esc(sub.name)}</a>` +
+            (sub.said ? `<div class="line">${esc(sub.said)}</div>` : ""),
+        )
+        .join("");
+      return (
+        `<div class="step ${step.state}"><span class="mark" title="${named}">${mark}</span>` +
+        `<span class="what"><span class="text">${esc(step.text)}</span>${chats}</span></div>`
+      );
+    })
+    .join("");
+  return (
+    `<div class="plan" style="margin-left: ${chat.depth * 18 + 28}px">` +
+    `<div class="count">plan · ${done}/${chat.plan.length} done${chat.dismiss ? dismiss([chat.dismiss], "dismiss", "hides this plan until the agent sends another") : ""}</div>${steps}</div>`
+  );
+}
+
+/// A button that hides the plans `plans` name, as the page was told of
+/// them, until their agents send others.
+const dismiss = (plans, label, title) =>
+  `<button class="dismiss" data-dismiss="${esc(JSON.stringify(plans))}" title="${esc(title)}">${esc(label)}</button>`;
 
 function decided(decision) {
   const chat = decision.key != null
@@ -106,7 +153,9 @@ function draw() {
     return;
   }
   const count = told.waiting.length;
-  const busy = told.working.length;
+  const busy = told.busy;
+  const plans = told.plans.length;
+  const dismissable = told.plans.filter((chat) => chat.dismiss).map((chat) => chat.dismiss);
   const said = [
     count === 1 ? "1 chat waits for you" : count ? `${count} chats wait for you` : "nothing waits for you",
     busy === 1 ? "1 at work" : busy ? `${busy} at work` : "",
@@ -117,8 +166,9 @@ function draw() {
     `<div class="columns"><div>` +
     `<div class="tier">Asked of you${count ? `<b>${count}</b>` : ""}</div>` +
     `<div class="waiting">${count ? told.waiting.map(waiting).join("") : `<div class="none">Nothing ${here}is asked of you.</div>`}</div>` +
-    `<div class="tier">At work${busy ? `<i>${busy}</i>` : ""}</div>` +
-    `<div class="waiting">${busy ? told.working.map(working).join("") : `<div class="none">No chat ${here}is at work.</div>`}</div>` +
+    `<div class="tier">Plans${busy ? `<i title="chats at work">${busy}</i>` : ""}` +
+    `${dismissable.length > 1 ? dismiss(dismissable, `dismiss ${dismissable.length} not at work`, "hides each plan of a chat not at work until its agent sends another") : ""}</div>` +
+    `<div class="waiting">${plans ? told.plans.map(working).join("") : `<div class="none">No chat ${here}is at work or has a plan to finish.</div>`}</div>` +
     `</div><div>` +
     `<div class="tier">Decided</div>` +
     (told.decided.length
@@ -131,5 +181,12 @@ function draw() {
       : `<div class="none">Nothing yet: the schedules that run ${told.home ? "anywhere" : "here"}, the pages of the wiki written from ${told.home ? "any chat" : "here"}, and the sources kept ${here}show as they come.</div>`);
 }
 
+app.addEventListener("click", (event) => {
+  const button = event.target.closest("[data-dismiss]");
+  if (!button) return;
+  button.disabled = true;
+  load(`${API}/dismiss/${encodeURIComponent(button.dataset.dismiss)}`);
+});
+
 load();
-setInterval(load, EVERY);
+setInterval(() => load(), EVERY);
