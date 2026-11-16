@@ -455,7 +455,10 @@ fn planned(
         chat.working
             || plan_of(chat).is_some_and(|plan| {
                 !plan.steps.is_empty()
-                    && (plan.steps.iter().any(|step| step.state != StepState::Completed)
+                    && (plan
+                        .steps
+                        .iter()
+                        .any(|step| step.state != StepState::Completed)
                         || chat.asking
                         || chat.unread
                         || plans.at - plan.at < DONE_SHOWS)
@@ -782,7 +785,14 @@ mod tests {
             raw,
             triggers,
         };
-        told_of(told, root, &[], &Plans { kept: &[], at: 0 }, &|_| None, &places)
+        told_of(
+            told,
+            root,
+            &[],
+            &Plans { kept: &[], at: 0 },
+            &|_| None,
+            &places,
+        )
     }
 
     /// What goes on in the folder `root`, where nothing happened.
@@ -961,7 +971,14 @@ mod tests {
             triggers: &json!({}),
         };
 
-        let json = told_of(&told, &root, &decisions, &Plans { kept: &[], at: 0 }, &now, &places);
+        let json = told_of(
+            &told,
+            &root,
+            &decisions,
+            &Plans { kept: &[], at: 0 },
+            &now,
+            &places,
+        );
 
         assert_eq!(json["waiting"][0]["asks"], "Which way?");
         let working: Vec<(u64, u64)> = json["plans"]
@@ -996,7 +1013,14 @@ mod tests {
         assert_eq!(decided[1]["chat"], "kept 6");
 
         // The home tells of every folder.
-        let json = told_of(&told, &home, &decisions, &Plans { kept: &[], at: 0 }, &now, &places);
+        let json = told_of(
+            &told,
+            &home,
+            &decisions,
+            &Plans { kept: &[], at: 0 },
+            &now,
+            &places,
+        );
         assert_eq!(json["plans"].as_array().unwrap().len(), 4);
         assert_eq!(json["busy"], 4);
         let questions: Vec<&str> = json["decided"]
@@ -1091,7 +1115,12 @@ mod tests {
             .as_array()
             .unwrap()
             .iter()
-            .map(|chat| (chat["key"].as_u64().unwrap(), chat["depth"].as_u64().unwrap()))
+            .map(|chat| {
+                (
+                    chat["key"].as_u64().unwrap(),
+                    chat["depth"].as_u64().unwrap(),
+                )
+            })
             .collect();
         // A subagent whose name reads as a step shows under the step, not
         // again under the chat; the others show under the chat, done or
