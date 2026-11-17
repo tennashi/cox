@@ -323,7 +323,9 @@ fn answer(serve: &Serve, url: &str, asker: Asker, told: &OnceLock<Option<Resourc
     if took >= SLOW {
         tracing::warn!(url, took_ms, "{url} took {took_ms} ms to answer");
     } else {
-        tracing::debug!(url, took_ms, "answered {url}");
+        // The plugins of the stage ask a thousand times a minute: at
+        // `debug` this would be nearly all of the run's log.
+        tracing::trace!(url, took_ms, "answered {url}");
     }
     if resource.is_none() {
         tracing::debug!("nothing is served at {url}");

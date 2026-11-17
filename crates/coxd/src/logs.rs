@@ -21,9 +21,12 @@
 //!   pages, commands' output, screenshots.
 //! - `cox::agent::mcp::asks`: what a tool asks of the stage, and
 //!   `cox::stage::asked`, the stage carrying it out.
-//! - `cox_browser::scheme`: how long each answer at a `cox:` address took;
-//!   a warning at 100 ms or more.
+//! - `cox_browser::scheme`: how long each answer at a `cox:` address took,
+//!   at `trace`; a warning at 100 ms or more.
 //! - `cox::busy`: each time the window's thread was busy for 100 ms or more.
+//! - `cox::hang`: each time it was stuck for 3 s or more, once it is free,
+//!   with the files `sample` wrote of what Cox's threads were doing then,
+//!   `<run>-hang-<time>.txt` beside the run's log.
 
 use std::backtrace::Backtrace;
 use std::fs::{self, File};
