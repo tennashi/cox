@@ -791,8 +791,7 @@ mod tests {
                     .map_err(|error| format!("{error:#}"))
             })
         };
-        // Long enough for the other window to wait for its turn, which
-        // nothing tells.
+        // allow-sleep: long enough for the other window to wait for its turn, which nothing tells
         std::thread::sleep(Duration::from_millis(200));
         let heard = Arc::new(std::sync::Mutex::new(Vec::new()));
         coxd_that(&socket, &heard, |_| FromDaemon::Joined(VERSION));
