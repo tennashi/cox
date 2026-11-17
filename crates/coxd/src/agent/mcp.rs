@@ -273,6 +273,17 @@ pub enum ChatRequest {
         subagent: Subagent,
         answer: oneshot::Sender<Result<(u64, String), String>>,
     },
+    /// Send `text`, in the chat's place, to the chat `subagent` names,
+    /// one the chat opened, as its next line, starting its agent again on
+    /// its session first if it is closed, as one cut off is, so that it
+    /// goes on with what it has the context of, and the chat hears its
+    /// report as it did before; answer its number and title, or why it
+    /// cannot, as when it is at work still.
+    ContinueChat {
+        subagent: Subagent,
+        text: String,
+        answer: oneshot::Sender<Result<(u64, String), String>>,
+    },
     /// Answer where the chat is, for a page of the wiki its agent writes
     /// to say where it was used.
     Whereabouts {
@@ -301,9 +312,10 @@ pub struct Whereabouts {
     pub kept: Option<String>,
 }
 
-/// A chat an agent names to `agent_report`: by its title, as the human
-/// sees it in the list, among the chats the agent's own chat opened, or
-/// by the number `agent` answered, among the chats of its project.
+/// A chat an agent names to `agent_report` or `agent_continue`: by its
+/// title, as the human sees it in the list, among the chats the agent's
+/// own chat opened, or by the number `agent` answered, among the chats of
+/// its project.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Subagent {
     Title(String),
@@ -1104,7 +1116,7 @@ mod tests {
         let cwd = Path::new("/");
         let listed = answer_now(&ask("tools/list", &json!({})), cwd, &sent).unwrap();
         // Cox's own, the Android emulator's, and the Mac's windows' on macOS.
-        let tools = 21 + 7 + if cfg!(target_os = "macos") { 6 } else { 0 };
+        let tools = 22 + 7 + if cfg!(target_os = "macos") { 6 } else { 0 };
         assert_eq!(listed["result"]["tools"].as_array().unwrap().len(), tools);
         let called = ask("tools/call", &json!({ "name": "no_such_tool" }));
         let called = answer_now(&called, cwd, &sent).unwrap();

@@ -2293,6 +2293,7 @@ impl Daemon {
     /// Answers `request`, which the agent of the chat `key` asks: opens a
     /// sketch beside the chat, shows a goal it proposes, opens a chat under
     /// it, as the agent says, or waits for one.
+    #[expect(clippy::too_many_lines, reason = "one arm for each request")]
     fn asked(&mut self, key: u64, request: ChatRequest) {
         match request {
             ChatRequest::StartSketch {
@@ -2367,6 +2368,13 @@ impl Daemon {
             ChatRequest::WaitChat { chat, answer } => self.wait_chat(key, chat, answer),
             ChatRequest::FindSubagent { subagent, answer } => {
                 answer.send(self.find_subagent(key, &subagent)).ok();
+            }
+            ChatRequest::ContinueChat {
+                subagent,
+                text,
+                answer,
+            } => {
+                answer.send(self.continue_chat(key, &subagent, &text)).ok();
             }
             ChatRequest::SaveToWiki { chat } => self.save_to_wiki_of(key, chat),
             ChatRequest::WikiWritten { page } => {
@@ -2489,6 +2497,72 @@ impl Daemon {
             answer.send(Ok(self.stands(key).unwrap_or_default())).ok();
             self.heard(key);
         }
+    }
+
+    /// Sends `text`, in the place of the chat `asking`, to the subagent it
+    /// names as `subagent`, one it opened, as its next line: brought back
+    /// to the list if archived, and its agent started again on its session
+    /// first if it is closed, as one cut off by a stop, or by coxd going,
+    /// is. The chat `asking` hears its report once it ends, as it heard
+    /// the first, even if the human took the chat meanwhile, unless it is
+    /// a sketch, which stays the human's. Answers its
+    /// number and title, or why it cannot go on: at work still, or waiting
+    /// for the human, it is not cut off, and the agent waits for its
+    /// report first.
+    fn continue_chat(
+        &mut self,
+        asking: u64,
+        subagent: &Subagent,
+        text: &str,
+    ) -> Result<(u64, String), String> {
+        if text.trim().is_empty() {
+            return Err("no prompt: say what the subagent is to do next as `prompt`".to_owned());
+        }
+        let (child, name) = self
+            .find_subagent(asking, subagent)
+            .map_err(|why| why.replace("agent_report", "agent_continue"))?;
+        let slot = self.slot(child).ok_or_else(|| format!("no chat {child}"))?;
+        if slot.parent != Some(asking) {
+            return Err(format!(
+                "The chat \"{name}\" is not a subagent this chat ran with agent: only those go \
+                 on with agent_continue."
+            ));
+        }
+        if slot.state == State::Asking {
+            return Err(format!(
+                "The subagent \"{name}\" waits for the human to answer: it goes on once they \
+                 do. Get its report with agent_report, giving its title, then continue it."
+            ));
+        }
+        if slot.at_work(Instant::now()) {
+            return Err(format!(
+                "The subagent \"{name}\" is at work still, so nothing is sent to it. Wait for \
+                 its report, as Cox tells it, or with agent_report, giving its title, then \
+                 continue it."
+            ));
+        }
+        if self.archived.iter().any(|slot| slot.key == child) {
+            self.archive(child, false);
+            // Back under the chat that opened it, as a subagent opened anew
+            // is, without taking the human's eye.
+            self.reveals.retain(|key| *key != child);
+        }
+        self.reopen(child);
+        self.start_again(child);
+        let chat = self.chat(child).ok_or_else(|| format!("no chat {child}"))?;
+        if chat.conversation().state() != State::Idle {
+            return Err(format!(
+                "The subagent \"{name}\" is closed and cannot start again, as when the folder \
+                 of its sketch is gone: run the work anew with agent."
+            ));
+        }
+        chat.told(text);
+        // Whose it is goes back to what it was opened as: a sketch stays
+        // the human's to end.
+        if let Some(slot) = self.slot_mut(child) {
+            slot.whose = Whose::opened(Some(asking), slot.setup.as_ref());
+        }
+        Ok((child, name))
     }
 
     /// The number and the title of the chat the agent of the chat
@@ -3564,6 +3638,8 @@ mod tests {
     struct Played {
         commands: UnboundedReceiver<crate::agent::Command>,
         events: UnboundedSender<AgentEvent>,
+        /// The session it was started to go on with, if any.
+        resumes: Option<String>,
     }
 
     /// Agents the test plays, each kept as it starts.
@@ -3582,7 +3658,7 @@ mod tests {
         fn chat(
             &self,
             cwd: PathBuf,
-            _: Start,
+            start: Start,
             _: &str,
             _: Option<u16>,
             _: bool,
@@ -3591,9 +3667,14 @@ mod tests {
         ) -> Spawned {
             let (commands, commands_got) = unbounded_channel();
             let (events_sent, events) = unbounded_channel();
+            let resumes = match start {
+                Start::Again { session, .. } => session,
+                Start::New { .. } => None,
+            };
             self.0.borrow_mut().push(Played {
                 commands: commands_got,
                 events: events_sent,
+                resumes,
             });
             Spawned {
                 agent: Agent {
@@ -4129,6 +4210,167 @@ mod tests {
             // Asked again, it answers again.
             let again = opener.wait(0).await.unwrap().unwrap();
             assert_eq!(again.said.as_deref(), Some("Found it."));
+        });
+    }
+
+    impl Opener {
+        /// Has the chat's agent continue its subagent `subagent` with
+        /// `text`, as `agent_continue` does.
+        fn continues(&mut self, subagent: Subagent, text: &str) -> Result<(u64, String), String> {
+            let (answer, mut went_on) = oneshot::channel();
+            self.daemon.asked(
+                self.key,
+                ChatRequest::ContinueChat {
+                    subagent,
+                    text: text.to_owned(),
+                    answer,
+                },
+            );
+            went_on.try_recv().unwrap()
+        }
+
+        /// The lines the agent `index` of all those played was sent.
+        fn prompts_of(&self, index: usize) -> Vec<String> {
+            let mut agents = self.agents.0.borrow_mut();
+            let mut prompts = Vec::new();
+            while let Ok(command) = agents[index].commands.try_recv() {
+                if let crate::agent::Command::Prompt(prompt) = command {
+                    prompts.push(prompt.text);
+                }
+            }
+            prompts
+        }
+    }
+
+    #[test]
+    fn a_subagent_cut_off_goes_on_in_its_own_chat_on_its_session_and_reports_to_its_opener() {
+        on_daemon(async {
+            let mut opener = Opener::new(&["Look"]).await;
+            let look = opener.subagents[0];
+            tells(
+                &opener.agent(Some(0)),
+                [
+                    AgentEvent::Opened {
+                        id: "look-1".to_owned(),
+                        how: crate::agent::Opened::New,
+                        steers: false,
+                    },
+                    AgentEvent::ReplyText("Half of it.".to_owned()),
+                    AgentEvent::Closed(Some("coxd went".to_owned())),
+                ],
+            );
+            opener.pump().await;
+            // The opener heard it was cut off, and its turn on that ended.
+            opener.prompts();
+            tells(
+                &opener.agent(None),
+                [AgentEvent::TurnEnded(cox_acp::StopReason::EndTurn)],
+            );
+            opener.pump().await;
+            assert_eq!(opener.agents.0.borrow().len(), 2);
+
+            assert_eq!(
+                opener.continues(Subagent::Title("Look".to_owned()), "Go on."),
+                Ok((look, "Look".to_owned()))
+            );
+            opener.pump().await;
+
+            assert_eq!(
+                opener.agents.0.borrow().len(),
+                3,
+                "the subagent's agent started again, in no new chat"
+            );
+            assert_eq!(opener.daemon.chats.len(), 2, "no chat opened");
+            assert_eq!(
+                opener.agent(Some(1)).resumes.as_deref(),
+                Some("look-1"),
+                "on its own session"
+            );
+            assert_eq!(opener.prompts_of(2), ["Go on."]);
+            opener.ends(1, "All of it.");
+            opener.pump().await;
+            let prompts = opener.prompts();
+            assert_eq!(prompts.len(), 1, "{prompts:?}");
+            assert!(
+                prompts[0].starts_with(
+                    "The subagent \"Look\" ended its turn. It last said:\n\nAll of it."
+                ),
+                "{prompts:?}"
+            );
+        });
+    }
+
+    #[test]
+    fn a_subagent_at_work_or_not_the_openers_own_is_not_continued() {
+        on_daemon(async {
+            let mut opener = Opener::new(&["Look"]).await;
+            let look = opener.subagents[0];
+
+            assert_eq!(
+                opener.continues(Subagent::Number(look), "Go on."),
+                Err(
+                    "The subagent \"Look\" is at work still, so nothing is sent to it. Wait \
+                     for its report, as Cox tells it, or with agent_report, giving its title, \
+                     then continue it."
+                        .to_owned()
+                )
+            );
+            assert_eq!(opener.prompts_of(1), ["look"], "nothing more was sent");
+
+            let (answer, mut went_on) = oneshot::channel();
+            opener.daemon.asked(
+                look,
+                ChatRequest::ContinueChat {
+                    subagent: Subagent::Number(opener.key),
+                    text: "Go on.".to_owned(),
+                    answer,
+                },
+            );
+            assert!(
+                went_on.try_recv().unwrap().is_err(),
+                "a subagent does not continue the chat that opened it"
+            );
+            assert_eq!(
+                opener.continues(Subagent::Title("Fix".to_owned()), "Go on."),
+                Err(
+                    "No subagent of this chat is titled \"Fix\". Its subagents go by \"Look\" \
+                     now: give agent_continue one of those, and name it so to the human."
+                        .to_owned()
+                )
+            );
+        });
+    }
+
+    #[test]
+    fn an_archived_subagent_comes_back_under_its_opener_to_go_on() {
+        on_daemon(async {
+            let mut opener = Opener::new(&["Look"]).await;
+            let look = opener.subagents[0];
+            opener.ends(0, "Found it.");
+            opener.pump().await;
+            tells(
+                &opener.agent(None),
+                [AgentEvent::TurnEnded(cox_acp::StopReason::EndTurn)],
+            );
+            opener.pump().await;
+            opener.daemon.archive(look, true);
+            opener.pump().await;
+            assert!(opener.daemon.chats.iter().all(|slot| slot.key != look));
+
+            assert_eq!(
+                opener.continues(Subagent::Title("Look".to_owned()), "Look again."),
+                Ok((look, "Look".to_owned()))
+            );
+
+            assert!(opener.daemon.chats.iter().any(|slot| slot.key == look));
+            assert!(
+                !opener.daemon.reveals.contains(&look),
+                "it does not take the human's eye"
+            );
+            opener.pump().await;
+            let last = opener.agents.0.borrow().len() - 1;
+            assert_eq!(last, 2, "done, its agent closed, and starts again");
+            assert_eq!(opener.prompts_of(last), ["Look again."]);
         });
     }
 

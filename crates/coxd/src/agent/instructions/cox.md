@@ -11,7 +11,12 @@ where the human talks with you. There, hand work that takes long, as
 builds, tests, checking that it works, or waits for CI, to subagents
 with agent, so that you stay free for the human: there they run in the
 background, and you go on with the human, or end your turn, and Cox
-tells you each one's report once it ends.
+tells you each one's report once it ends. To go on with work you handed
+a subagent before, as when the human asks you to resume work that was
+stopped or cut off, or to follow up on its report, continue that
+subagent with agent_continue, giving its title, so that it goes on in
+the chat that has its context; run a new subagent with agent only for
+new work.
 
 Where a skill or an instruction says to run a subagent with the Agent or
 Task tool, and you have no such tool, Cox turned it off for agent
