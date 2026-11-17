@@ -1,8 +1,10 @@
 //! Subagents as chats of their own: `agent`, which takes the place of the
 //! agent's own tool for subagents (Claude Code's `Agent`, or `Task`), with
 //! its arguments, so that a skill that hands work to subagents hands it to
-//! chats the human sees under this one, and can step into, and
-//! `agent_report`, which waits for a subagent's report.
+//! chats the human sees under this one, and can step into,
+//! `agent_report`, which waits for a subagent's report, and
+//! `agent_continue`, which has a subagent go on in its own chat, with the
+//! context it has, rather than another start the work anew.
 
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
@@ -19,6 +21,7 @@ use crate::chat::sketch::Sketch;
 
 pub(super) const AGENT: &str = crate::agent::mcp::AGENT_TOOL;
 pub(super) const AGENT_REPORT: &str = "agent_report";
+pub(super) const AGENT_CONTINUE: &str = "agent_continue";
 
 /// How long `agent_report` waits for a subagent in a chat that hands its
 /// work off (see [`crate::daemon::hands_off`]): long enough for a quick
@@ -64,7 +67,11 @@ pub(super) fn agent_tool() -> Value {
             report; with it, it answers at once the title the chat goes by in the human's \
             list, and Cox tells you the report unasked, in a line of its own once your turn \
             is not running, unless agent_report, giving that title, waited for it first. \
-            Name a subagent to the human by its title, as they see it. The chat works in the \
+            Name a subagent to the human by its title, as they see it. It always opens a new \
+            chat, which starts from nothing: to go on with work you handed a subagent \
+            before, as to follow up on its report, or to resume it once it was stopped or cut \
+            off, use agent_continue, which has that subagent go on in its own chat, with what \
+            it did so far; run a new one only for new work. The chat works in the \
             same folder as this one, so two that change files at once may collide, unless \
             `sketch` gives it a folder of its own. Beside the Agent tool's arguments, \
             Cox's own say how the subagent is set up: `context` is told to it after the \
@@ -194,6 +201,50 @@ pub(super) fn agent_report_tool() -> Value {
                         place of `title` when two of your subagents share a title.",
                 },
             },
+        },
+    })
+}
+
+/// The tool that has a subagent go on, as the agent learns of it.
+pub(super) fn agent_continue_tool() -> Value {
+    json!({
+        "name": AGENT_CONTINUE,
+        "description": "Has a subagent you ran with agent go on in its own chat, the same \
+            one in the human's list, with what it did and was told so far: sends it `prompt` \
+            as its next line. Use it, not agent, to resume or follow up on work you handed a \
+            subagent before: when the human asks you to resume work that was stopped or cut \
+            off, as by Cox restarting, to answer what its report asks, or to have it do more \
+            of the same; run a new subagent with agent only for new work. A subagent cut off \
+            starts again on its own session, and one that was archived comes back to the \
+            list. One at work still, or waiting for the human, is sent nothing: wait for its \
+            report, then continue it. Without `run_in_background`, it waits for the subagent \
+            to end its turn and answers its report; with it, it answers at once, and Cox \
+            tells you the report unasked, as for agent.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "title": {
+                    "type": "string",
+                    "description": "The subagent's chat, by its title as the human sees it \
+                        in the list now.",
+                },
+                "chat": {
+                    "type": "integer",
+                    "description": "The number agent answered for the subagent's chat, in \
+                        place of `title` when two of your subagents share a title.",
+                },
+                "prompt": {
+                    "type": "string",
+                    "description": "What the subagent is to do next, as a line to it: it \
+                        has the context of its work so far, so say only what is new, as \
+                        \"Go on from where you were cut off\".",
+                },
+                "run_in_background": {
+                    "type": "boolean",
+                    "description": "Whether to answer at once, rather than with its report.",
+                },
+            },
+            "required": ["prompt"],
         },
     })
 }
@@ -440,6 +491,12 @@ pub(super) async fn agent(
         return Ok(told);
     }
     let waited = wait(number, chats).await?;
+    Ok(reported(name, &waited, notes))
+}
+
+/// What the agent that waited for the subagent `name` is told once it
+/// stands as `waited`: its report, and `notes` of how it was set up.
+fn reported(name: &str, waited: &Waited, notes: Vec<String>) -> String {
     let mut told = match (&waited.asking, waited.ended_but(), &waited.said) {
         (Some(asking), _, _) => format!(
             "The subagent \"{name}\" waits for the human to answer: {asking}. Get its report \
@@ -459,7 +516,54 @@ pub(super) async fn agent(
         told.push_str("\n\n");
         told.push_str(&notes.join(" "));
     }
-    Ok(waited.with_ci(told))
+    waited.with_ci(told)
+}
+
+/// Sends the subagent `arguments` name, one this chat ran with `agent`,
+/// its next line, `prompt`, starting it again on its session if it was
+/// cut off, and answers its report once its turn ends, or at once, in the
+/// background, that it goes on, as `agent` does.
+pub(super) async fn agent_continue(
+    arguments: &Value,
+    hands_off: bool,
+    chats: &UnboundedSender<ChatRequest>,
+) -> Result<String, String> {
+    let subagent = named(arguments)?;
+    let prompt = string(arguments, "prompt")?
+        .ok_or("no prompt: say what the subagent is to do next as `prompt`")?;
+    let background = match arguments.get("run_in_background") {
+        None | Some(Value::Null) => false,
+        Some(Value::Bool(background)) => *background,
+        Some(_) => return Err("`run_in_background` is not true or false".to_owned()),
+    } || hands_off;
+    let (answer, went_on) = oneshot::channel();
+    chats
+        .send(ChatRequest::ContinueChat {
+            subagent,
+            text: prompt,
+            answer,
+        })
+        .map_err(|_| "the chat has closed".to_owned())?;
+    let (number, name) = went_on
+        .await
+        .map_err(|_| "the chat closed while the subagent went on".to_owned())??;
+    if background {
+        let mut told = format!(
+            "The subagent \"{name}\" goes on, in its own chat, with what it did so far. Cox \
+             tells you its report once it ends its turn and your turn is not running; to wait \
+             for it sooner, call agent_report, giving that title."
+        );
+        if hands_off {
+            told.push_str(
+                " This chat talks with the human and hands the work off, so its subagents \
+                 run in the background: go on with the human, or end your turn, rather than \
+                 wait for the report.",
+            );
+        }
+        return Ok(told);
+    }
+    let waited = wait(number, chats).await?;
+    Ok(reported(&name, &waited, Vec::new()))
 }
 
 /// What the agent is told of the subagent's chat beside its report: the
@@ -654,6 +758,19 @@ mod tests {
                         let _ = answer.send(found);
                         let (answer, _) = oneshot::channel();
                         ChatRequest::FindSubagent { subagent, answer }
+                    }
+                    ChatRequest::ContinueChat {
+                        subagent,
+                        text,
+                        answer,
+                    } => {
+                        let _ = answer.send(Ok((opened.number, opened.name.clone())));
+                        let (answer, _) = oneshot::channel();
+                        ChatRequest::ContinueChat {
+                            subagent,
+                            text,
+                            answer,
+                        }
                     }
                     other => other,
                 };
@@ -1020,6 +1137,107 @@ mod tests {
                 .any(|request| matches!(request, ChatRequest::WaitChat { .. })),
             "it waits for none"
         );
+    }
+
+    async fn continues(arguments: Value, chats: &UnboundedSender<ChatRequest>) -> (bool, String) {
+        let params = json!({ "name": AGENT_CONTINUE, "arguments": arguments });
+        let answered = super::super::call(
+            &params,
+            Path::new("/work"),
+            None,
+            false,
+            &unbounded_channel().0,
+            chats,
+        )
+        .await
+        .unwrap();
+        (
+            answered["isError"].as_bool().unwrap(),
+            answered["content"][0]["text"].as_str().unwrap().to_owned(),
+        )
+    }
+
+    #[tokio::test]
+    async fn continues_a_subagent_in_its_own_chat_and_answers_its_report() {
+        let (chats, asked) = unbounded_channel();
+        let window = window(
+            asked,
+            opened(7),
+            vec![Waited {
+                said: Some("Done, from where I was cut off.".to_owned()),
+                ..Waited::default()
+            }],
+        );
+
+        let told = continues(
+            json!({ "title": "Review the parser", "prompt": "Go on." }),
+            &chats,
+        )
+        .await;
+
+        assert_eq!(
+            told,
+            (
+                false,
+                "The subagent \"Review the parser\" reports:\n\nDone, from where I was cut off."
+                    .to_owned()
+            )
+        );
+        drop(chats);
+        let heard = window.await.unwrap();
+        let [
+            ChatRequest::ContinueChat { subagent, text, .. },
+            ChatRequest::WaitChat { chat: 7, .. },
+        ] = &heard[..]
+        else {
+            panic!("the window was asked {} times", heard.len());
+        };
+        assert_eq!(subagent, &Subagent::Title("Review the parser".to_owned()));
+        assert_eq!(text, "Go on.");
+    }
+
+    #[tokio::test]
+    async fn continues_a_subagent_in_the_background_by_its_number() {
+        let (chats, asked) = unbounded_channel();
+        let window = window(asked, opened(7), Vec::new());
+
+        let told = continues(
+            json!({ "chat": 7, "prompt": "Go on.", "run_in_background": true }),
+            &chats,
+        )
+        .await;
+
+        assert_eq!(
+            told,
+            (
+                false,
+                "The subagent \"Review the parser\" goes on, in its own chat, with what it did \
+                 so far. Cox tells you its report once it ends its turn and your turn is not \
+                 running; to wait for it sooner, call agent_report, giving that title."
+                    .to_owned()
+            )
+        );
+        drop(chats);
+        let heard = window.await.unwrap();
+        let [ChatRequest::ContinueChat { subagent, .. }] = &heard[..] else {
+            panic!("the window was asked {} times", heard.len());
+        };
+        assert_eq!(subagent, &Subagent::Number(7));
+    }
+
+    #[tokio::test]
+    async fn asks_which_subagent_to_continue_and_what_to_say() {
+        let (chats, mut asked) = unbounded_channel();
+        for arguments in [
+            json!({ "prompt": "Go on." }),
+            json!({ "title": "Review the parser" }),
+            json!({ "title": "Review the parser", "prompt": " " }),
+            json!({ "title": "Review the parser", "prompt": "Go on.", "run_in_background": 1 }),
+        ] {
+            let (error, _) = continues(arguments.clone(), &chats).await;
+            assert!(error, "{arguments}");
+        }
+        assert!(asked.try_recv().is_err());
     }
 
     #[tokio::test]
