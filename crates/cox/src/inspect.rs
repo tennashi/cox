@@ -351,11 +351,10 @@ impl Inspector {
                     .map_or(frames::OVER, |seconds| {
                         std::time::Duration::from_secs_f64(seconds.min(60.0))
                     });
-                Ok(Ok(frames::tell(
-                    over,
-                    &crate::busy::seen(over),
-                    &self.cef.kept_up(over),
-                )))
+                let mut told =
+                    frames::tell(over, &crate::busy::seen(over), &self.cef.kept_up(over));
+                told.push_str(&crate::hang::told());
+                Ok(Ok(told))
             }
             _ => return Err((INVALID_PARAMS, format!("no tool {name}"))),
         }?;
@@ -645,7 +644,9 @@ fn tools() -> Value {
                 stages, by its address, with how many times the wheel scrolled it, how many \
                 pictures CEF painted of it, and the waits of 50 ms or more from a turn of the \
                 wheel to the next picture, which the human sees as the page sticking. A page \
-                the wheel cannot scroll further, at its end, paints nothing either.",
+                the wheel cannot scroll further, at its end, paints nothing either. Last, the \
+                files of samples of what each of Cox's threads was doing while the window's \
+                thread stuck for 3 s or more, of this run and earlier ones, the newest first.",
             "inputSchema": {
                 "type": "object",
                 "properties": {

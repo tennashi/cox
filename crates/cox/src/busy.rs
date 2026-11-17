@@ -38,12 +38,19 @@ pub struct Busy {
 
 /// Looks at the window's thread every [`LOOK_EVERY`] while the app runs:
 /// a look that comes [`BUSY_AFTER`] late or more says the thread was busy
-/// that long.
+/// that long. Each look is a beat of [`crate::hang::HEART`], which a
+/// thread of its own watches for the thread stuck.
 pub fn watch(cx: &mut App) {
+    if let (Some(directory), Some(run)) = (coxd::logs::directory(), coxd::logs::file()) {
+        crate::hang::watch(directory, run);
+    }
+    #[cfg(debug_assertions)]
+    crate::hang::block_when_asked(cx);
     cx.spawn(async move |cx| {
         loop {
             let started = Instant::now();
             cx.background_executor().timer(LOOK_EVERY).await;
+            crate::hang::HEART.beat();
             let late = started.elapsed().saturating_sub(LOOK_EVERY);
             if late >= BUSY_AFTER {
                 note(started + LOOK_EVERY, late, None);

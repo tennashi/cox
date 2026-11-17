@@ -37,6 +37,7 @@
 pub mod app;
 pub mod busy;
 pub mod chat;
+pub mod hang;
 pub mod inspect;
 #[cfg(target_os = "macos")]
 pub mod login_item;
