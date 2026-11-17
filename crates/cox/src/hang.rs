@@ -98,7 +98,10 @@ pub fn watch(directory: &Path, run: &Path) {
         &HEART,
         STUCK_AFTER,
         AGAIN_AFTER,
-        move || sample(&directory, &run),
+        move || {
+            let _ = prune(&directory, KEPT - 1);
+            sample(&directory, &run)
+        },
         |stuck| tell(&stuck),
     );
 }
@@ -148,14 +151,12 @@ fn guard(
 }
 
 /// Has `sample` write what each of Cox's threads is doing, for two seconds,
-/// into a new file in `directory` named for `run` and now, once the files
-/// past the last [`KEPT`] are gone.
+/// into a new file in `directory` named for `run` and now.
 #[cfg(target_os = "macos")]
 fn sample(directory: &Path, run: &str) -> Result<PathBuf, String> {
     use std::os::unix::fs::PermissionsExt as _;
     use std::process::{Command, Stdio};
 
-    let _ = prune(directory, KEPT - 1);
     let time = jiff::Timestamp::now().strftime("%Y%m%dT%H%M%SZ");
     let path = directory.join(format!("{run}{MARK}{time}.txt"));
     let status = Command::new("/usr/bin/sample")
