@@ -221,6 +221,7 @@ fn all_tools() -> Value {
     },
     subagent::agent_tool(),
     subagent::agent_report_tool(),
+    subagent::agent_continue_tool(),
     read_chat_tool(),
     show_media_tool(),
     propose_goal_tool(),
@@ -843,6 +844,7 @@ pub(super) async fn call(
             let most = hands_off.then_some(subagent::HANDS_OFF_WAIT);
             subagent::agent_report(arguments, most, chats).await
         }
+        subagent::AGENT_CONTINUE => subagent::agent_continue(arguments, hands_off, chats).await,
         READ_CHAT => read_chat(arguments, chats).await,
         PROPOSE_GOAL => propose_goal(arguments, chats).await,
         PROPOSE_NAME => propose_name(arguments, chats).await,
@@ -2106,6 +2108,7 @@ mod tests {
             "run_command",
             "agent",
             "agent_report",
+            "agent_continue",
             "read_chat",
             "show_media",
             "propose_goal",
