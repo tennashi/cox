@@ -55,7 +55,7 @@ use tokio::sync::oneshot;
 
 use crate::agent::instructions::Instructions;
 use crate::agent::mcp::{
-    ChatRequest, OpenedChat, Ran, Seen, Subagent, ToolRequest, Waited, Whereabouts,
+    ChatRequest, OpenedChat, Ran, Seen, Stopped, Subagent, ToolRequest, Waited, Whereabouts,
 };
 use crate::agent::setup::{Policy, Setup, StageUse, Withheld, keeps_in_wiki};
 use crate::agent::{Agent, AgentEvent, Start};
@@ -2376,6 +2376,15 @@ impl Daemon {
             } => {
                 answer.send(self.continue_chat(key, &subagent, &text)).ok();
             }
+            ChatRequest::StopChat {
+                subagent,
+                reason,
+                answer,
+            } => {
+                answer
+                    .send(self.stop_subagent(key, &subagent, reason.as_deref()))
+                    .ok();
+            }
             ChatRequest::SaveToWiki { chat } => self.save_to_wiki_of(key, chat),
             ChatRequest::WikiWritten { page } => {
                 let in_sketch = self.sketch_of(key).is_some();
@@ -2563,6 +2572,65 @@ impl Daemon {
             slot.whose = Whose::opened(Some(asking), slot.setup.as_ref());
         }
         Ok((child, name))
+    }
+
+    /// Stops, in the place of the chat `asking`, the subagent it names as
+    /// `subagent`, one it opened, as the human stops a chat: its turn, as
+    /// it waits for the human too, whose question goes; or, once its turn
+    /// ended, what its agent runs in the background, by ending the agent,
+    /// which the next line starts again on its session. Its chat stays
+    /// open, and shows that the agent of `asking` stopped it, for `reason`
+    /// if given. Answers its number and title, and what was stopped, or why
+    /// it cannot be stopped: one the human took over is theirs.
+    fn stop_subagent(
+        &mut self,
+        asking: u64,
+        subagent: &Subagent,
+        reason: Option<&str>,
+    ) -> Result<(u64, String, Stopped), String> {
+        let (child, name) = self
+            .find_subagent(asking, subagent)
+            .map_err(|why| why.replace("agent_report", "agent_stop"))?;
+        let slot = self.slot(child).ok_or_else(|| format!("no chat {child}"))?;
+        if slot.parent != Some(asking) {
+            return Err(format!(
+                "The chat \"{name}\" is not a subagent this chat ran with agent: only those are \
+                 stopped with agent_stop. Ask the human to stop it."
+            ));
+        }
+        let sketch = slot
+            .setup
+            .as_ref()
+            .is_some_and(|setup| setup.sketch.is_some());
+        if slot.whose == Whose::Human && !sketch {
+            return Err(format!(
+                "The human took the subagent \"{name}\" over, so it is theirs to stop: ask \
+                 them to."
+            ));
+        }
+        let background = slot.at_work(Instant::now());
+        let opener = self.slot(asking).map_or_default(|slot| slot.name.clone());
+        let Some(chat) = self.chat(child) else {
+            return Ok((child, name, Stopped::Nothing));
+        };
+        let stopped = if working(chat.conversation().state()) {
+            Stopped::Turn
+        } else if background {
+            Stopped::Background
+        } else {
+            return Ok((child, name, Stopped::Nothing));
+        };
+        chat.note(
+            match reason.map(str::trim).filter(|reason| !reason.is_empty()) {
+                Some(reason) => format!("The agent of \"{opener}\" stopped this chat: {reason}"),
+                None => format!("The agent of \"{opener}\" stopped this chat."),
+            },
+        );
+        match stopped {
+            Stopped::Turn => chat.stop(),
+            Stopped::Background | Stopped::Nothing => chat.end_background(),
+        }
+        Ok((child, name, stopped))
     }
 
     /// The number and the title of the chat the agent of the chat
@@ -4229,6 +4297,53 @@ mod tests {
             went_on.try_recv().unwrap()
         }
 
+        /// Has the chat's agent stop its subagent `subagent`, for
+        /// `reason`, as `agent_stop` does.
+        fn stops(
+            &mut self,
+            subagent: Subagent,
+            reason: Option<&str>,
+        ) -> Result<(u64, String, Stopped), String> {
+            let (answer, mut stopped) = oneshot::channel();
+            self.daemon.asked(
+                self.key,
+                ChatRequest::StopChat {
+                    subagent,
+                    reason: reason.map(str::to_owned),
+                    answer,
+                },
+            );
+            stopped.try_recv().unwrap()
+        }
+
+        /// Whether the agent `index` of all those played was asked to
+        /// cancel its turn, among what it was sent since last asked.
+        fn cancelled(&self, index: usize) -> bool {
+            let mut agents = self.agents.0.borrow_mut();
+            let mut cancelled = false;
+            while let Ok(command) = agents[index].commands.try_recv() {
+                cancelled |= matches!(command, crate::agent::Command::Cancel);
+            }
+            cancelled
+        }
+
+        /// The notes the chat `key` shows of who stopped it.
+        fn notes(&mut self, key: u64) -> Vec<String> {
+            self.daemon
+                .chat(key)
+                .unwrap()
+                .conversation()
+                .entries()
+                .iter()
+                .filter_map(|entry| match entry {
+                    cox_core::entry::Entry::Note(note) if note.contains("stopped this chat") => {
+                        Some(note.clone())
+                    }
+                    _ => None,
+                })
+                .collect()
+        }
+
         /// The lines the agent `index` of all those played was sent.
         fn prompts_of(&self, index: usize) -> Vec<String> {
             let mut agents = self.agents.0.borrow_mut();
@@ -4342,6 +4457,186 @@ mod tests {
     }
 
     #[test]
+    fn a_subagent_at_work_is_stopped_by_its_opener_and_goes_on_in_its_chat() {
+        on_daemon(async {
+            let mut opener = Opener::new(&["Look"]).await;
+            let look = opener.subagents[0];
+            opener.prompts();
+            tells(
+                &opener.agent(Some(0)),
+                [AgentEvent::ReplyText("Half of it.".to_owned())],
+            );
+            opener.pump().await;
+
+            assert_eq!(
+                opener.stops(Subagent::Title("Look".to_owned()), Some("Wrong folder.")),
+                Ok((look, "Look".to_owned(), Stopped::Turn))
+            );
+            assert!(opener.cancelled(1), "its turn is cancelled");
+            let opener_name = opener.daemon.slot(opener.key).unwrap().name.clone();
+            assert_eq!(
+                opener.notes(look),
+                [format!(
+                    "The agent of \"{opener_name}\" stopped this chat: Wrong folder."
+                )],
+                "its chat shows the human who stopped it, and why"
+            );
+            let waited = opener.wait(0);
+            tells(
+                &opener.agent(Some(0)),
+                [AgentEvent::TurnEnded(cox_acp::StopReason::Cancelled)],
+            );
+            opener.pump().await;
+
+            let waited = waited.await.unwrap().unwrap();
+            assert_eq!(waited.reply.as_deref(), Some("Half of it."));
+            assert_eq!(waited.said.as_deref(), Some("Stopped."));
+            assert_eq!(
+                opener.prompts(),
+                Vec::<String>::new(),
+                "heard as it stopped, so not told again"
+            );
+            assert!(opener.daemon.slot(look).is_some(), "its chat stays");
+            assert_eq!(
+                opener.continues(Subagent::Title("Look".to_owned()), "Go on."),
+                Ok((look, "Look".to_owned()))
+            );
+            opener.pump().await;
+            // Its report heard, it was done, its agent closed: it starts
+            // again, in its own chat.
+            assert_eq!(opener.daemon.chats.len(), 2, "no chat opened");
+            let last = opener.agents.0.borrow().len() - 1;
+            assert_eq!(opener.prompts_of(last), ["Go on."]);
+        });
+    }
+
+    #[test]
+    fn a_subagent_waiting_for_the_human_is_stopped_and_its_question_goes() {
+        on_daemon(async {
+            let mut opener = Opener::new(&["Look"]).await;
+            let look = opener.subagents[0];
+            tells(
+                &opener.agent(Some(0)),
+                [AgentEvent::PermissionRequest {
+                    id: "rm".to_owned(),
+                    title: Some("rm -rf build".to_owned()),
+                    content: None,
+                    options: vec!["Allow".to_owned(), "Reject".to_owned()],
+                }],
+            );
+            opener.pump().await;
+            assert_eq!(opener.daemon.slot(look).unwrap().state, State::Asking);
+
+            assert_eq!(
+                opener.stops(Subagent::Number(look), None),
+                Ok((look, "Look".to_owned(), Stopped::Turn))
+            );
+            assert!(opener.cancelled(1), "which answers its question too");
+            let opener_name = opener.daemon.slot(opener.key).unwrap().name.clone();
+            assert_eq!(
+                opener.notes(look),
+                [format!("The agent of \"{opener_name}\" stopped this chat.")]
+            );
+            assert_eq!(
+                opener.stops(Subagent::Number(look), None),
+                Ok((look, "Look".to_owned(), Stopped::Turn)),
+                "stopping, it is the turn that stops still"
+            );
+        });
+    }
+
+    #[test]
+    fn a_subagent_not_at_work_or_not_the_openers_own_or_the_humans_is_not_stopped() {
+        on_daemon(async {
+            let mut opener = Opener::new(&["Look"]).await;
+            let look = opener.subagents[0];
+
+            let (answer, mut stopped) = oneshot::channel();
+            opener.daemon.asked(
+                look,
+                ChatRequest::StopChat {
+                    subagent: Subagent::Number(opener.key),
+                    reason: None,
+                    answer,
+                },
+            );
+            assert!(
+                stopped.try_recv().unwrap().is_err(),
+                "a subagent does not stop the chat that opened it"
+            );
+            assert_eq!(
+                opener.stops(Subagent::Title("Fix".to_owned()), None),
+                Err(
+                    "No subagent of this chat is titled \"Fix\". Its subagents go by \"Look\" \
+                     now: give agent_stop one of those, and name it so to the human."
+                        .to_owned()
+                )
+            );
+
+            opener.daemon.slot_mut(look).unwrap().whose = Whose::Human;
+            assert_eq!(
+                opener.stops(Subagent::Title("Look".to_owned()), None),
+                Err(
+                    "The human took the subagent \"Look\" over, so it is theirs to stop: ask \
+                     them to."
+                        .to_owned()
+                )
+            );
+            assert!(!opener.cancelled(1), "nothing was stopped");
+
+            opener.ends(0, "Found it.");
+            opener.pump().await;
+            opener.daemon.slot_mut(look).unwrap().whose = Whose::opened(Some(opener.key), None);
+            assert_eq!(
+                opener.stops(Subagent::Title("Look".to_owned()), Some("Enough.")),
+                Ok((look, "Look".to_owned(), Stopped::Nothing))
+            );
+            assert!(!opener.cancelled(1));
+            assert_eq!(opener.notes(look), Vec::<String>::new(), "nothing to show");
+        });
+    }
+
+    #[test]
+    fn what_a_subagent_runs_in_the_background_is_stopped_with_its_agent_to_start_again() {
+        on_daemon(async {
+            let mut opener = Opener::new(&["Look"]).await;
+            let look = opener.subagents[0];
+            tells(
+                &opener.agent(Some(0)),
+                [AgentEvent::Task(cox_acp::Task {
+                    id: "sleep".to_owned(),
+                    running: true,
+                    started: true,
+                    name: Some("sleep 120".to_owned()),
+                    description: Some("sleep 120".to_owned()),
+                    kind: Some("shell".to_owned()),
+                })],
+            );
+            opener.ends(0, "Started it.");
+            opener.pump().await;
+            assert!(runs(&mut opener.daemon, look));
+
+            assert_eq!(
+                opener.stops(Subagent::Title("Look".to_owned()), None),
+                Ok((look, "Look".to_owned(), Stopped::Background))
+            );
+            assert!(!runs(&mut opener.daemon, look), "its agent is ended");
+            opener.pump().await;
+            let waited = opener.wait(0).await.unwrap().unwrap();
+            assert_eq!(waited.background, [], "nothing runs");
+            assert_eq!(waited.reply.as_deref(), Some("Started it."));
+
+            assert_eq!(
+                opener.continues(Subagent::Title("Look".to_owned()), "Go on."),
+                Ok((look, "Look".to_owned()))
+            );
+            opener.pump().await;
+            assert_eq!(opener.agents.0.borrow().len(), 3, "started again");
+            assert_eq!(opener.prompts_of(2), ["Go on."]);
+        });
+    }
+
+    #[test]
     fn an_archived_subagent_comes_back_under_its_opener_to_go_on() {
         on_daemon(async {
             let mut opener = Opener::new(&["Look"]).await;
@@ -4399,8 +4694,8 @@ mod tests {
             assert!(
                 prompts[0].starts_with(
                     "The subagent \"Look\" ended its turn, but still works in the background: \
-                     the background command \"sleep 120\". Cox tells you once that ends. It last \
-                     said:\n\nStarted it."
+                     the background command \"sleep 120\". Cox tells you once that ends; to stop \
+                     it, call agent_stop, giving its title. It last said:\n\nStarted it."
                 ),
                 "{prompts:?}"
             );

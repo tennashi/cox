@@ -284,6 +284,17 @@ pub enum ChatRequest {
         text: String,
         answer: oneshot::Sender<Result<(u64, String), String>>,
     },
+    /// Stop the chat `subagent` names, one the chat opened, as the human
+    /// stops a chat: its turn, or, once that ended, what its agent runs in
+    /// the background, with the agent itself, which the next line starts
+    /// again on its session. The chat stays open, showing `reason`, if
+    /// given, as why it was stopped; answer its number and title, and what
+    /// was stopped, or why it cannot be, as when the human took it over.
+    StopChat {
+        subagent: Subagent,
+        reason: Option<String>,
+        answer: oneshot::Sender<Result<(u64, String, Stopped), String>>,
+    },
     /// Answer where the chat is, for a page of the wiki its agent writes
     /// to say where it was used.
     Whereabouts {
@@ -312,7 +323,21 @@ pub struct Whereabouts {
     pub kept: Option<String>,
 }
 
-/// A chat an agent names to `agent_report` or `agent_continue`: by its
+/// What `agent_stop` stopped of a subagent.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Stopped {
+    /// Its turn, which ends once its agent stops it, or Cox ends the agent
+    /// (see [`crate::daemon::chat::STOP_WAIT`]).
+    Turn,
+    /// What its agent ran in the background, its turn having ended, with
+    /// the agent itself.
+    Background,
+    /// Nothing: it was not at work.
+    Nothing,
+}
+
+/// A chat an agent names to `agent_report`, `agent_continue` or
+/// `agent_stop`: by its
 /// title, as the human sees it in the list, among the chats the agent's
 /// own chat opened, or by the number `agent` answered, among the chats of
 /// its project.
@@ -330,6 +355,9 @@ pub struct Waited {
     /// What came last in its last turn: its agent's reply, or Cox's note
     /// of how the turn ended, if anything did.
     pub said: Option<String>,
+    /// What its agent replied last in its last turn, if it replied, as
+    /// one stopped said before it stopped, whatever Cox noted after it.
+    pub reply: Option<String>,
     /// What its session did not offer of the model asked for it, if
     /// anything.
     pub unoffered: Option<String>,
@@ -350,7 +378,8 @@ impl Waited {
         (!self.background.is_empty()).then(|| {
             format!(
                 "ended its turn, but still works in the background: {}. Cox tells you once \
-                 that ends and your turn is not running",
+                 that ends and your turn is not running; to stop it, call agent_stop, giving \
+                 its title",
                 crate::daemon::wire::told(&self.background)
             )
         })
@@ -1116,7 +1145,7 @@ mod tests {
         let cwd = Path::new("/");
         let listed = answer_now(&ask("tools/list", &json!({})), cwd, &sent).unwrap();
         // Cox's own, the Android emulator's, and the Mac's windows' on macOS.
-        let tools = 22 + 7 + if cfg!(target_os = "macos") { 6 } else { 0 };
+        let tools = 23 + 7 + if cfg!(target_os = "macos") { 6 } else { 0 };
         assert_eq!(listed["result"]["tools"].as_array().unwrap().len(), tools);
         let called = ask("tools/call", &json!({ "name": "no_such_tool" }));
         let called = answer_now(&called, cwd, &sent).unwrap();

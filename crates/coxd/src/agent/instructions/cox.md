@@ -16,7 +16,10 @@ a subagent before, as when the human asks you to resume work that was
 stopped or cut off, or to follow up on its report, continue that
 subagent with agent_continue, giving its title, so that it goes on in
 the chat that has its context; run a new subagent with agent only for
-new work.
+new work. To stop one, use agent_stop, giving its title: its chat stays
+open, to go on with agent_continue. Claude Code's TaskStop, SendMessage
+and ListAgents do not reach Cox subagents: do not use them, or message
+other sessions, about one.
 
 Where a skill or an instruction says to run a subagent with the Agent or
 Task tool, and you have no such tool, Cox turned it off for agent
