@@ -1401,7 +1401,10 @@ impl Conversation {
             if let Some(content) = content {
                 *shown_content = content;
             }
-            *shown_result = result;
+            // News of a call that ended does not start it again.
+            if result.is_some() {
+                *shown_result = result;
+            }
         }
     }
 
@@ -2389,6 +2392,28 @@ mod tests {
                 Entry::Reply("listing".to_owned()),
             ]
         );
+    }
+
+    #[test]
+    fn news_of_a_tool_call_that_ended_does_not_start_it_again() {
+        let mut conversation = Conversation::new();
+        let news = |title: Option<&str>, result| AgentEvent::ToolCall {
+            id: "compact".to_owned(),
+            title: title.map(str::to_owned),
+            command: false,
+            content: None,
+            result,
+        };
+
+        conversation.apply(news(Some("Compact conversation"), None));
+        conversation.apply(news(None, Some(ToolCallResult::Completed)));
+        conversation.apply(news(None, None));
+
+        assert!(matches!(
+            conversation.entries(),
+            [Entry::ToolCall { title, result: Some(ToolCallResult::Completed), .. }]
+                if title == "Compact conversation"
+        ));
     }
 
     #[test]
