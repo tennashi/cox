@@ -122,16 +122,7 @@ pub fn click(
     button: gpui::MouseButton,
     count: usize,
 ) -> Result<(), String> {
-    use objc2_app_kit::{NSEvent, NSEventModifierFlags, NSEventType};
-    use objc2_foundation::{NSPoint, NSProcessInfo};
-    let window = view.window().ok_or("the view is in no window")?;
-    let number = window.windowNumber();
-    // `at` is a point of the screenshot, which shows the whole window, its
-    // title bar too, from the top; the window counts from its bottom.
-    let location = NSPoint::new(
-        f64::from(f32::from(at.x)),
-        window.frame().size.height - f64::from(f32::from(at.y)),
-    );
+    use objc2_app_kit::NSEventType;
     let (down, up) = match button {
         gpui::MouseButton::Right => (NSEventType::RightMouseDown, NSEventType::RightMouseUp),
         gpui::MouseButton::Middle => (NSEventType::OtherMouseDown, NSEventType::OtherMouseUp),
@@ -139,27 +130,122 @@ pub fn click(
     };
     for clicks in 1..=count {
         for kind in [down, up] {
-            let event = NSEvent::mouseEventWithType_location_modifierFlags_timestamp_windowNumber_context_eventNumber_clickCount_pressure(
-                kind,
-                location,
-                NSEventModifierFlags::empty(),
-                NSProcessInfo::processInfo().systemUptime(),
-                number,
-                None,
-                0,
-                isize::try_from(clicks).unwrap_or(1),
-                if kind == down { 1.0 } else { 0.0 },
-            )
-            .ok_or("the system made no mouse event")?;
-            match kind {
-                NSEventType::LeftMouseDown => view.mouseDown(&event),
-                NSEventType::LeftMouseUp => view.mouseUp(&event),
-                NSEventType::RightMouseDown => view.rightMouseDown(&event),
-                NSEventType::RightMouseUp => view.rightMouseUp(&event),
-                NSEventType::OtherMouseDown => view.otherMouseDown(&event),
-                _ => view.otherMouseUp(&event),
-            }
+            mouse(view, kind, at, isize::try_from(clicks).unwrap_or(1))?;
         }
+    }
+    Ok(())
+}
+
+/// What a drag of the left button does, as [`drag`] hands it to the view.
+#[cfg(target_os = "macos")]
+#[derive(Clone, Copy)]
+pub enum Drag {
+    Press,
+    Move,
+    Release,
+}
+
+/// Hands `view` what the left button does at `at` in a drag, as [`click`]
+/// hands it a click: `at` may be outside the window, as the pointer goes
+/// in a drag.
+///
+/// # Errors
+///
+/// When the view is in no window, or the system makes no event.
+#[cfg(target_os = "macos")]
+pub fn drag(
+    view: &objc2_app_kit::NSView,
+    at: gpui::Point<Pixels>,
+    done: Drag,
+) -> Result<(), String> {
+    use objc2_app_kit::NSEventType;
+    let kind = match done {
+        Drag::Press => NSEventType::LeftMouseDown,
+        Drag::Move => NSEventType::LeftMouseDragged,
+        Drag::Release => NSEventType::LeftMouseUp,
+    };
+    mouse(view, kind, at, 1)
+}
+
+/// Turns the wheel over `at`, as [`drag`] hands the view a drag, by `down`
+/// points toward the end of what scrolls there, or toward its start when
+/// negative.
+///
+/// # Errors
+///
+/// When the view is in no window, or the system makes no event.
+#[cfg(target_os = "macos")]
+pub fn wheel(
+    view: &objc2_app_kit::NSView,
+    at: gpui::Point<Pixels>,
+    down: f32,
+) -> Result<(), String> {
+    use objc2_app_kit::NSEvent;
+    use objc2_core_graphics::{CGDisplayBounds, CGEvent, CGMainDisplayID, CGScrollEventUnit};
+    let window = view.window().ok_or("the view is in no window")?;
+    #[expect(clippy::cast_possible_truncation, reason = "a turn of the wheel")]
+    let turned =
+        CGEvent::new_scroll_wheel_event2(None, CGScrollEventUnit::Pixel, 1, -down as i32, 0, 0)
+            .ok_or("the system made no wheel event")?;
+    // The event is of no window: the view reads where it is in the
+    // screen's points, which count up from the bottom of the main
+    // display, as the window's points, which count up from its bottom.
+    let main = CGDisplayBounds(CGMainDisplayID());
+    let from_bottom = window.frame().size.height - f64::from(f32::from(at.y));
+    CGEvent::set_location(
+        Some(&turned),
+        objc2_foundation::NSPoint::new(f64::from(f32::from(at.x)), main.size.height - from_bottom),
+    );
+    let event = NSEvent::eventWithCGEvent(&turned).ok_or("the system made no wheel event")?;
+    view.scrollWheel(&event);
+    Ok(())
+}
+
+/// Hands `view` the mouse's event of `kind` at `at`, a point of the window
+/// as [`capture_window`] shows it.
+#[cfg(target_os = "macos")]
+fn mouse(
+    view: &objc2_app_kit::NSView,
+    kind: objc2_app_kit::NSEventType,
+    at: gpui::Point<Pixels>,
+    clicks: isize,
+) -> Result<(), String> {
+    use objc2_app_kit::{NSEvent, NSEventModifierFlags, NSEventType};
+    use objc2_foundation::{NSPoint, NSProcessInfo};
+    let window = view.window().ok_or("the view is in no window")?;
+    // `at` is a point of the screenshot, which shows the whole window, its
+    // title bar too, from the top; the window counts from its bottom.
+    let location = NSPoint::new(
+        f64::from(f32::from(at.x)),
+        window.frame().size.height - f64::from(f32::from(at.y)),
+    );
+    let pressed = matches!(
+        kind,
+        NSEventType::LeftMouseDown
+            | NSEventType::LeftMouseDragged
+            | NSEventType::RightMouseDown
+            | NSEventType::OtherMouseDown
+    );
+    let event = NSEvent::mouseEventWithType_location_modifierFlags_timestamp_windowNumber_context_eventNumber_clickCount_pressure(
+        kind,
+        location,
+        NSEventModifierFlags::empty(),
+        NSProcessInfo::processInfo().systemUptime(),
+        window.windowNumber(),
+        None,
+        0,
+        clicks,
+        if pressed { 1.0 } else { 0.0 },
+    )
+    .ok_or("the system made no mouse event")?;
+    match kind {
+        NSEventType::LeftMouseDown => view.mouseDown(&event),
+        NSEventType::LeftMouseDragged => view.mouseDragged(&event),
+        NSEventType::LeftMouseUp => view.mouseUp(&event),
+        NSEventType::RightMouseDown => view.rightMouseDown(&event),
+        NSEventType::RightMouseUp => view.rightMouseUp(&event),
+        NSEventType::OtherMouseDown => view.otherMouseDown(&event),
+        _ => view.otherMouseUp(&event),
     }
     Ok(())
 }

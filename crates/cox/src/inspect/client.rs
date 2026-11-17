@@ -19,6 +19,9 @@ Usage: cox [--data <dir>] --inspect [<tool> [<arguments>...]]
   key <keystroke>...                   presses keys, as ctrl-n or enter
   type <text>                          types text, a newline pressing Enter
   click <x> <y> [left|right|middle] [<count>]
+  drag <x> <y> <to x> <to y> [<seconds> [<wheel>]]
+                                       drags the left button, turning the wheel by <wheel> points and
+                                       holding it at the end for <seconds>
   action <name>                        dispatches a GPUI action, as cox::NewChat
   frames [<seconds>]                   where the window and its pages stuck lately, 10 s unless given
 With no tool, the tools are listed, as the Cox asked tells them.";
@@ -75,6 +78,25 @@ impl Call {
                     }
                 }
                 ("click", arguments)
+            }
+            ["drag", x, y, to_x, to_y, rest @ ..] if rest.len() <= 2 => {
+                let number = |word: &str| {
+                    word.parse::<f64>()
+                        .map_err(|_| format!("{word} is not a number"))
+                };
+                let mut arguments = json!({
+                    "x": number(x)?,
+                    "y": number(y)?,
+                    "to_x": number(to_x)?,
+                    "to_y": number(to_y)?,
+                });
+                if let [seconds, ..] = rest {
+                    arguments["seconds"] = Value::from(number(seconds)?);
+                }
+                if let [_, wheel] = rest {
+                    arguments["wheel"] = Value::from(number(wheel)?);
+                }
+                ("drag", arguments)
             }
             ["action", name] => ("action", json!({ "name": name })),
             ["frames"] => ("frames", json!({})),
