@@ -5051,6 +5051,7 @@ async fn an_agent_waits_for_the_chat_it_opened(cx: &mut TestAppContext) {
         waited.try_recv().unwrap(),
         Ok(Waited {
             said: Some("echo: slow hello".to_owned()),
+            reply: Some("echo: slow hello".to_owned()),
             ..Waited::default()
         })
     );
@@ -5091,6 +5092,7 @@ async fn an_agent_waits_for_the_chat_it_opened(cx: &mut TestAppContext) {
         waited.await.unwrap(),
         Ok(Waited {
             said: Some("echo: permission".to_owned()),
+            reply: Some("echo: permission".to_owned()),
             ..Waited::default()
         })
     );
@@ -5149,6 +5151,7 @@ async fn a_subagent_goes_by_its_title_and_runs_with_the_model_asked_as_offered(
         waited.await.unwrap(),
         Ok(Waited {
             said: Some("echo: go".to_owned()),
+            reply: Some("echo: go".to_owned()),
             ..Waited::default()
         })
     );
@@ -5170,6 +5173,7 @@ async fn a_subagent_goes_by_its_title_and_runs_with_the_model_asked_as_offered(
         waited.await.unwrap(),
         Ok(Waited {
             said: Some("echo: go".to_owned()),
+            reply: Some("echo: go".to_owned()),
             unoffered: Some(unoffered.to_owned()),
             ..Waited::default()
         })
