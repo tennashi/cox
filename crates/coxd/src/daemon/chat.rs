@@ -232,6 +232,9 @@ impl ByItself {
                 return;
             }
             AgentEvent::WentOn => self.went_on = Some(now),
+            // The agent compacts its context by itself, which is no work
+            // it goes on with.
+            AgentEvent::Compacted(_) => return,
             _ => {}
         }
         if let Some(went_on) = &mut self.went_on {

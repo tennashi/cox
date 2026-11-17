@@ -155,6 +155,9 @@ pub enum AgentEvent {
     Usage(cox_acp::Usage),
     /// The tokens the turn spent, as the agent told them as it ended.
     TurnTokens(cox_acp::Tokens),
+    /// The agent compacted the session's context, as it ended: by itself
+    /// while no turn ran, which is not the agent going on, or in a turn.
+    Compacted(cox_acp::Compaction),
     /// The turn ended.
     TurnEnded(StopReason),
     /// The agent answered the prompt with an error.
@@ -1138,6 +1141,7 @@ fn update_event(update: Update) -> Result<AgentEvent, Ask> {
         Update::Task(task) => AgentEvent::Task(task),
         Update::Usage(usage) => AgentEvent::Usage(usage),
         Update::TurnTokens(tokens) => AgentEvent::TurnTokens(tokens),
+        Update::Compaction(compaction) => AgentEvent::Compacted(compaction),
         Update::PermissionRequest(request) => return Err(Ask::Permission(request)),
         Update::Question(request) => return Err(Ask::Question(request)),
     })
@@ -1182,11 +1186,16 @@ async fn between_turns(
             command = commands.recv() => return Ok(command),
             Some(update) = session.next_unprompted() => {
                 // A task the agent left running that ends is not yet the
-                // agent going on, nor is what it tells of what it spent:
-                // what it sends after is.
+                // agent going on, nor is what it tells of what it spent,
+                // nor a compaction of its context, which it does by
+                // itself when the session was left idle: what it sends
+                // after is.
                 let going_on = !matches!(
                     update,
-                    Update::Task(_) | Update::Usage(_) | Update::TurnTokens(_)
+                    Update::Task(_)
+                        | Update::Usage(_)
+                        | Update::TurnTokens(_)
+                        | Update::Compaction(_)
                 );
                 if going_on && !std::mem::replace(went_on, true) {
                     let _ = events.send(AgentEvent::WentOn);

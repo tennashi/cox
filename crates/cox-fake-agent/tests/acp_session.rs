@@ -7,9 +7,9 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use cox_acp::{
-    Block, Login, LoginMethod, McpServer, News, PermissionAnswer, PermissionKind, PlanEntry,
-    PlanState, Session, Steered, StopReason, ToolCallContent, ToolCallResult, ToolKind, Turn,
-    Update,
+    Block, Compaction, CompactionTrigger, Login, LoginMethod, McpServer, News, PermissionAnswer,
+    PermissionKind, PlanEntry, PlanState, Session, Steered, StopReason, ToolCallContent,
+    ToolCallResult, ToolKind, Turn, Update,
 };
 use serde_json::{Value, json};
 use tempfile::TempDir;
@@ -645,44 +645,98 @@ async fn what_the_agent_sent_unprompted_and_was_not_taken_comes_first_in_the_nex
     assert_eq!(replied(&updates), "Finished.Next.");
 }
 
+/// What `claude-agent-acp` tells of a compaction in a tool call's
+/// `_meta`, as `facts`.
+fn compaction_meta(facts: &Value) -> Value {
+    json!({ "jetbrains": { "air": { "contextCompaction": facts } } })
+}
+
+/// The compaction of 206,713 tokens to 12,136 that `trigger` started.
+fn compacted(trigger: Option<CompactionTrigger>) -> Compaction {
+    Compaction {
+        trigger,
+        before: Some(206_713),
+        after: Some(12_136),
+        took: Some(Duration::from_secs(3)),
+        failed: None,
+    }
+}
+
+/// The steps of a compaction `trigger` starts, `"compact"`, as
+/// `claude-agent-acp` reports it: a tool call, its end, then news of it
+/// in `_meta` alone.
+fn compaction_steps(trigger: &str) -> Value {
+    json!([
+        { "tool": {
+            "id": "compact", "title": "Compact conversation", "kind": "think",
+            "status": "in_progress", "_meta": compaction_meta(&json!({ "version": 1 })),
+        } },
+        { "tool_update": { "id": "compact", "status": "completed" } },
+        { "tool_update": { "id": "compact", "_meta": compaction_meta(&json!({
+            "version": 1, "trigger": trigger, "preTokens": 206_713,
+            "postTokens": 12_136, "durationMs": 3000,
+        })) } },
+    ])
+}
+
 #[tokio::test]
-async fn a_compaction_while_idle_ends_and_starts_no_call_again() {
-    // As `claude-agent-acp` compacts the context of a session left idle:
-    // a tool call, its end, then news of it in `_meta` alone.
-    let compaction = json!({ "jetbrains": { "air": { "contextCompaction": {
-        "version": 1, "trigger": "idle", "preTokens": 206_713, "postTokens": 12_136,
-    } } } });
+async fn a_compaction_while_idle_is_told_once_as_a_compaction_and_no_tool_call() {
+    let mut after = compaction_steps("idle").as_array().unwrap().clone();
+    after.push(json!({ "say": "Quiet." }));
     let played = Played::new(&json!({ "turns": [
-        { "steps": [{ "say": "Done." }], "after": [
-            { "tool": { "id": "compact", "title": "Compact conversation", "kind": "think", "status": "in_progress" } },
-            { "tool_update": { "id": "compact", "status": "completed" } },
-            { "tool_update": { "id": "compact", "_meta": compaction } },
-            { "say": "Quiet." },
-        ] },
+        { "steps": [{ "say": "Done." }], "after": after },
     ] }));
-    let calls = played
+    let told = played
         .talk(async |mut session| {
             session.send([text("go")]).end().await?;
-            let mut calls = Vec::new();
+            let mut told = Vec::new();
             loop {
                 match session.next_unprompted().await {
-                    Some(Update::ToolCall(call)) => calls.push((call.title, call.result)),
+                    Some(Update::ToolCall(call)) => told.push(Err(call.title)),
+                    Some(Update::Compaction(compaction)) => told.push(Ok(compaction)),
                     Some(Update::ReplyText(_)) | None => break,
                     Some(_) => {}
                 }
             }
-            Ok(calls)
+            Ok(told)
         })
         .await
         .unwrap();
-    let title = Some("Compact conversation".to_owned());
-    assert_eq!(
-        calls,
-        [
-            (title.clone(), None),
-            (title, Some(ToolCallResult::Completed)),
-        ]
+    assert_eq!(told, [Ok(compacted(Some(CompactionTrigger::Idle)))]);
+}
+
+#[tokio::test]
+async fn a_compaction_in_a_turn_is_told_as_a_compaction_and_no_tool_call() {
+    let mut steps = compaction_steps("automatic").as_array().unwrap().clone();
+    steps.push(json!({ "say": "Going on." }));
+    let played = Played::new(&one_turn(&Value::Array(steps)));
+    let updates = played
+        .talk(async |mut session| {
+            let mut turn = session.send([text("go")]);
+            let updates = all(&mut turn).await;
+            turn.end().await?;
+            Ok(updates)
+        })
+        .await
+        .unwrap();
+    assert!(
+        !updates
+            .iter()
+            .any(|update| matches!(update, Update::ToolCall(_))),
+        "the compaction shows as a tool call"
     );
+    let compactions: Vec<&Compaction> = updates
+        .iter()
+        .filter_map(|update| match update {
+            Update::Compaction(compaction) => Some(compaction),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        compactions,
+        [&compacted(Some(CompactionTrigger::Automatic))]
+    );
+    assert_eq!(replied(&updates), "Going on.");
 }
 
 #[tokio::test]

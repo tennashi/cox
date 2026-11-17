@@ -44,9 +44,11 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
+mod compaction;
 mod question;
 mod usage;
 
+pub use compaction::{Compaction, CompactionTrigger};
 pub use question::{Picked, Question, QuestionAnswer, QuestionOption, QuestionRequest};
 pub use usage::{Microdollars, Tokens, Usage};
 
@@ -563,6 +565,8 @@ enum Received {
         locations: Option<Vec<PathBuf>>,
         content: Option<Vec<ToolCallContent>>,
         status: Option<ToolCallStatus>,
+        /// What its `_meta` tells of the compaction it is, when it is one.
+        compaction: Option<compaction::Told>,
     },
     /// The agent answered the prompt of the session's turn `turn`, its
     /// turns counted from 1.
@@ -591,6 +595,9 @@ struct ToolCalls {
     /// compaction saved in `_meta` once it completed, which is no new
     /// call starting.
     ended: HashMap<ToolCallId, Ended>,
+    /// The calls that are compactions of the context, kept for the
+    /// session, as the agent tells of one after its end.
+    compactions: HashMap<ToolCallId, compaction::Compacting>,
 }
 
 /// What is known of a tool call that ended.
@@ -630,6 +637,7 @@ fn translate(update: SessionUpdate) -> Option<Received> {
             content,
             locations,
             status,
+            meta,
             ..
         }) => Some(Received::ToolCall {
             id: tool_call_id,
@@ -638,10 +646,12 @@ fn translate(update: SessionUpdate) -> Option<Received> {
             locations: Some(paths(locations)),
             content: Some(translate_content(content)),
             status: Some(status),
+            compaction: compaction::Told::of(meta.as_ref()),
         }),
         SessionUpdate::ToolCallUpdate(ToolCallUpdate {
             tool_call_id,
             fields,
+            meta,
             ..
         }) => Some(Received::ToolCall {
             id: tool_call_id,
@@ -650,6 +660,7 @@ fn translate(update: SessionUpdate) -> Option<Received> {
             locations: fields.locations.map(paths),
             content: fields.content.map(translate_content),
             status: fields.status,
+            compaction: compaction::Told::of(meta.as_ref()),
         }),
         SessionUpdate::UsageUpdate(update) => Some(Received::Update(Update::Usage(update.into()))),
         _ => None,
@@ -1265,7 +1276,23 @@ fn follow(tool_calls: &mut ToolCalls, received: Received) -> Option<Update> {
             locations,
             content,
             status,
+            compaction,
         } => {
+            if compaction.is_some() || tool_calls.compactions.contains_key(&id) {
+                let failed = status == Some(ToolCallStatus::Failed);
+                let error = content.and_then(|content| {
+                    content.into_iter().find_map(|content| match content {
+                        ToolCallContent::Text(text) => Some(text),
+                        ToolCallContent::Diff { .. } => None,
+                    })
+                });
+                return tool_calls
+                    .compactions
+                    .entry(id)
+                    .or_default()
+                    .follow(compaction, failed, error)
+                    .map(Update::Compaction);
+            }
             let told = Known {
                 title,
                 kind,
@@ -1393,6 +1420,10 @@ pub enum Update {
     /// The tokens the turn spent, as the agent told them as it answered
     /// the prompt: the last update of the turn.
     TurnTokens(Tokens),
+    /// The agent compacted the session's context, by itself while no
+    /// turn ran, or in a turn, as the context filled up or the human
+    /// asked: once it ended. Its tool call shows as nothing else.
+    Compaction(Compaction),
 }
 
 /// Work the agent runs apart from its turns, as `claude-agent-acp` tells
