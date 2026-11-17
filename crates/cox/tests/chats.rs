@@ -5261,3 +5261,25 @@ async fn the_stage_names_the_chats_while_the_window_is_updated(cx: &mut TestAppC
     let name = workspace.update(cx, |_, cx| names(key, cx));
     assert_eq!(name.as_ref().map(AsRef::as_ref), Some("hello"));
 }
+
+#[gpui::test]
+async fn stopping_while_the_agent_asks_to_log_in_ends_the_turn(cx: &mut TestAppContext) {
+    let home = scratch::folder("login-stop-home");
+    std::fs::create_dir_all(&home).unwrap();
+    let file = home.join("logged in");
+    let (_agents, workspace, cx) = open_window_logging_in(cx, home, LogsIn::AtPrompt(file));
+
+    cx.simulate_keystrokes("secondary-n");
+    let view = shown(cx, &workspace);
+    cx.simulate_input("hello");
+    cx.simulate_keystrokes("enter");
+    cx.condition(&view, |view, _| view.conversation().logging_in())
+        .await;
+    cx.simulate_keystrokes("escape");
+    settle(cx).await;
+    let (_waiting, timeout) = given_up();
+    tokio::select! {
+        () = cx.condition(&view, |view, _| view.conversation().state() == State::Idle) => {}
+        _ = timeout => panic!("the chat never stopped: {:?}", view.read_with(cx, |view, _| view.conversation().state())),
+    }
+}

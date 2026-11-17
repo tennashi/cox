@@ -83,3 +83,5 @@ zip = { version = "9.3.0", default-features = false, features = ["deflate-flate2
 coxd = { path = ".", features = ["test-support"] }
 agent-client-protocol.workspace = true
 cox-git = { workspace = true, features = ["test-support"] }
+# Tests move the time a chat waits on forward, as for a stop.
+tokio = { workspace = true, features = ["test-util"] }

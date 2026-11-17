@@ -143,6 +143,11 @@ pub const GOES_ON_QUIET: Duration = Duration::from_mins(2);
 /// on with by itself a moment later.
 pub const BACKGROUND_SETTLES: Duration = Duration::from_secs(5);
 
+/// How long the agent has to stop its turn once the human asked it to,
+/// before Cox ends it, and the chat with it, to start it again with the
+/// next line: `claude-agent-acp` stops in well under a second.
+pub const STOP_WAIT: Duration = Duration::from_secs(10);
+
 /// What a chat's agent does apart from the turns Cox asks of it, as it
 /// tells it: once a task it left running in the background ends,
 /// `claude-agent-acp` goes on by itself, with no prompt to answer.
@@ -377,6 +382,9 @@ pub struct Chat {
     /// its agent ran in the background settled (see
     /// [`BACKGROUND_SETTLES`]), while it waits.
     settles: Option<Task>,
+    /// What ends the agent once [`STOP_WAIT`] has passed since the human
+    /// last asked it to stop, if it has not stopped by then.
+    stop_due: Option<Task>,
 }
 
 /// A repository of the folder a chat works in, as a turn started.
@@ -435,6 +443,7 @@ impl Chat {
             places: Places::Cox,
             by_itself: ByItself::default(),
             settles: None,
+            stop_due: None,
         }
     }
 
@@ -514,13 +523,14 @@ impl Chat {
         self.generation
     }
 
-    /// Takes what starts the agent of the closed chat again, if it can,
-    /// and has the conversation go on: a line sent waits for the agent.
+    /// What starts the agent of the closed chat again, if it can, and has
+    /// the conversation go on: a line sent waits for the agent. The chat
+    /// keeps it, to start its agent again each time it closes.
     pub fn take_again(&mut self) -> Option<Again> {
         if self.conversation.state() != State::Closed || self.starting {
             return None;
         }
-        let again = self.again.take()?;
+        let again = self.again.clone()?;
         self.conversation.reopen();
         Some(again)
     }
@@ -1738,9 +1748,31 @@ impl Chat {
         let was_checking = self.conversation.runs_checks();
         if let Some(command) = self.conversation.cancel() {
             self.send(command);
+            let (internal, key, generation) = (self.internal.clone(), self.key, self.generation);
+            self.stop_due = Some(spawn(async move {
+                tokio::time::sleep(STOP_WAIT).await;
+                let _ = internal.send(Internal::StopDue { key, generation });
+            }));
         }
         self.let_checks_go(was_checking);
         self.settle_gathering();
+    }
+
+    /// [`STOP_WAIT`] passed since the human asked the agent of
+    /// `generation` to stop: if it has not, Cox ends it, with every process
+    /// it started, and the chat closes, to start it again, going on with its
+    /// session, with the next line.
+    pub fn stop_due(&mut self, generation: u64) {
+        if generation != self.generation || self.conversation.state() != State::Stopping {
+            return;
+        }
+        tracing::warn!("the agent did not stop in {STOP_WAIT:?}: Cox ends it");
+        self.stop_agent();
+        let closed = AgentEvent::Closed(Some(format!(
+            "it did not stop within {} seconds, so Cox ended it. The next line starts it again.",
+            STOP_WAIT.as_secs()
+        )));
+        self.hear(self.generation, closed, false);
     }
 
     fn send(&mut self, command: Command) {
@@ -2217,6 +2249,67 @@ mod tests {
         });
     }
 
+    /// The `generation` of the next [`Internal::StopDue`] a task of the
+    /// chat tells.
+    async fn stop_due(talk: &mut Talk) -> u64 {
+        loop {
+            if let Internal::StopDue { generation, .. } = talk.told().await {
+                return generation;
+            }
+        }
+    }
+
+    #[test]
+    fn an_agent_that_does_not_stop_is_ended_and_the_next_line_starts_it_again() {
+        on_daemon(async {
+            tokio::time::pause();
+            let cwd = TempDir::new();
+            let mut talk = Talk::new(Some(again(&cwd)));
+            talk.hear(AgentEvent::Opened {
+                id: "session-1".to_owned(),
+                how: crate::agent::Opened::New,
+                steers: false,
+            });
+            talk.chat.submit("hello", Vec::new());
+            let asked = tokio::time::Instant::now();
+
+            talk.chat.stop();
+            assert_eq!(talk.state(), State::Stopping);
+            let generation = stop_due(&mut talk).await;
+            assert!(asked.elapsed() >= STOP_WAIT, "{:?}", asked.elapsed());
+            talk.chat.stop_due(generation);
+
+            assert_eq!(talk.state(), State::Closed);
+            let said = talk.chat.conversation().entries().last().cloned();
+            assert!(
+                matches!(&said, Some(Entry::Note(note)) if note.contains("did not stop within 10 seconds")),
+                "{said:?}"
+            );
+            let taken = talk
+                .chat
+                .take_again()
+                .expect("the next line starts it again");
+            assert_eq!(taken.session.as_deref(), Some("session-1"));
+        });
+    }
+
+    #[test]
+    fn an_agent_that_stops_in_time_is_let_be() {
+        on_daemon(async {
+            tokio::time::pause();
+            let mut talk = Talk::new(None);
+            talk.chat.submit("hello", Vec::new());
+
+            talk.chat.stop();
+            talk.hear(AgentEvent::TurnEnded(StopReason::Cancelled));
+            let generation = stop_due(&mut talk).await;
+            talk.chat.stop_due(generation);
+
+            assert_eq!(talk.state(), State::Idle);
+            assert!(talk.chat.is_open());
+        });
+    }
+
     /// What starts a chat working in `cwd` again, with no session yet.
     fn again(cwd: &Path) -> Again {
         Again {
@@ -2278,6 +2371,25 @@ mod tests {
             let taken = talk.chat.take_again().unwrap();
 
             assert_eq!(taken.session.as_deref(), Some("session-1"));
+        });
+    }
+
+    #[test]
+    fn a_chat_whose_agent_closes_again_starts_it_again() {
+        on_daemon(async {
+            let cwd = TempDir::new();
+            let mut talk = Talk::new(Some(again(&cwd)));
+            talk.hear(AgentEvent::Closed(None));
+            talk.chat.take_again().unwrap();
+            talk.generation = talk.chat.next_generation();
+            let (agent, played) = played(&cwd);
+            talk.chat.attach(agent, talk.generation, Vec::new());
+            talk.agent = played;
+
+            talk.hear(AgentEvent::Closed(None));
+
+            assert!(talk.chat.starts_again());
+            assert!(talk.chat.take_again().is_some());
         });
     }
 
