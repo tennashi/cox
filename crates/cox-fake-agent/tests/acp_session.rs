@@ -646,6 +646,46 @@ async fn what_the_agent_sent_unprompted_and_was_not_taken_comes_first_in_the_nex
 }
 
 #[tokio::test]
+async fn a_compaction_while_idle_ends_and_starts_no_call_again() {
+    // As `claude-agent-acp` compacts the context of a session left idle:
+    // a tool call, its end, then news of it in `_meta` alone.
+    let compaction = json!({ "jetbrains": { "air": { "contextCompaction": {
+        "version": 1, "trigger": "idle", "preTokens": 206_713, "postTokens": 12_136,
+    } } } });
+    let played = Played::new(&json!({ "turns": [
+        { "steps": [{ "say": "Done." }], "after": [
+            { "tool": { "id": "compact", "title": "Compact conversation", "kind": "think", "status": "in_progress" } },
+            { "tool_update": { "id": "compact", "status": "completed" } },
+            { "tool_update": { "id": "compact", "_meta": compaction } },
+            { "say": "Quiet." },
+        ] },
+    ] }));
+    let calls = played
+        .talk(async |mut session| {
+            session.send([text("go")]).end().await?;
+            let mut calls = Vec::new();
+            loop {
+                match session.next_unprompted().await {
+                    Some(Update::ToolCall(call)) => calls.push((call.title, call.result)),
+                    Some(Update::ReplyText(_)) | None => break,
+                    Some(_) => {}
+                }
+            }
+            Ok(calls)
+        })
+        .await
+        .unwrap();
+    let title = Some("Compact conversation".to_owned());
+    assert_eq!(
+        calls,
+        [
+            (title.clone(), None),
+            (title, Some(ToolCallResult::Completed)),
+        ]
+    );
+}
+
+#[tokio::test]
 async fn cancelling_between_turns_stops_what_the_agent_does_on_its_own() {
     let played = Played::new(&goes_on_after(60_000));
     let updates = played

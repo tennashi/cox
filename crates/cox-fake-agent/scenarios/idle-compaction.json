@@ -1,0 +1,45 @@
+{
+  "turns": [
+    {
+      "steps": [
+        { "say": "Done for now. I'll be here when you need me." },
+        { "update": { "sessionUpdate": "usage_update", "used": 206713, "size": 1000000 } }
+      ],
+      "after": [
+        { "sleep": 3000 },
+        { "stderr": "[idle-compaction] firing /compact" },
+        {
+          "tool": {
+            "id": "compact-1",
+            "title": "Compact conversation",
+            "kind": "think",
+            "status": "in_progress",
+            "_meta": { "jetbrains": { "air": { "version": 1, "contextCompaction": { "version": 1 } } } }
+          }
+        },
+        { "sleep": 3000 },
+        { "tool_update": { "id": "compact-1", "status": "completed" } },
+        {
+          "tool_update": {
+            "id": "compact-1",
+            "_meta": {
+              "jetbrains": {
+                "air": {
+                  "contextCompaction": {
+                    "version": 1,
+                    "trigger": "idle",
+                    "preTokens": 206713,
+                    "postTokens": 12136,
+                    "durationMs": 3000
+                  }
+                }
+              }
+            }
+          }
+        },
+        { "update": { "sessionUpdate": "usage_update", "used": 12136, "size": 1000000 } }
+      ]
+    },
+    { "steps": [{ "say": "Back with a compacted context." }] }
+  ]
+}

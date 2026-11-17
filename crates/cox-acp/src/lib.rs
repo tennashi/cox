@@ -254,7 +254,7 @@ pub async fn connect<T>(
                 updates: updates.clone(),
                 received,
                 turns: 0,
-                tool_calls: HashMap::new(),
+                tool_calls: ToolCalls::default(),
             };
             outcome = Some(talk(session).await);
             Ok(())
@@ -581,6 +581,26 @@ struct Known {
     locations: Vec<PathBuf>,
 }
 
+/// What is known of a session's tool calls: of each that has not ended,
+/// and of each that has, how it ended.
+#[derive(Debug, Default)]
+struct ToolCalls {
+    open: HashMap<ToolCallId, Known>,
+    /// The calls that ended, kept for the session: the agent may tell of
+    /// one after its end, as `claude-agent-acp` tells how much a
+    /// compaction saved in `_meta` once it completed, which is no new
+    /// call starting.
+    ended: HashMap<ToolCallId, Ended>,
+}
+
+/// What is known of a tool call that ended.
+#[derive(Clone, Debug)]
+struct Ended {
+    title: Option<String>,
+    kind: Option<ToolKind>,
+    result: ToolCallResult,
+}
+
 /// Hands `received` to the session: to the turn that is running, or to
 /// [`Session::next_unprompted`] while none runs. The receiver lives as long
 /// as the session, so sending only fails after `talk` has returned, when
@@ -825,8 +845,8 @@ pub struct Session {
     received: UnboundedReceiver<Received>,
     /// How many turns the session has started.
     turns: u64,
-    /// What is known of each tool call that has not ended yet.
-    tool_calls: HashMap<ToolCallId, Known>,
+    /// What is known of each tool call.
+    tool_calls: ToolCalls,
 }
 
 impl Session {
@@ -922,7 +942,7 @@ impl Session {
     /// [`Session::next_unprompted`], comes first in the turn.
     pub fn send(&mut self, blocks: impl IntoIterator<Item = Block>) -> Turn<'_> {
         let prompt = PromptRequest::new(self.id.clone(), content(blocks, self.takes));
-        self.tool_calls.clear();
+        self.tool_calls.open.clear();
         self.turns += 1;
         let turn = self.turns;
         let sent = self.cx.send_request(prompt);
@@ -1074,7 +1094,7 @@ pub struct Turn<'s> {
     session: &'s SessionId,
     takes: Takes,
     received: &'s mut UnboundedReceiver<Received>,
-    tool_calls: &'s mut HashMap<ToolCallId, Known>,
+    tool_calls: &'s mut ToolCalls,
     /// Which of the session's turns it is.
     number: u64,
     /// Asks the agent to drop the prompt, when the turn is dropped before
@@ -1140,8 +1160,16 @@ impl Turn<'_> {
     /// Forgets one of the tool calls that have not ended, if any is left,
     /// and returns it as cancelled.
     fn drop_tool_call(&mut self) -> Option<ToolCall> {
-        let id = self.tool_calls.keys().next()?.clone();
-        let known = self.tool_calls.remove(&id).unwrap_or_default();
+        let id = self.tool_calls.open.keys().next()?.clone();
+        let known = self.tool_calls.open.remove(&id).unwrap_or_default();
+        self.tool_calls.ended.insert(
+            id.clone(),
+            Ended {
+                title: known.title.clone(),
+                kind: known.kind,
+                result: ToolCallResult::Cancelled,
+            },
+        );
         Some(ToolCall {
             id: id.to_string(),
             title: known.title,
@@ -1219,10 +1247,10 @@ impl Turn<'_> {
 /// Takes `received`, what the agent sent, given what is known of the
 /// tool calls that have not ended, and returns what there is to show of
 /// it, if anything.
-fn follow(tool_calls: &mut HashMap<ToolCallId, Known>, received: Received) -> Option<Update> {
+fn follow(tool_calls: &mut ToolCalls, received: Received) -> Option<Update> {
     match received {
         Received::Update(Update::PermissionRequest(mut request)) => {
-            if let Some(known) = tool_calls.get(&request.request.tool_call.tool_call_id) {
+            if let Some(known) = tool_calls.open.get(&request.request.tool_call.tool_call_id) {
                 request.fill(known);
             }
             Some(Update::PermissionRequest(request))
@@ -1251,9 +1279,10 @@ fn follow(tool_calls: &mut HashMap<ToolCallId, Known>, received: Received) -> Op
 /// Records news of a tool call, what it is `told` to be, and returns the
 /// call when there is something new to show: it started, its title or
 /// content changed, or it ended. A kind or locations not told stay as
-/// they were.
+/// they were. News of a call that ended starts no call again: it shows
+/// only when it tells a new title or content, with how the call ended.
 fn follow_tool_call(
-    tool_calls: &mut HashMap<ToolCallId, Known>,
+    tool_calls: &mut ToolCalls,
     id: ToolCallId,
     told: Known,
     content: Option<Vec<ToolCallContent>>,
@@ -1267,18 +1296,47 @@ fn follow_tool_call(
         _ => None,
     };
     let shown_id = id.to_string();
-    if result.is_some() {
-        let known = tool_calls.remove(&id).unwrap_or_default();
-        return Some(ToolCall {
+    if let Some(ended) = tool_calls.ended.get_mut(&id) {
+        let retitled = title.is_some() && title != ended.title;
+        if retitled {
+            ended.title = title;
+        }
+        if kind.is_some() {
+            ended.kind = kind;
+        }
+        if let Some(result) = result {
+            ended.result = result;
+        }
+        return (retitled || content.is_some()).then(|| ToolCall {
             id: shown_id,
-            title: title.or(known.title),
-            kind: kind.or(known.kind),
+            title: ended.title.clone(),
+            kind: ended.kind,
             content,
-            result,
+            result: Some(ended.result),
         });
     }
-    let started = !tool_calls.contains_key(&id);
-    let known = tool_calls.entry(id).or_default();
+    if let Some(result) = result {
+        let known = tool_calls.open.remove(&id).unwrap_or_default();
+        let title = title.or(known.title);
+        let kind = kind.or(known.kind);
+        tool_calls.ended.insert(
+            id,
+            Ended {
+                title: title.clone(),
+                kind,
+                result,
+            },
+        );
+        return Some(ToolCall {
+            id: shown_id,
+            title,
+            kind,
+            content,
+            result: Some(result),
+        });
+    }
+    let started = !tool_calls.open.contains_key(&id);
+    let known = tool_calls.open.entry(id).or_default();
     if kind.is_some() {
         known.kind = kind;
     }
@@ -1708,7 +1766,7 @@ mod tests {
 
     #[test]
     fn a_tool_call_keeps_its_kind_to_its_end() {
-        let mut tool_calls = HashMap::new();
+        let mut tool_calls = ToolCalls::default();
         let id = ToolCallId::new("call-1");
         let told = |kind| Known {
             title: None,
@@ -1738,6 +1796,34 @@ mod tests {
         let ended = ended.expect("the end shows");
         assert_eq!(ended.kind, Some(ToolKind::Execute));
         assert_eq!(ended.title.as_deref(), Some("cargo test"));
+    }
+
+    #[test]
+    fn news_of_a_tool_call_that_ended_starts_no_call() {
+        let mut tool_calls = ToolCalls::default();
+        let id = ToolCallId::new("compact");
+        let told = |title: Option<&str>| Known {
+            title: title.map(str::to_owned),
+            kind: None,
+            locations: Vec::new(),
+        };
+        let mut news = |title, content, status| {
+            follow_tool_call(&mut tool_calls, id.clone(), told(title), content, status)
+        };
+
+        news(
+            Some("Compact conversation"),
+            None,
+            Some(ToolCallStatus::InProgress),
+        );
+        news(None, None, Some(ToolCallStatus::Completed));
+        // As `claude-agent-acp` tells what the compaction saved, in
+        // `_meta` alone.
+        assert!(news(None, None, None).is_none(), "the call starts again");
+
+        let shown = news(None, Some(Vec::new()), None).expect("new content shows");
+        assert_eq!(shown.result, Some(ToolCallResult::Completed));
+        assert_eq!(shown.title.as_deref(), Some("Compact conversation"));
     }
 
     #[test]
