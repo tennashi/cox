@@ -70,7 +70,7 @@ use crate::terminal::run_unseen;
 use crate::trigger::By;
 use crate::workflow;
 use chat::{Again, Chat, Task, spawn};
-use wire::{Build, ChatRow, FromDaemon, Hello, Listing, ProjectRow, StageAsk, ToDaemon};
+use wire::{ChatRow, FromDaemon, Hello, Listing, ProjectRow, StageAsk, ToDaemon};
 
 /// What the project of chats with no folder is called.
 const COX: &str = "Cox";
@@ -210,13 +210,12 @@ pub enum Internal {
     /// The command `id`, which the window runs, is not waited for any more.
     Cancel { id: u64 },
     /// A window came, as the connection `id`, saying `hello`, to hear
-    /// what the daemon says on `window`, the daemon being of `build`.
-    /// `answer` hears how the daemon took it.
+    /// what the daemon says on `window`. `answer` hears how the daemon
+    /// took it.
     Attach {
         id: u64,
         hello: Hello,
         window: UnboundedSender<FromDaemon>,
-        build: Option<Build>,
         answer: oneshot::Sender<FromDaemon>,
     },
     /// The window of the connection `id` went.
@@ -1947,10 +1946,9 @@ impl Daemon {
                 id,
                 hello,
                 window,
-                build,
                 answer,
             } => {
-                let taken = self.attach(id, hello, window, build, Instant::now());
+                let taken = self.attach(id, hello, window, Instant::now());
                 answer.send(taken).ok();
             }
             Internal::Detach { id } => {
@@ -2107,16 +2105,15 @@ impl Daemon {
 
     /// Takes the window of the connection `id`, which says `hello`, to
     /// tell what it does on `window` from now on, unless another window
-    /// is there, or the window is of another build than the daemon's,
-    /// `build`, that speaks otherwise or comes while no chat is at work
-    /// at `now` (see [`Hello::answer`] and [`Slot::at_work`]). Answers
-    /// which of those it is.
+    /// is there, or the window speaks otherwise than the daemon or asks
+    /// it to stop, as a chat is at work at `now` or not (see
+    /// [`Hello::answer`] and [`Slot::at_work`]). Answers which of those
+    /// it is.
     fn attach(
         &mut self,
         id: u64,
         hello: Hello,
         window: UnboundedSender<FromDaemon>,
-        build: Option<Build>,
         now: Instant,
     ) -> FromDaemon {
         if self.window.is_some() {
@@ -2127,17 +2124,17 @@ impl Daemon {
             .iter()
             .chain(&self.archived)
             .any(|slot| slot.at_work(now));
-        let answer = hello.answer(build, Some(wire::SPEAKS), at_work);
-        if answer == FromDaemon::Busy {
-            tracing::warn!("a window of another build waits, since a chat is at work");
+        let answer = hello.answer(wire::VERSION, at_work);
+        match answer {
+            FromDaemon::Joined(_) => {}
+            FromDaemon::Busy => {
+                tracing::warn!("a window that coxd is to stop for waits, since a chat is at work");
+                return answer;
+            }
+            _ => return answer,
         }
-        if answer != FromDaemon::Joined {
-            return answer;
-        }
-        if hello.build != build {
-            tracing::info!(
-                "a window of another build that speaks alike joins, as a chat is at work"
-            );
+        if hello.version != Some(wire::VERSION) {
+            tracing::info!("a window of another build that speaks alike joins");
         }
         let Hello { home, command, .. } = hello;
         // A window not given a home leaves Cox's own chats where
@@ -2155,7 +2152,7 @@ impl Daemon {
         self.window_watches.clear();
         self.listed = None;
         self.shown = None;
-        FromDaemon::Joined
+        answer
     }
 
     /// Lets the window go: what it was asked to run it does not, and the
@@ -3146,6 +3143,7 @@ mod tests {
     use cox_core::entry::ToolCallResult;
 
     use super::chat::GOES_ON_QUIET;
+    use super::wire::Version;
     use super::*;
     use crate::testing::TempDir;
 
@@ -3626,31 +3624,15 @@ mod tests {
         daemon.settle();
     }
 
-    /// A window of the build `build`, which speaks as `speaks` says, comes
-    /// as the connection `id`, `later` from now, and is answered.
-    fn window_comes(
-        daemon: &mut Daemon,
-        id: u64,
-        build: Option<Build>,
-        speaks: u64,
-        later: Duration,
-    ) -> FromDaemon {
+    /// A window of `version` comes as the connection `id`, `later` from
+    /// now, and is answered.
+    fn window_comes(daemon: &mut Daemon, id: u64, version: Version, later: Duration) -> FromDaemon {
         let hello = Hello {
-            build,
-            speaks: Some(speaks),
+            version: Some(version),
             ..Hello::default()
         };
         let (window, _told) = unbounded_channel();
-        daemon.attach(id, hello, window, Build::now(), Instant::now() + later)
-    }
-
-    /// A build other than the test's own.
-    fn another_build() -> Option<Build> {
-        serde_json::from_value(serde_json::json!({
-            "size": 1,
-            "modified": {"secs_since_epoch": 0, "nanos_since_epoch": 0},
-        }))
-        .unwrap()
+        daemon.attach(id, hello, window, Instant::now() + later)
     }
 
     fn on_daemon(test: impl Future<Output = ()>) {
@@ -3679,8 +3661,8 @@ mod tests {
             let key = daemon.chats.last().unwrap().key;
             assert_eq!(agents.0.borrow().len(), 1, "the chat's agent started");
             assert_eq!(
-                window_comes(&mut daemon, 1, Build::now(), wire::SPEAKS, Duration::ZERO),
-                FromDaemon::Joined
+                window_comes(&mut daemon, 1, wire::VERSION, Duration::ZERO),
+                FromDaemon::Joined(wire::VERSION)
             );
 
             works(&mut daemon, key, &agents.0.borrow()[0]);
@@ -3688,8 +3670,16 @@ mod tests {
             daemon.hear(Internal::Detach { id: 1 });
             pump(&mut daemon, &mut heard).await;
 
-            let unlike = window_comes(&mut daemon, 2, another_build(), wire::SPEAKS + 1, later);
-            let alike = window_comes(&mut daemon, 3, another_build(), wire::SPEAKS, later);
+            let unlike = Version {
+                protocol: wire::VERSION.protocol + 1,
+                ..wire::VERSION
+            };
+            let alike = Version {
+                daemon: wire::VERSION.daemon + 1,
+                ..wire::VERSION
+            };
+            let unlike = window_comes(&mut daemon, 2, unlike, later);
+            let alike = window_comes(&mut daemon, 3, alike, later);
             answers = Some([unlike, alike]);
         });
         answers.unwrap()
@@ -3705,7 +3695,10 @@ mod tests {
             });
         });
 
-        assert_eq!(answers, [FromDaemon::Busy, FromDaemon::Joined]);
+        assert_eq!(
+            answers,
+            [FromDaemon::Busy, FromDaemon::Joined(wire::VERSION)]
+        );
     }
 
     #[test]
@@ -3727,7 +3720,10 @@ mod tests {
                 .unwrap();
         });
 
-        assert_eq!(answers, [FromDaemon::Busy, FromDaemon::Joined]);
+        assert_eq!(
+            answers,
+            [FromDaemon::Busy, FromDaemon::Joined(wire::VERSION)]
+        );
     }
 
     /// Has the agent `agent` tell `events`, as it sends them.
@@ -3774,7 +3770,10 @@ mod tests {
             );
         });
 
-        assert_eq!(answers, [FromDaemon::Busy, FromDaemon::Joined]);
+        assert_eq!(
+            answers,
+            [FromDaemon::Busy, FromDaemon::Joined(wire::VERSION)]
+        );
     }
 
     #[test]
@@ -3795,7 +3794,10 @@ mod tests {
             );
         });
 
-        assert_eq!(answers, [FromDaemon::Busy, FromDaemon::Joined]);
+        assert_eq!(
+            answers,
+            [FromDaemon::Busy, FromDaemon::Joined(wire::VERSION)]
+        );
     }
 
     #[test]
@@ -3823,7 +3825,11 @@ mod tests {
             );
         });
 
-        assert_eq!(answers, [FromDaemon::Outdated, FromDaemon::Outdated]);
+        assert_eq!(
+            answers,
+            [FromDaemon::Outdated, FromDaemon::Joined(wire::VERSION)],
+            "a window that speaks alike joins coxd, at work or not"
+        );
     }
 
     /// A chat the human works in, with no turn running, whose agent ran

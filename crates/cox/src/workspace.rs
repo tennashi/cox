@@ -707,7 +707,7 @@ impl Workspace {
                 }
             }
             // The greeting is over before the window hears the daemon.
-            FromDaemon::Joined
+            FromDaemon::Joined(_)
             | FromDaemon::Welcome
             | FromDaemon::Taken
             | FromDaemon::Outdated

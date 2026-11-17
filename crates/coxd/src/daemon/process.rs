@@ -9,11 +9,12 @@
 //! [`FromDaemon::Joined`], after which each line the window writes is a
 //! [`ToDaemon`] and each the daemon writes a [`FromDaemon`] (see
 //! [`super::wire`]). One window at a time: another is answered
-//! [`FromDaemon::Taken`]. A window of another [`Build`] than coxd's, as
-//! once `cargo xtask install` replaced the program coxd runs, is taken
-//! while a chat is at work if it speaks as coxd does (see
-//! [`super::wire::SPEAKS`]); else it is answered [`FromDaemon::Busy`]
-//! then, and comes again later. Once no chat is at work, it is answered
+//! [`FromDaemon::Taken`]. A window of another build, as once `cargo
+//! xtask install` replaced the program coxd runs, is taken if it speaks
+//! as coxd does (see [`super::wire::Version`]). One that speaks otherwise,
+//! or that asks coxd to stop, as when the human restarts Cox and coxd, is
+//! answered [`FromDaemon::Busy`] while a chat is at work, and comes again
+//! later; once none is, or at once when it asks so, it is answered
 //! [`FromDaemon::Outdated`], and coxd stops, for the window to start one
 //! of its own build (see [`super::client`]).
 //!
@@ -35,7 +36,7 @@ use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use tokio::sync::oneshot;
 
-use super::wire::{Build, FromDaemon, Hello, ToDaemon};
+use super::wire::{FromDaemon, Hello, ToDaemon};
 use super::{Daemon, Internal, Spawns};
 
 /// How often coxd looks whether it was asked to stop, and whether its
@@ -232,7 +233,6 @@ async fn accept(
     to: UnboundedSender<ToDaemon>,
     internal: UnboundedSender<Internal>,
 ) {
-    let build = Build::now();
     let mut last = 0;
     loop {
         let stream = match listener.accept().await {
@@ -243,17 +243,16 @@ async fn accept(
             }
         };
         last += 1;
-        tokio::task::spawn_local(connect(last, stream, build, to.clone(), internal.clone()));
+        tokio::task::spawn_local(connect(last, stream, to.clone(), internal.clone()));
     }
 }
 
 /// Serves the window of the connection `id` on `stream`, telling the
-/// daemon, of `build`, it came, and, once the daemon took it, what it
-/// says, until it goes.
+/// daemon it came, and, once the daemon took it, what it says, until it
+/// goes.
 async fn connect(
     id: u64,
     stream: UnixStream,
-    build: Option<Build>,
     to: UnboundedSender<ToDaemon>,
     internal: UnboundedSender<Internal>,
 ) {
@@ -275,7 +274,6 @@ async fn connect(
         id,
         hello,
         window,
-        build,
         answer,
     };
     if internal.send(attach).is_err() {
@@ -289,9 +287,9 @@ async fn connect(
         return;
     }
     match answer {
-        FromDaemon::Joined => {}
+        FromDaemon::Joined(_) => {}
         FromDaemon::Outdated => {
-            tracing::info!("a window of another build came: coxd stops for it");
+            tracing::info!("a window that coxd is to stop for came: coxd stops for it");
             let _ = write.shutdown().await;
             let _ = internal.send(Internal::Quit);
             return;

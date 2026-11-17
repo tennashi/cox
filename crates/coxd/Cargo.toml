@@ -85,3 +85,10 @@ agent-client-protocol.workspace = true
 cox-git = { workspace = true, features = ["test-support"] }
 # Tests move the time a chat waits on forward, as for a stop.
 tokio = { workspace = true, features = ["test-util"] }
+
+[build-dependencies]
+# Reading coxd's sources for what a build of it is: see `build.rs`. The
+# versions the derives of serde and others use.
+proc-macro2 = "1.0.107"
+quote = "1.0.47"
+syn = { version = "2.0.119", features = ["full"] }

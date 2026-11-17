@@ -208,7 +208,11 @@ pub fn run(settings: Settings) -> ExitCode {
     coxd::translate::start(agents.clone());
     coxd::trigger::discuss::start(agents.clone());
     // 3. coxd, which runs the chats, in a process of its own.
-    let hello = coxd::daemon::wire::Hello::new(settings.home, settings.command);
+    let hello = coxd::daemon::wire::Hello::new(
+        settings.home,
+        settings.command,
+        coxd::daemon::wire::Asks::Join,
+    );
     let data = settings.data;
     let behind = settings.behind;
     let connected = coxd::storage::path(coxd::storage::Kept::Daemon)
@@ -223,7 +227,9 @@ pub fn run(settings: Settings) -> ExitCode {
                 cox_core::quit::ask,
             )
         });
-    let coxd::daemon::client::Connected { link, from_daemon } = match connected {
+    let coxd::daemon::client::Connected {
+        link, from_daemon, ..
+    } = match connected {
         Ok(connected) => connected,
         Err(error) => {
             tracing::error!("{error:#}");
