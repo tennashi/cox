@@ -26,6 +26,11 @@ cox-mac.workspace = true
 cox-browser.workspace = true
 cox-core.workspace = true
 cox-editor.workspace = true
+# Laying out the commands the agents run, on the stage's Commands page,
+# with the grammar cox-editor colors shell code with: see
+# `src/stage/commands/layout.rs`.
+tree-sitter = "0.27.1"
+tree-sitter-bash = "0.25.1"
 cox-git.workspace = true
 # What runs the chats apart from the window, which it shows.
 coxd.workspace = true

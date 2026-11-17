@@ -95,7 +95,7 @@
       .said:hover {
         color: var(--foreground);
       }
-      .said .fold {
+      .said .fold-mark {
         flex: none;
         width: 10px;
         color: var(--faint);
@@ -119,15 +119,38 @@
         border-radius: 4px;
         font: 12px/1.6 var(--mono);
         color: var(--dim);
+        cursor: pointer;
       }
-      .small:hover {
+      .small:hover,
+      .small.open {
         background: var(--hover);
       }
       .small .line {
+        flex: 1;
         min-width: 0;
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
+      }
+      /* What the agent said a command is for leads; the command follows,
+         fainter, as its gist. */
+      .small .about {
+        margin-right: 10px;
+        font: 12.5px var(--sans);
+        color: var(--foreground);
+      }
+      .small .about + .gist {
+        opacity: 0.75;
+      }
+      .more {
+        flex: none;
+        color: var(--faint);
+      }
+      .under {
+        margin: 2px 0 6px 16px;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        overflow: hidden;
       }
       .mark {
         flex: none;
@@ -166,8 +189,9 @@
         font: 12px var(--mono);
         color: var(--foreground);
       }
-      .big .top .line {
+      .big .top .about {
         min-width: 0;
+        font: 12.5px var(--sans);
         overflow-wrap: anywhere;
       }
       .big .top .state {
@@ -187,6 +211,122 @@
         color: var(--dim);
         background: var(--ground);
         font-size: 12px;
+      }
+      /* A command laid out: a row for each command of a chain, after what
+         joins it to the one before, in a gutter at the left edge, and its
+         code indented as deep as the block it is in, so that a row a
+         `|` or `&&` continues lines up with the row it continues. */
+      .laid {
+        position: relative;
+        padding: 6px 10px;
+        background: var(--ground);
+        font: 12px/1.55 var(--mono);
+        color: var(--foreground);
+      }
+      .laid + pre,
+      .laid + .why {
+        border-top: 1px solid var(--border);
+      }
+      .row {
+        display: flex;
+      }
+      .joint {
+        flex: none;
+        width: calc(3ch + var(--depth) * 2ch);
+        color: var(--faint);
+      }
+      .code {
+        min-width: 0;
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+      }
+      .fold {
+        display: inline-block;
+        margin: 0 0.5ch;
+        padding: 0 6px;
+        border-radius: 4px;
+        background: var(--raised);
+        color: var(--dim);
+        font: 11px/1.6 var(--sans);
+        cursor: pointer;
+        user-select: none;
+      }
+      .fold:hover {
+        color: var(--foreground);
+      }
+      .body {
+        margin: 2px 0 4px calc(var(--depth, 0) * 2ch + 3ch);
+        padding: 2px 0 2px 10px;
+        border-left: 2px solid var(--border);
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+        color: var(--dim);
+      }
+      .copy {
+        position: absolute;
+        top: 4px;
+        right: 6px;
+        padding: 1px 8px;
+        border: 1px solid var(--border);
+        border-radius: 4px;
+        background: var(--surface);
+        color: var(--dim);
+        font: 11px var(--sans);
+        cursor: pointer;
+        opacity: 0;
+      }
+      .laid:hover .copy {
+        opacity: 1;
+      }
+      .copy:hover {
+        color: var(--foreground);
+      }
+      /* The code's colors, as the code tabs draw them (and the Map). */
+      .hl-keyword,
+      .hl-variable-builtin,
+      .hl-tag,
+      .hl-punctuation-special {
+        color: #569cd6;
+      }
+      .hl-function {
+        color: #dcdcaa;
+      }
+      .hl-type,
+      .hl-type-builtin,
+      .hl-constructor {
+        color: #4ec9b0;
+      }
+      .hl-string,
+      .hl-literal {
+        color: #ce9178;
+      }
+      .hl-string-special,
+      .hl-escape {
+        color: #d7ba7d;
+      }
+      .hl-number,
+      .hl-constant-builtin {
+        color: #b5cea8;
+      }
+      .hl-comment {
+        color: #6a9955;
+      }
+      .hl-constant,
+      .hl-uri {
+        color: #4fc1ff;
+      }
+      .hl-property,
+      .hl-variable {
+        color: #9cdcfe;
+      }
+      .hl-attribute,
+      .hl-label {
+        color: #c586c0;
+      }
+      /* What sets up the environment, as `CARGO_TARGET_DIR=…`, which the
+         eye can pass over. */
+      .hl-quiet {
+        color: var(--faint);
       }
       .none {
         color: var(--dim);

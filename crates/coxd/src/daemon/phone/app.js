@@ -1203,7 +1203,7 @@ function work(first, group, name) {
           type: "button",
           class: `chip ${how} ${opened.has(`call-${at}`) ? "open" : ""}`,
           onclick: () => flip(`call-${at}`),
-        }, mark(value.result), el("span", {}, short(value.title)));
+        }, mark(value.result), el("span", {}, value.about ?? short(value.title)));
       })));
       for (const [at, value] of calls) if (opened.has(`call-${at}`)) body.push(call(at, value));
     }

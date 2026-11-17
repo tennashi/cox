@@ -23,6 +23,7 @@ use cox_core::entry::MediaKind;
 use cox_core::goal::Goal;
 
 use crate::chat::view::ChatView;
+use crate::stage::commands;
 use crate::ui::ellipsis::ellipsis;
 use crate::ui::text::Writer;
 use crate::vim::hints::Hinted as _;
@@ -34,7 +35,7 @@ use coxd::theme::{
     ACCENT, ACCENT_GROUND, ADDED_GROUND, ASKING, ASKING_BUTTON, ASKING_EDGE, ASKING_GROUND, BORDER,
     BORDER_STRONG, BUTTON, BUTTON_HOVER, CODE_FONT, DIM, DISABLED, FAILED, FAILED_GROUND,
     FAILED_MARK, FAINT, FOREGROUND, GROUND, HOVER, LINK, OFFERING_BUTTON, OFFERING_EDGE,
-    OFFERING_GROUND, RAISED, REMOVED_GROUND, SURFACE, chat_color,
+    OFFERING_GROUND, RAISED, REMOVED_GROUND, SURFACE, UI_FONT, chat_color,
 };
 
 /// How tall a picture shown in the conversation grows.
@@ -562,12 +563,22 @@ impl ChatView {
 
     /// The tool call at `index` as a step of its fold: a chip with a mark
     /// of how it goes, a ring while it runs and then a dot, and its title,
-    /// short, which opens or closes the call's
-    /// line under the chips.
+    /// short, or for a command what the agent said it is for, or else its
+    /// gist (see [`commands::called`]), which opens or closes the call's
+    /// line, the command whole, under the chips.
     fn render_step(&self, index: usize, cx: &mut Context<Self>) -> AnyElement {
-        let Entry::ToolCall { title, result, .. } = &self.conversation.entries()[index] else {
+        let Entry::ToolCall {
+            title,
+            command,
+            about,
+            result,
+            ..
+        } = &self.conversation.entries()[index]
+        else {
             return div().into_any_element();
         };
+        let (shown, said) = step_title(title, *command, about.as_deref());
+        let font = if said { UI_FONT } else { CODE_FONT };
         let (dot, ground, text) = match result {
             None => (LINK, RAISED, DIM),
             Some(ToolCallResult::Completed) => (ACCENT, RAISED, DIM),
@@ -591,7 +602,7 @@ impl ChatView {
             .border_color(rgb(if open { BORDER_STRONG } else { ground }))
             .text_color(rgb(text))
             .text_size(px(12.))
-            .font_family(CODE_FONT)
+            .font_family(font)
             .cursor_pointer()
             .hover(|style| style.border_color(rgb(BORDER_STRONG)))
             .child(
@@ -608,7 +619,7 @@ impl ChatView {
                 div()
                     .min_w_0()
                     .overflow_hidden()
-                    .child(ellipsis(SharedString::from(short(title)))),
+                    .child(ellipsis(SharedString::from(shown))),
             )
             .on_hint_click(cx.listener(move |view, _, _, cx| {
                 view.folds.flip(fold);
@@ -847,9 +858,9 @@ impl ChatView {
             Entry::ToolCall {
                 id,
                 title,
-                command: _,
                 content,
                 result,
+                ..
             } => {
                 let (mark, color) = match result {
                     None => ("●", LINK),
@@ -2301,6 +2312,18 @@ fn short(title: &str) -> String {
         .join(" ")
 }
 
+/// What the chip of a tool call titled `title` shows: for a `command`,
+/// what the agent said it is for, `about`, or else the command's gist
+/// (see [`commands::called`]), short; for another call, its title,
+/// short. With whether it shows what the agent said, as prose.
+fn step_title(title: &str, command: bool, about: Option<&str>) -> (String, bool) {
+    match about {
+        Some(about) if command => (about.to_owned(), true),
+        _ if command => (short(&commands::called(title, None)), false),
+        _ => (short(title), false),
+    }
+}
+
 /// `count` of what `one` names, as "1 thought" or "3 thoughts".
 fn counted(count: usize, one: &str) -> String {
     if count == 1 {
@@ -2538,6 +2561,7 @@ mod tests {
             id: id.to_owned(),
             title: "ls".to_owned(),
             command: false,
+            about: None,
             content: Vec::new(),
             result: None,
         }
@@ -2685,6 +2709,23 @@ mod tests {
         assert_eq!(
             short(r#"PATH="$HOME/.cargo/bin:$PATH" cargo test -p cox"#),
             r#"PATH="$HOME/.cargo/bin:$PATH" cargo test -p cox"#
+        );
+    }
+
+    #[test]
+    fn a_command_s_step_says_what_it_is_for_or_else_its_gist() {
+        let line = "cd /work/cox && python3 - <<'EOF'\nimport pathlib\nEOF\n";
+        assert_eq!(
+            step_title(line, true, Some("Patch the tests")),
+            ("Patch the tests".to_owned(), true)
+        );
+        assert_eq!(
+            step_title(line, true, None),
+            ("python3 - <<'EOF'…".to_owned(), false)
+        );
+        assert_eq!(
+            step_title("Read src/main.rs", false, Some("ignored")),
+            ("Read main.rs".to_owned(), false)
         );
     }
 

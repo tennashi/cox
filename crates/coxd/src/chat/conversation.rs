@@ -1302,16 +1302,32 @@ impl Conversation {
         content: Option<Vec<Content>>,
         result: Option<ToolCallResult>,
     ) {
+        // What a command shows while it runs says what it is for, as
+        // Claude's description of its Bash call: kept, as what it printed
+        // takes its place once it ends.
+        let told_about = || {
+            content
+                .as_deref()
+                .filter(|_| result.is_none())
+                .and_then(|content| {
+                    content.iter().find_map(|content| match content {
+                        Content::Text(text) => Some(text.trim()).filter(|text| !text.is_empty()),
+                        Content::Diff { .. } => None,
+                    })
+                })
+        };
         let Some(index) = self.tool_call_entry(&id) else {
             self.push(Entry::ToolCall {
                 id,
                 title: title.unwrap_or_else(|| "a tool call".to_owned()),
                 command,
+                about: told_about().filter(|_| command).map(str::to_owned),
                 content: content.unwrap_or_default(),
                 result,
             });
             return;
         };
+        let told_about = told_about().map(str::to_owned);
         let content = content.map(|content| {
             let asked = self.entries[index + 1..].iter().any(|entry| {
                 matches!(entry, Entry::Permission { id: asked_id, content: asked, .. }
@@ -1323,6 +1339,7 @@ impl Conversation {
         if let Entry::ToolCall {
             title: shown_title,
             command: shown_command,
+            about,
             content: shown_content,
             result: shown_result,
             ..
@@ -1332,6 +1349,9 @@ impl Conversation {
                 *shown_title = title;
             }
             *shown_command |= command;
+            if *shown_command && about.is_none() {
+                *about = told_about;
+            }
             if let Some(content) = content {
                 *shown_content = content;
             }
@@ -2295,6 +2315,7 @@ mod tests {
                 id: "call-1".to_owned(),
                 title: "ls".to_owned(),
                 command: false,
+                about: None,
                 content: Vec::new(),
                 result: None,
             }
@@ -2309,6 +2330,7 @@ mod tests {
                     id: "call-1".to_owned(),
                     title: "ls".to_owned(),
                     command: false,
+                    about: None,
                     content: Vec::new(),
                     result: Some(ToolCallResult::Completed),
                 },
@@ -2321,25 +2343,35 @@ mod tests {
     fn a_tool_call_the_agent_said_runs_a_command_stays_one_until_it_ends() {
         let mut conversation = Conversation::new();
         conversation.submit("test");
-        let news = |command, result| AgentEvent::ToolCall {
+        let news = |command, text: &str, result| AgentEvent::ToolCall {
             id: "call-1".to_owned(),
             title: Some("cargo test".to_owned()),
             command,
-            content: None,
+            content: Some(vec![Content::Text(text.to_owned())]),
             result,
         };
 
-        conversation.apply(news(true, None));
-        conversation.apply(news(false, Some(ToolCallResult::Completed)));
+        conversation.apply(news(true, "Run the tests\n", None));
+        conversation.apply(news(false, "ok", Some(ToolCallResult::Completed)));
 
-        assert!(matches!(
-            conversation.entries()[1],
-            Entry::ToolCall {
-                command: true,
-                result: Some(ToolCallResult::Completed),
-                ..
-            }
-        ));
+        let Entry::ToolCall {
+            command,
+            about,
+            content,
+            result,
+            ..
+        } = &conversation.entries()[1]
+        else {
+            panic!("a tool call");
+        };
+        assert!(command);
+        assert_eq!(
+            about.as_deref(),
+            Some("Run the tests"),
+            "kept once it printed"
+        );
+        assert_eq!(content, &[Content::Text("ok".to_owned())]);
+        assert_eq!(*result, Some(ToolCallResult::Completed));
     }
 
     /// News of tool call `call-1`, showing `content` when it is given.

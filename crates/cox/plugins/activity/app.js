@@ -73,7 +73,9 @@ function pulls(chat) {
 function working(chat) {
   const goal = chat.goal ? `<div class="goal">◎ ${esc(chat.goal)}</div>` : "";
   const said = chat.said ? `<div class="line">${esc(chat.said)}</div>` : "";
-  const running = chat.running ? `<div class="running"><span class="prompt">$</span> ${esc(chat.running)}</div>` : "";
+  const running = chat.running
+    ? `<div class="running" title="${esc(chat.running.line)}"><span class="prompt">$</span> ${esc(chat.running.called)}</div>`
+    : "";
   const background = (chat.background ?? []).length
     ? `<div class="line">in the background:</div>` +
       chat.background

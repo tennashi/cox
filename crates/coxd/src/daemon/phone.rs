@@ -1851,6 +1851,7 @@ mod tests {
             id: "1".into(),
             title: "Read a.rs".into(),
             command: false,
+            about: None,
             content: vec![
                 Content::Text("fn a() {}".into()),
                 Content::Text(" \n".into()),
