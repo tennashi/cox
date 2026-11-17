@@ -4,8 +4,9 @@
 //!   can compose into.
 //! - [`text`] draws text so that the human can select it and click its
 //!   links, replies as the Markdown that [`markdown`] reads, with the
-//!   Mermaid diagrams in it that [`diagram`] draws; [`selection`] is what
-//!   the human selected.
+//!   Mermaid diagrams in it that [`diagram`] draws, and the code blocks
+//!   that run as the [`snippet`]s the human clicks Run on; [`selection`]
+//!   is what the human selected.
 //! - [`icons`] is the icons drawn; how things look is
 //!   [`coxd::theme`], which the page coxd serves a phone shares.
 //! - The [`Copy`] action and the [`LinkClicked`] event are what the parts
@@ -28,6 +29,7 @@ pub mod menu;
 pub mod screen;
 pub mod selected;
 pub mod selection;
+pub mod snippet;
 pub mod text;
 pub mod translation;
 

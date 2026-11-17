@@ -852,6 +852,7 @@ impl ChatView {
                 .child(writer.plain(text, "\n\n"))
                 .into_any_element(),
             Entry::Reply(text) => writer
+                .running(self.runs(cx))
                 .markdown(text)
                 .debug_selector(|| format!("reply-{index}"))
                 .into_any_element(),

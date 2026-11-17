@@ -61,6 +61,7 @@ impl Stages for CefStages {
         });
         let keyed = stage.clone();
         let read = stage.clone();
+        let runs = stage.clone();
         let view = StageView {
             view: stage.into(),
             panel,
@@ -68,6 +69,9 @@ impl Stages for CefStages {
                 keyed.update(cx, |stage, cx| stage.by_keys(tabs, window, cx));
             }),
             shows_files: Rc::new(move |cx| read.read(cx).shows_files(cx)),
+            runs: Rc::new(move |snippet, window, cx| {
+                runs.update(cx, |stage, cx| stage.run_snippet(snippet, window, cx))
+            }),
         };
         Some((view, open_link))
     }

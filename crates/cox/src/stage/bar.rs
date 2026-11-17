@@ -344,7 +344,8 @@ impl Stage {
             Some(Typed::Web(address)) => address.url(engine),
             Some(Typed::File(path)) => return self.open_typed_file(path, window, cx),
             Some(Typed::Command(command)) => {
-                return self.start_terminal(Program::Command(command), window, cx);
+                self.start_terminal(Program::Command(command), window, cx);
+                return;
             }
             None => return,
         };

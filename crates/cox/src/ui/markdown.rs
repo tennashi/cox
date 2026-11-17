@@ -13,6 +13,7 @@ use std::ops::Range;
 
 use cox_core::tabs::Lines;
 
+use crate::ui::snippet::Snippet;
 use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 
 /// One block of a reply, such as a paragraph or a code block.
@@ -36,8 +37,9 @@ pub enum Kind {
         marker: String,
         text: Text,
     },
-    /// Code as it was written, with no styles but its links.
-    Code(Text),
+    /// Code as it was written, with no styles but its links, and the
+    /// snippet it runs as, when its language runs.
+    Code(Text, Option<Snippet>),
     /// A line across the reply.
     Rule,
     /// A table's rows of cells, its head first.
@@ -380,8 +382,8 @@ struct Blocks {
     /// `None` when its items have bullets.
     lists: Vec<Option<u64>>,
     quotes: usize,
-    /// The code block being read, and whether it is a Mermaid diagram.
-    code: Option<(String, bool)>,
+    /// The code block being read, and its fence's info string.
+    code: Option<(String, String)>,
     /// The table being read: its rows, and the cell being read.
     table: Option<(Vec<Vec<Text>>, Option<Text>)>,
     /// The styles in effect, innermost last.
@@ -512,12 +514,11 @@ impl Blocks {
             }
             Tag::CodeBlock(kind) => {
                 self.start_other_block();
-                let diagram = matches!(
-                    &kind,
-                    CodeBlockKind::Fenced(info)
-                        if info.split_whitespace().next() == Some("mermaid")
-                );
-                self.code = Some((String::new(), diagram));
+                let info = match kind {
+                    CodeBlockKind::Fenced(info) => info.into_string(),
+                    CodeBlockKind::Indented => String::new(),
+                };
+                self.code = Some((String::new(), info));
             }
             Tag::List(first) => {
                 self.start_other_block();
@@ -579,14 +580,14 @@ impl Blocks {
                 self.quotes = self.quotes.saturating_sub(1);
             }
             TagEnd::CodeBlock => {
-                if let Some((mut code, diagram)) = self.code.take() {
+                if let Some((mut code, info)) = self.code.take() {
                     if code.ends_with('\n') {
                         code.pop();
                     }
-                    self.block(if diagram {
+                    self.block(if info.split_whitespace().next() == Some("mermaid") {
                         Kind::Diagram(code)
                     } else {
-                        Kind::Code(Text::plain(&code))
+                        Kind::Code(Text::plain(&code), Snippet::of(&info, &code))
                     });
                 }
             }
@@ -709,7 +710,10 @@ mod tests {
     fn keeps_code_as_written() {
         assert_eq!(
             parse("```console\n$ cargo xtask ci\n  ok\n```"),
-            [block(Kind::Code(plain("$ cargo xtask ci\n  ok")))]
+            [block(Kind::Code(
+                plain("$ cargo xtask ci\n  ok"),
+                Snippet::of("console", "$ cargo xtask ci\n  ok")
+            ))]
         );
     }
 
@@ -719,7 +723,7 @@ mod tests {
             parse("```mermaid\nflowchart LR\n  A --> B\n```\n\n```\nmermaid\n```"),
             [
                 block(Kind::Diagram("flowchart LR\n  A --> B".to_owned())),
-                block(Kind::Code(plain("mermaid"))),
+                block(Kind::Code(plain("mermaid"), None)),
             ]
         );
     }

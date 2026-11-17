@@ -132,6 +132,7 @@ use crate::stage::terminal::{Exited, Terminal};
 use crate::stage::tree::{Chosen, Tree};
 use crate::stage::windows::{ShowWindow, Windows};
 use crate::ui::Panel;
+use crate::ui::snippet::Snippet;
 use coxd::terminal::{Program, Running};
 use coxd::theme::BORDER;
 
@@ -528,14 +529,35 @@ impl Stage {
         self.start_terminal(Program::Shell, window, cx);
     }
 
+    /// A terminal running `snippet`, a code block of a reply the human
+    /// clicked Run on, its script, if it is one, written to a file in the
+    /// system's temporary folder.
+    pub fn run_snippet(
+        &mut self,
+        snippet: &Snippet,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<Entity<Terminal>> {
+        let command = snippet
+            .command(&std::env::temp_dir().join("cox-snippets"))
+            .inspect_err(|error| tracing::error!("cannot write a snippet: {error}"))
+            .ok()?;
+        self.start_terminal(Program::Command(command), window, cx)
+    }
+
     /// A terminal running `program`, which the human started, with the
     /// keyboard in it.
-    fn start_terminal(&mut self, program: Program, window: &mut Window, cx: &mut Context<Self>) {
+    fn start_terminal(
+        &mut self,
+        program: Program,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<Entity<Terminal>> {
         let running = match Running::start(program, &self.cwd) {
             Ok(running) => running,
             Err(error) => {
                 tracing::error!("cannot start a terminal: {error}");
-                return;
+                return None;
             }
         };
         let terminal = cx.new(|cx| Terminal::new(running, None, cx));
@@ -543,9 +565,16 @@ impl Stage {
             cx.observe(&terminal, |stage, _, cx| stage.changed(cx)),
             Self::follow_exit(&terminal, window, cx),
         );
-        self.push(TabContent::Terminal(terminal), changes, None, true, cx);
+        self.push(
+            TabContent::Terminal(terminal.clone()),
+            changes,
+            None,
+            true,
+            cx,
+        );
         self.focus_shown(window, cx);
         crate::vim::typing(crate::vim::Region::Terminal, window, cx);
+        Some(terminal)
     }
 
     /// Watches for `terminal`'s program to end (see [`Self::exited`]).

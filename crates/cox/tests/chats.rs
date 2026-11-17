@@ -18,6 +18,7 @@ use std::sync::Arc;
 
 use cox::chat::view::ChatView;
 use cox::notices::{AppNotices, Notices};
+use cox::stage::terminal::Terminal;
 use cox::ui::input::LineInput;
 use cox::workspace::{Chat, Workspace};
 use cox_core::entry::{Answer, Proposal, Proposed};
@@ -32,6 +33,7 @@ use coxd::agents::Agents as Choices;
 use coxd::chat::conversation::{Check, CheckState, Conversation, Entry, Goal, State, WENT_ON};
 use coxd::chat::sketch::Sketch;
 use coxd::settings::Subagents;
+use coxd::terminal::{Program, Running};
 use coxd::workflow;
 use fake_agent::{
     BACKGROUND_FINISHED, BACKGROUND_STARTED, Event, FakeAgent, LogsIn, Resumes, TITLE,
@@ -5289,4 +5291,126 @@ async fn stopping_while_the_agent_asks_to_log_in_ends_the_turn(cx: &mut TestAppC
         () = cx.condition(&view, |view, _| view.conversation().state() == State::Idle) => {}
         _ = timeout => panic!("the chat never stopped: {:?}", view.read_with(cx, |view, _| view.conversation().state())),
     }
+}
+
+/// A stage that runs the snippets the human clicks Run on in terminals of
+/// its own, which `ran` collects.
+fn running_stages(ran: &Rc<RefCell<Vec<Entity<Terminal>>>>) -> FakeStages {
+    use gpui::AppContext as _;
+
+    let ran = Rc::clone(ran);
+    let built: fake_daemon::Built = Rc::new(move |cwd, _, cx| {
+        let ran = Rc::clone(&ran);
+        cox::chat::view::StageView {
+            view: cx.new(|_| fake_daemon::FakeStage).into(),
+            panel: cx.new(|_| cox::ui::Panel::default()),
+            by_keys: Rc::new(|_, _, _| {}),
+            shows_files: Rc::new(|_| false),
+            runs: Rc::new(move |snippet, _, cx| {
+                let command = snippet.command(&cwd.join(".snippets")).unwrap();
+                let running = Running::start(Program::Command(command), &cwd).unwrap();
+                let terminal = cx.new(|cx| Terminal::new(running, None, cx));
+                ran.borrow_mut().push(terminal.clone());
+                Some(terminal)
+            }),
+        }
+    });
+    FakeStages {
+        built: Some(built),
+        ..FakeStages::default()
+    }
+}
+
+/// Clicks the button `name` of the code block that has one, the `nth` of
+/// the reply at `entry`.
+fn click_snippet(cx: &mut VisualTestContext, name: &str, entry: usize, nth: usize) {
+    let found: Vec<_> = (0..20)
+        .filter_map(|part| cx.debug_bounds(format!("{name}-{entry}-{part}").leak()))
+        .collect();
+    let bounds = found
+        .get(nth)
+        .unwrap_or_else(|| panic!("no {name} button {nth}"));
+    cx.simulate_click(bounds.center(), Modifiers::none());
+    cx.run_until_parked();
+}
+
+#[gpui::test]
+async fn a_snippet_of_a_reply_runs_in_the_chats_folder_and_hands_back_its_output(
+    cx: &mut TestAppContext,
+) {
+    let home = scratch::folder("snippet-home");
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::write(home.join("old.txt"), "").unwrap();
+    let ran = Rc::default();
+    let (workspace, cx) = fake_daemon::open_window(
+        cx,
+        home.clone(),
+        Kept::Memory,
+        Fakes::default(),
+        running_stages(&ran),
+    );
+    settled(cx, &workspace);
+    cx.simulate_keystrokes("secondary-n");
+    let view = shown(cx, &workspace);
+    view.update(cx, |view, cx| {
+        view.input().update(cx, |input, cx| {
+            input.set_text(
+                "try\n```console\n$ pwd\n/somewhere\n$ echo made > made.txt\n```\n\
+                 ```python\nprint(6 * 7)\n```\n```sh\nrm -rf old.txt\n```\n```text\nnot run\n```",
+                cx,
+            );
+        });
+    });
+    cx.simulate_keystrokes("enter");
+    wait_for_turn(cx, &view).await;
+    let entry = view.read_with(cx, |view, _| view.conversation().entries().len() - 1);
+    let ended =
+        |cx: &mut VisualTestContext, ran: &Rc<RefCell<Vec<Entity<Terminal>>>>, at: usize| {
+            let terminal = ran.borrow().get(at).cloned();
+            terminal.is_some_and(|terminal| {
+                terminal.read_with(cx, |terminal, _| terminal.ended().is_some())
+            })
+        };
+
+    click_snippet(cx, "run", entry, 0);
+    settle_until(cx, |cx| ended(cx, &ran, 0)).await;
+    let printed = ran.borrow()[0].read_with(cx, |terminal, _| terminal.text());
+    assert!(printed.contains(&*home.to_string_lossy()), "{printed}");
+    assert!(
+        home.join("made.txt").is_file(),
+        "it ran in the chat's folder"
+    );
+
+    click_snippet(cx, "attach-output", entry, 0);
+    let attached = view.read_with(cx, |view, _| view.attached().to_vec());
+    assert_eq!(attached.len(), 1);
+    assert_eq!(attached[0].label, "pwd");
+    assert!(attached[0].text.contains("echo made > made.txt"));
+    assert!(attached[0].text.contains(&*home.to_string_lossy()));
+    assert!(
+        attached[0].text.ends_with("(exit code 0)"),
+        "{}",
+        attached[0].text
+    );
+
+    click_snippet(cx, "run", entry, 1);
+    settle_until(cx, |cx| ended(cx, &ran, 1)).await;
+    let printed = ran.borrow()[1].read_with(cx, |terminal, _| terminal.text());
+    assert_eq!(printed.trim(), "42");
+
+    // A destructive one asks once more before it runs.
+    click_snippet(cx, "run", entry, 2);
+    assert_eq!(ran.borrow().len(), 2, "it waits to be confirmed");
+    assert!(home.join("old.txt").exists());
+    click_snippet(cx, "run", entry, 2);
+    settle_until(cx, |cx| ended(cx, &ran, 2)).await;
+    assert!(!home.join("old.txt").exists());
+
+    let runs = (0..20)
+        .filter(|part| {
+            cx.debug_bounds(format!("run-{entry}-{part}").leak())
+                .is_some()
+        })
+        .count();
+    assert_eq!(runs, 3, "a block of text has no Run");
 }

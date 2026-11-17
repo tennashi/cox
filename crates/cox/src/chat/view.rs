@@ -80,6 +80,7 @@ mod entries;
 mod find;
 mod pulls;
 mod settings;
+mod snippets;
 
 use crate::vim::hints::Hinted as _;
 use entries::{Folds, disclosure, progress, render_steps};
@@ -155,15 +156,26 @@ pub type ByKeys = Rc<dyn Fn(crate::stage::Tabs, &mut Window, &mut App)>;
 /// shown, which `ctrl-w` then stops at, as at a window of its own.
 pub type ShowsFiles = Rc<dyn Fn(&App) -> bool>;
 
+/// Runs a snippet of a reply in a terminal tab of a stage, answering the
+/// terminal, if it started.
+pub type RunsSnippets = Rc<
+    dyn Fn(
+        &crate::ui::snippet::Snippet,
+        &mut Window,
+        &mut App,
+    ) -> Option<Entity<crate::stage::terminal::Terminal>>,
+>;
+
 /// A chat's stage, as the window shows it: the view, whether it is in
-/// sight, what does what Vim's keys ask of its tabs, and whether it
-/// shows the tree of files.
+/// sight, what does what Vim's keys ask of its tabs, whether it shows the
+/// tree of files, and what runs the snippets the human clicks Run on.
 #[derive(Clone)]
 pub struct StageView {
     pub view: AnyView,
     pub panel: Entity<Panel>,
     pub by_keys: ByKeys,
     pub shows_files: ShowsFiles,
+    pub runs: RunsSnippets,
 }
 
 /// How a chat stands in the list, as far as its view shows it.
@@ -277,6 +289,8 @@ pub struct ChatView {
     /// What the human handed the chat from elsewhere on the screen, which
     /// goes with the next line they send.
     attached: Vec<Attachment>,
+    /// The snippets of the replies the human clicked Run on.
+    snippets: snippets::Snippets,
     _submitted: Subscription,
 }
 
@@ -333,6 +347,7 @@ impl ChatView {
             setting_closed_at: None,
             agents,
             attached: Vec::new(),
+            snippets: snippets::Snippets::default(),
             _submitted: submitted,
         }
     }
