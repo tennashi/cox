@@ -3,7 +3,7 @@
 //! no screen, where Cox runs on a display drawn in memory. It asks for
 //! the state of the window, in words: the chats and how each stands, the
 //! conversation shown, the input, the stage's tabs; takes a screenshot of
-//! the window; and sends keys, text and clicks as the human's, and GPUI's
+//! the window; and sends keys, text, clicks and drags as the human's, and GPUI's
 //! actions by name, which reach the window whether it has the focus of
 //! the screen or not.
 //!
@@ -53,6 +53,7 @@ const SCREENSHOT: &str = "screenshot";
 const KEY: &str = "key";
 const TYPE: &str = "type";
 const CLICK: &str = "click";
+const DRAG: &str = "drag";
 const ACTION: &str = "action";
 const FRAMES: &str = "frames";
 
@@ -83,6 +84,18 @@ enum Inquiry {
         at: Point<Pixels>,
         button: MouseButton,
         count: usize,
+        answer: oneshot::Sender<Result<(), String>>,
+    },
+    /// A drag of the left button from `from` to `to`, points of the
+    /// window, that turns the wheel there by `wheel` points, and holds
+    /// there for `held` before it lets go, as the human's, told to the
+    /// window from inside.
+    #[cfg(target_os = "macos")]
+    Drag {
+        from: Point<Pixels>,
+        to: Point<Pixels>,
+        wheel: f32,
+        held: std::time::Duration,
         answer: oneshot::Sender<Result<(), String>>,
     },
     /// A GPUI action, by its name, on what has the keyboard.
@@ -249,6 +262,36 @@ fn answer(inquiry: Inquiry, known: &Known, root: &AnyView, window: &mut Window, 
             })
             .detach();
         }
+        #[cfg(target_os = "macos")]
+        Inquiry::Drag {
+            from,
+            to,
+            wheel,
+            held,
+            answer,
+        } => {
+            use crate::ui::screen::{self, Drag};
+            let view = screen::ns_view(window);
+            cx.spawn(async move |cx| {
+                let dragged = async {
+                    let view = view.ok_or_else(|| "the window has no view".to_owned())?;
+                    screen::drag(&view, from, Drag::Press)?;
+                    for step in 1..=DRAG_STEPS {
+                        let along = f32::from(step) / f32::from(DRAG_STEPS);
+                        cx.background_executor().timer(DRAG_STEP).await;
+                        screen::drag(&view, from + (to - from) * along, Drag::Move)?;
+                    }
+                    if wheel != 0.0 {
+                        cx.background_executor().timer(DRAG_STEP).await;
+                        screen::wheel(&view, to, wheel)?;
+                    }
+                    cx.background_executor().timer(held).await;
+                    screen::drag(&view, to, Drag::Release)
+                };
+                let _ = answer.send(dragged.await);
+            })
+            .detach();
+        }
         Inquiry::Action { name, answer } => {
             let _ = answer.send(act(&name, window, cx));
         }
@@ -339,6 +382,7 @@ impl Inspector {
             KEY => self.keys(arguments).await,
             TYPE => self.types(arguments).await,
             CLICK => self.click(arguments).await,
+            DRAG => self.drag(arguments).await,
             ACTION => {
                 let name = string(arguments, "name")?;
                 self.ask(|answer| Inquiry::Action { name, answer }).await
@@ -460,6 +504,64 @@ impl Inspector {
         Ok(clicked.map(|()| format!("Clicked at {}, {}.", f32::from(at.x), f32::from(at.y))))
     }
 
+    /// Drags the left button across the window, and holds it at the end
+    /// for the seconds asked, as [`Self::click`] clicks.
+    async fn drag(&self, arguments: &Value) -> Result<Result<String, String>, (i64, String)> {
+        let number = |name: &str| {
+            arguments
+                .get(name)
+                .and_then(Value::as_f64)
+                .ok_or_else(|| (INVALID_PARAMS, format!("{name} is a number")))
+        };
+        #[expect(clippy::cast_possible_truncation, reason = "points of the window")]
+        let (from, to) = (
+            Point::new(px(number("x")? as f32), px(number("y")? as f32)),
+            Point::new(px(number("to_x")? as f32), px(number("to_y")? as f32)),
+        );
+        let held = arguments
+            .get("seconds")
+            .and_then(Value::as_f64)
+            .filter(|seconds| seconds.is_finite() && *seconds >= 0.0)
+            .map_or(std::time::Duration::ZERO, |seconds| {
+                std::time::Duration::from_secs_f64(seconds.min(60.0))
+            });
+        #[expect(clippy::cast_possible_truncation, reason = "a turn of the wheel")]
+        let wheel = arguments
+            .get("wheel")
+            .and_then(Value::as_f64)
+            .filter(|wheel| wheel.is_finite())
+            .unwrap_or(0.0) as f32;
+        let placed = match self.drawn().await? {
+            Ok(placed) => placed,
+            Err(error) => return Ok(Err(error)),
+        };
+        #[cfg(target_os = "macos")]
+        let dragged = {
+            let _ = placed;
+            self.ask(|answer| Inquiry::Drag {
+                from,
+                to,
+                wheel,
+                held,
+                answer,
+            })
+            .await?
+        };
+        #[cfg(not(target_os = "macos"))]
+        let dragged = tokio::task::spawn_blocking(move || drag(&placed, from, to, wheel, held))
+            .await
+            .map_err(|error| (mcp::INTERNAL_ERROR, error.to_string()))?;
+        Ok(dragged.map(|()| {
+            format!(
+                "Dragged from {}, {} to {}, {}.",
+                f32::from(from.x),
+                f32::from(from.y),
+                f32::from(to.x),
+                f32::from(to.y)
+            )
+        }))
+    }
+
     /// Where the window is, once it shows a frame drawn now.
     async fn drawn(&self) -> Result<Result<Placed, String>, (i64, String)> {
         #[cfg(target_os = "macos")]
@@ -544,6 +646,66 @@ fn click(
     Ok(())
 }
 
+/// Drags the left button from `from` to `to` of the window placed as
+/// `placed`, turns the wheel there by about `wheel` points, and holds it
+/// there for `held`, through `xdotool`, as [`click`] clicks.
+#[cfg(not(target_os = "macos"))]
+fn drag(
+    placed: &Placed,
+    from: Point<Pixels>,
+    to: Point<Pixels>,
+    wheel: f32,
+    held: std::time::Duration,
+) -> Result<(), String> {
+    let on_screen = |position: Point<Pixels>| {
+        let x = (f32::from(placed.bounds.origin.x) + f32::from(position.x)) * placed.scale;
+        let y = (f32::from(placed.bounds.origin.y) + f32::from(position.y)) * placed.scale;
+        [format!("{}", x.round()), format!("{}", y.round())]
+    };
+    let xdotool = |args: &[&str]| {
+        let ran = std::process::Command::new("xdotool")
+            .args(args)
+            .output()
+            .map_err(|error| format!("cannot run xdotool: {error}"))?;
+        if ran.status.success() {
+            Ok(())
+        } else {
+            Err(format!(
+                "xdotool failed: {}",
+                String::from_utf8_lossy(&ran.stderr).trim()
+            ))
+        }
+    };
+    let [x, y] = on_screen(from);
+    xdotool(&[
+        "mousemove",
+        "--sync",
+        x.as_str(),
+        y.as_str(),
+        "mousedown",
+        "1",
+    ])?;
+    for step in 1..=DRAG_STEPS {
+        let along = f32::from(step) / f32::from(DRAG_STEPS);
+        std::thread::sleep(DRAG_STEP);
+        let [x, y] = on_screen(from + (to - from) * along);
+        xdotool(&["mousemove", "--sync", x.as_str(), y.as_str()])?;
+    }
+    if wheel != 0.0 {
+        // X turns the wheel a notch at a time, of about a line.
+        let notches = (wheel.abs() / 40.0).ceil().max(1.0).to_string();
+        let button = if wheel > 0.0 { "5" } else { "4" };
+        xdotool(&["click", "--repeat", notches.as_str(), button])?;
+    }
+    std::thread::sleep(held);
+    xdotool(&["mouseup", "1"])
+}
+
+/// How many moves a drag takes from where it starts to where it ends, and
+/// how long between them.
+const DRAG_STEPS: u16 = 10;
+const DRAG_STEP: std::time::Duration = std::time::Duration::from_millis(16);
+
 /// The string `arguments` gives as `name`.
 fn string(arguments: &Value, name: &str) -> Result<String, (i64, String)> {
     arguments
@@ -605,23 +767,8 @@ fn tools() -> Value {
                 "required": ["text"],
             },
         },
-        {
-            "name": CLICK,
-            "description": "Clicks at a point of the window, in points from its top left corner, \
-                as the screenshot shows it (divide by the scale the state names on a screen that \
-                draws a point with several pixels), as the human would. The window hears of it \
-                from inside: the screen's pointer does not move.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "x": { "type": "number" },
-                    "y": { "type": "number" },
-                    "button": { "type": "string", "enum": ["left", "right", "middle"], "description": "Left unless given." },
-                    "count": { "type": "integer", "description": "How many times: 2 for a double click." },
-                },
-                "required": ["x", "y"],
-            },
-        },
+        click_tool(),
+        drag_tool(),
         {
             "name": ACTION,
             "description": "Dispatches one of GPUI's actions by name, as a key bound to it would, \
@@ -657,6 +804,50 @@ fn tools() -> Value {
     ])
 }
 
+/// The tool that clicks, as a client learns of it.
+fn click_tool() -> Value {
+    json!({
+        "name": CLICK,
+        "description": "Clicks at a point of the window, in points from its top left corner, \
+            as the screenshot shows it (divide by the scale the state names on a screen that \
+            draws a point with several pixels), as the human would. The window hears of it \
+            from inside: the screen's pointer does not move.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "x": { "type": "number" },
+                "y": { "type": "number" },
+                "button": { "type": "string", "enum": ["left", "right", "middle"], "description": "Left unless given." },
+                "count": { "type": "integer", "description": "How many times: 2 for a double click." },
+            },
+            "required": ["x", "y"],
+        },
+    })
+}
+
+/// The tool that drags, as a client learns of it.
+fn drag_tool() -> Value {
+    json!({
+        "name": DRAG,
+        "description": "Drags the left button from a point of the window to another, as \
+            click takes them, in a few moves, turns the wheel at the end if asked, and \
+            holds it there for the seconds given before it lets go, as the human would. \
+            The end may be outside the window, as the human's pointer goes in a drag.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "x": { "type": "number" },
+                "y": { "type": "number" },
+                "to_x": { "type": "number" },
+                "to_y": { "type": "number" },
+                "seconds": { "type": "number", "description": "How long it holds at the end, up to 60; none unless given." },
+                "wheel": { "type": "number", "description": "Points the wheel turns at the end, toward the end of what scrolls there, or toward its start when negative; none unless given." },
+            },
+            "required": ["x", "y", "to_x", "to_y"],
+        },
+    })
+}
+
 /// Where the socket is, where this Cox keeps what lasts.
 #[must_use]
 pub fn socket() -> Option<PathBuf> {
@@ -676,13 +867,17 @@ mod tests {
             .iter()
             .map(|tool| tool["name"].as_str().unwrap())
             .collect();
-        assert_eq!(names, [STATE, SCREENSHOT, KEY, TYPE, CLICK, ACTION, FRAMES]);
+        assert_eq!(
+            names,
+            [STATE, SCREENSHOT, KEY, TYPE, CLICK, DRAG, ACTION, FRAMES]
+        );
         for name in names {
             let words: &[&str] = match name {
                 STATE | SCREENSHOT | FRAMES => &[name],
                 KEY => &[name, "ctrl-n"],
                 TYPE => &[name, "hello"],
                 CLICK => &[name, "1", "2"],
+                DRAG => &[name, "1", "2", "3", "-4", "0.5", "-300"],
                 _ => &[name, "cox::NewChat"],
             };
             let words: Vec<String> = words.iter().map(|&word| word.to_owned()).collect();

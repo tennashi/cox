@@ -202,6 +202,37 @@ fn hands_and_translates_the_line_the_human_selects(cx: &mut TestAppContext) {
     );
 }
 
+#[gpui::test]
+fn a_drag_held_past_the_top_scrolls_back_and_selects_on(cx: &mut TestAppContext) {
+    let cwd = scratch("drag-past");
+    let (terminal, mut waiting, cx) = run(cx, "seq 1 2000", &cwd);
+    ran(cx, &mut waiting);
+    let scrolled_back =
+        |cx: &mut VisualTestContext| terminal.read_with(cx, |terminal, _| terminal.scrolled_back());
+    assert_eq!(scrolled_back(cx), 0);
+
+    let bounds = cx.debug_bounds("terminal").expect("the terminal is drawn");
+    let middle = bounds.center();
+    let above = point(middle.x, bounds.top() - px(40.));
+    cx.simulate_mouse_down(middle, MouseButton::Left, Modifiers::none());
+    cx.simulate_mouse_move(above, MouseButton::Left, Modifiers::none());
+    for _ in 0..30 {
+        cx.executor().advance_clock(Duration::from_millis(16));
+        cx.run_until_parked();
+    }
+    cx.simulate_mouse_up(above, MouseButton::Left, Modifiers::none());
+
+    let back = scrolled_back(cx);
+    assert!(back > 0);
+    let selected = terminal
+        .read_with(cx, |terminal, _| terminal.selected_text())
+        .unwrap_or_default();
+    assert!(
+        selected.lines().count() > back,
+        "{back} lines back: {selected}"
+    );
+}
+
 /// Three clicks on the first line of the terminal select it.
 fn select_first_line(cx: &mut VisualTestContext) {
     let bounds = cx.debug_bounds("terminal").expect("the terminal is drawn");

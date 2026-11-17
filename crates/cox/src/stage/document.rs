@@ -14,14 +14,15 @@ use cox_core::entry::Attachment;
 use cox_core::tabs::{KeptTab, Lines};
 use gpui::{
     App, Bounds, Context, Entity, EventEmitter, FocusHandle, Focusable, KeyBinding, MouseButton,
-    MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, ScrollHandle, Task, Window, div,
-    point, prelude::*, px, rgb,
+    MouseDownEvent, MouseUpEvent, Pixels, Point, ScrollHandle, Task, Window, div, point,
+    prelude::*, px, rgb,
 };
 
 use crate::chat::region::{self, Described};
 use crate::stage::follow::{self, Follows};
 use crate::stage::tab::{Shows, ShowsFile, TabContent};
 use crate::stage::tree;
+use crate::ui::drag::{self, Dragging, Drags};
 use crate::ui::ellipsis::ellipsis;
 use crate::ui::markdown::{self, Block};
 use crate::ui::selected::{self, Selected};
@@ -57,6 +58,8 @@ pub struct Document {
     /// could not.
     unread: Option<String>,
     reading: Reading,
+    /// A drag that selects in the text, while the button is held.
+    dragging: Dragging,
     scroll: ScrollHandle,
     focus_handle: FocusHandle,
     _follow: Task<()>,
@@ -73,6 +76,7 @@ impl Document {
             stamp: None,
             unread: None,
             reading: Reading::default(),
+            dragging: Dragging::default(),
             scroll: ScrollHandle::new(),
             focus_handle: cx.focus_handle(),
             _follow: follow::follow(cx),
@@ -118,13 +122,10 @@ impl Document {
         window.focus(&self.focus_handle);
         window.prevent_default();
         self.reading.press(event);
-        cx.notify();
-    }
-
-    fn mouse_move(&mut self, event: &MouseMoveEvent, _: &mut Window, cx: &mut Context<Self>) {
-        if self.reading.drag(event.position) {
-            cx.notify();
+        if self.reading.selecting() {
+            self.dragging.start(event.position);
         }
+        cx.notify();
     }
 
     fn mouse_up(&mut self, event: &MouseUpEvent, _: &mut Window, cx: &mut Context<Self>) {
@@ -336,34 +337,56 @@ impl Render for Document {
             .child(bar)
             .child(
                 div()
-                    .id("document")
-                    .debug_selector(|| "document".to_owned())
+                    .relative()
                     .flex_1()
                     .min_h_0()
-                    .overflow_y_scroll()
-                    .track_scroll(&self.scroll)
-                    .on_mouse_down(MouseButton::Left, cx.listener(Self::mouse_down))
-                    .on_mouse_down(
-                        MouseButton::Right,
-                        cx.listener(|document, _, window, cx| {
-                            let text = document.selected_text();
-                            let handed = document.attachment();
-                            if crate::ui::translation::offer(&text, handed, window, cx) {
-                                cx.stop_propagation();
-                            }
-                        }),
+                    .child(
+                        div()
+                            .id("document")
+                            .debug_selector(|| "document".to_owned())
+                            .size_full()
+                            .overflow_y_scroll()
+                            .track_scroll(&self.scroll)
+                            .on_mouse_down(MouseButton::Left, cx.listener(Self::mouse_down))
+                            .on_mouse_down(
+                                MouseButton::Right,
+                                cx.listener(|document, _, window, cx| {
+                                    let text = document.selected_text();
+                                    let handed = document.attachment();
+                                    if crate::ui::translation::offer(&text, handed, window, cx) {
+                                        cx.stop_propagation();
+                                    }
+                                }),
+                            )
+                            .on_mouse_up(MouseButton::Left, cx.listener(Self::mouse_up))
+                            .on_mouse_up_out(
+                                MouseButton::Left,
+                                cx.listener(|document, _, _, _| document.reading.stop()),
+                            )
+                            .child(div().max_w(px(TEXT_WIDTH)).px_4().py_3().child(text)),
                     )
-                    .on_mouse_move(cx.listener(Self::mouse_move))
-                    .on_mouse_up(MouseButton::Left, cx.listener(Self::mouse_up))
-                    .on_mouse_up_out(
-                        MouseButton::Left,
-                        cx.listener(|document, _, _, _| document.reading.stop()),
-                    )
-                    .child(div().max_w(px(TEXT_WIDTH)).px_4().py_3().child(text)),
+                    .children(drag::follow(&self.dragging, cx)),
             )
             .child(region::mark({
                 let document = cx.weak_entity();
                 move |_, over, cx| Some(document.upgrade()?.read(cx).described(over))
             }))
+    }
+}
+
+impl Drags for Document {
+    fn dragging(&mut self) -> &mut Dragging {
+        &mut self.dragging
+    }
+
+    fn select_to(&mut self, position: Point<Pixels>, _: &mut Context<Self>) -> bool {
+        self.reading.drag(position)
+    }
+
+    fn scroll_by(&mut self, distance: Pixels, _: &mut Context<Self>) {
+        let offset = self.scroll.offset();
+        let most = self.scroll.max_offset().height;
+        let to = (offset.y - distance).clamp(-most.max(px(0.)), px(0.));
+        self.scroll.set_offset(point(offset.x, to));
     }
 }
