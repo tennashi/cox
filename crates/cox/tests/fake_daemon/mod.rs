@@ -179,7 +179,7 @@ impl Spawns for FakeSpawns {
             again @ Start::Again { .. } => again,
         };
         let only = start.setup().and_then(|setup| setup.tools.as_deref());
-        let meta = coxd::daemon::session_meta(subagents, only, true);
+        let meta = Some(coxd::daemon::session_meta(subagents, only, true));
         let mut spawned = coxd::agent::spawn(
             move |_| Ok(agent.connect()),
             cwd,

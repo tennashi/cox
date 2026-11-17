@@ -7,7 +7,7 @@
 //! 2. The agent, working in the chat's directory, told of the two MCP
 //!    servers it starts to reach the stage's relay and the server
 //!    ([`crate::agent::spawn_known`], [`Launcher::tools`]), its session
-//!    asked for as the chat runs subagents ([`session_meta`]).
+//!    asked for with Claude Code's options ([`session_meta`]).
 //!
 //! The window starts the chat's stage, and the relay to it (see
 //! `cox::chat::launcher`).
@@ -72,7 +72,7 @@ impl Spawns for Launcher {
         let server = self.server(&cwd, only, in_project, hands_off, replaces_agent);
         // What the agent gets: the MCP servers it starts to reach both.
         let tools = self.tools(&cwd, relay, server.as_ref());
-        let meta = session_meta(subagents, only, server.is_some());
+        let meta = Some(session_meta(subagents, only, server.is_some()));
         let (stage, asks, chat_requests) = match server {
             Some((_, server)) => (
                 Some(server.requests),
@@ -190,26 +190,32 @@ fn runs_chats(subagents: Subagents, only: Option<&[String]>, served: bool) -> bo
     subagents == Subagents::Chats && gets_agent
 }
 
-/// What the session of a chat's agent is asked for with, as its `_meta`:
-/// when its subagents run as chats, as `subagents`, the chat's, says,
+/// What the session of a chat's agent is asked for with, as its `_meta`,
+/// of Claude Code's options; other agents leave it be.
+///
+/// Claude Code gives a model newer than those it knows its plan tools,
+/// `TodoWrite` or `TaskCreate` and `TaskUpdate`, whose plan Cox shows as
+/// the chat's, only with `CLAUDE_CODE_ENABLE_TODO_TOOLS` set, so every
+/// session asks for them. The human can still turn them off in Claude
+/// Code's `settings.json`, whose `env` wins over this.
+///
+/// When its subagents run as chats, as `subagents`, the chat's, says,
 /// and it gets Cox's `agent`, as Cox's tools are `served` to it, those
 /// named in `only` or all of them, Claude Code's own tools for subagents
-/// turned off, `Agent` and `Task`, its name before, for `agent` to take
-/// their place. Other agents leave it be.
+/// are turned off too, `Agent` and `Task`, its name before, for `agent`
+/// to take their place.
 #[must_use]
-pub fn session_meta(
-    subagents: Subagents,
-    only: Option<&[String]>,
-    served: bool,
-) -> Option<cox_acp::Meta> {
-    if !runs_chats(subagents, only, served) {
-        return None;
+pub fn session_meta(subagents: Subagents, only: Option<&[String]>, served: bool) -> cox_acp::Meta {
+    let mut options = serde_json::json!({ "env": { "CLAUDE_CODE_ENABLE_TODO_TOOLS": "1" } });
+    if runs_chats(subagents, only, served) {
+        options["disallowedTools"] = serde_json::json!(["Agent", "Task"]);
     }
-    serde_json::json!({
-        "claudeCode": { "options": { "disallowedTools": ["Agent", "Task"] } }
-    })
-    .as_object()
-    .cloned()
+    let mut meta = cox_acp::Meta::new();
+    meta.insert(
+        "claudeCode".to_owned(),
+        serde_json::json!({ "options": options }),
+    );
+    meta
 }
 
 #[cfg(test)]
@@ -219,27 +225,32 @@ mod tests {
     use super::*;
 
     #[test]
-    fn turns_claude_codes_subagents_off_only_for_chats_that_run_them_as_chats() {
-        let off = json!({ "claudeCode": { "options": { "disallowedTools": ["Agent", "Task"] } } });
+    fn asks_for_plan_tools_and_turns_subagents_off_only_for_chats_that_run_them_as_chats() {
+        let env = json!({ "CLAUDE_CODE_ENABLE_TODO_TOOLS": "1" });
+        let plans = json!({ "claudeCode": { "options": { "env": env } } });
+        let off = json!({ "claudeCode": { "options": {
+            "env": env,
+            "disallowedTools": ["Agent", "Task"],
+        } } });
         let meta = |subagents, only: Option<&[&str]>, served| {
             let only: Option<Vec<String>> =
                 only.map(|only| only.iter().map(|&tool| tool.to_owned()).collect());
-            session_meta(subagents, only.as_deref(), served).map(serde_json::Value::Object)
+            serde_json::Value::Object(session_meta(subagents, only.as_deref(), served))
         };
-        assert_eq!(meta(Subagents::Chats, None, true), Some(off.clone()));
+        assert_eq!(meta(Subagents::Chats, None, true), off);
         assert_eq!(
             meta(Subagents::Chats, Some(&["show_file", "agent"]), true),
-            Some(off)
+            off
         );
-        assert_eq!(meta(Subagents::Agent, None, true), None, "off by default");
+        assert_eq!(meta(Subagents::Agent, None, true), plans, "off by default");
         assert_eq!(
             meta(Subagents::Chats, Some(&["show_file"]), true),
-            None,
+            plans,
             "a chat without agent keeps the agent's own"
         );
         assert_eq!(
             meta(Subagents::Chats, None, false),
-            None,
+            plans,
             "a chat whose tools of Cox's did not start keeps the agent's own"
         );
     }
