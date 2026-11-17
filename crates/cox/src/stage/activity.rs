@@ -657,7 +657,7 @@ fn planned(
             "sketch": chat.cwd != chat.project,
             "where": where_of(told, &chat.project),
             "said": does.said,
-            "running": does.running,
+            "running": does.running.map(|(called, line)| json!({"called": called, "line": line})),
             "pulls": pulls_of(chat),
             "background": chat
                 .background
@@ -1126,7 +1126,7 @@ mod tests {
         let now = |key: u64| {
             Some(commands::Now {
                 said: Some(format!("step of {key}")),
-                running: (key == 3).then(|| "sleep 30 && echo done".to_owned()),
+                running: (key == 3).then(|| ("Wait".to_owned(), "sleep 30".to_owned())),
                 asks: (key == 1).then(|| "Which way?".to_owned()),
             })
         };
@@ -1155,7 +1155,8 @@ mod tests {
         assert_eq!(working, [(2, 0), (3, 1), (5, 0)]);
         assert_eq!(json["plans"][0]["goal"], "ship it");
         assert_eq!(json["plans"][0]["said"], "step of 2");
-        assert_eq!(json["plans"][1]["running"], "sleep 30 && echo done");
+        let running = json!({"called": "Wait", "line": "sleep 30"});
+        assert_eq!(json["plans"][1]["running"], running);
         // A chat at work in the background tells what runs there.
         assert_eq!(
             json["plans"][2]["background"],

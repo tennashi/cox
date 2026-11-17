@@ -355,3 +355,28 @@ git add -A
 print -l ${(f)"$(git ls-files)"} | head
 %% laid out
 print -l ${(f)"$(git ls-files)"} | head
+
+%% sample pipelines-in-blocks-made-up
+for f in crates/*/src/lib.rs; do grep -n "pub mod" "$f" | sed -e 's/pub mod //' | sort | uniq -c | sort -rn | head -20; done; if cargo test -p cox --lib stage:: 2>&1 | grep -E "test result|FAILED|panicked|error" | head -20; then echo ok; else git status --short | grep -v "^??" | head -40; fi
+%% laid out
+for f in crates/*/src/lib.rs; do
+  grep -n "pub mod" "$f"
+  | sed -e 's/pub mod //'
+  | sort
+  | uniq -c
+  | sort -rn
+  | head -20
+done
+if cargo test -p cox --lib stage:: 2>&1 | grep -E "test result|FAILED|panicked|error" | head -20; then
+  echo ok
+else
+  git status --short | grep -v "^??" | head -40
+fi
+
+%% sample short-chain-into-a-pipe-made-up
+cd /work/cox && export CARGO_TARGET_DIR=/t && cargo test -p cox 2>&1 | tail -5
+%% laid out
+cd .
+&& export CARGO_TARGET_DIR=/t
+&& cargo test -p cox 2>&1
+| tail -5

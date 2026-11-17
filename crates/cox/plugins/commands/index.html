@@ -213,8 +213,9 @@
         font-size: 12px;
       }
       /* A command laid out: a row for each command of a chain, after what
-         joins it to the one before, in a gutter, and indented as deep as
-         the block it is in. */
+         joins it to the one before, in a gutter at the left edge, and its
+         code indented as deep as the block it is in, so that a row a
+         `|` or `&&` continues lines up with the row it continues. */
       .laid {
         position: relative;
         padding: 6px 10px;
@@ -228,11 +229,10 @@
       }
       .row {
         display: flex;
-        padding-left: calc(var(--depth) * 2ch);
       }
       .joint {
         flex: none;
-        width: 3ch;
+        width: calc(3ch + var(--depth) * 2ch);
         color: var(--faint);
       }
       .code {

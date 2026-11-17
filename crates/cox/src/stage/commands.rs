@@ -21,6 +21,15 @@ use serde_json::{Value, json};
 
 mod layout;
 
+/// What a command an agent ran goes by where it shows short, as a chip of
+/// the chat or a row of the Activity page: what the agent said it is for,
+/// or, when it said nothing, the gist of the command (see
+/// [`layout::gist`]).
+#[must_use]
+pub fn called(line: &str, about: Option<&str>) -> String {
+    about.map_or_else(|| layout::gist(line), str::to_owned)
+}
+
 /// How long a command runs before the page shows it big, with what it
 /// printed.
 const LONG: Duration = Duration::from_secs(5);
@@ -276,8 +285,9 @@ pub fn keep(keys: &[u64]) {
 pub struct Now {
     /// What the agent said before its last step of commands.
     pub said: Option<String>,
-    /// The last command of that step still running, if one is.
-    pub running: Option<String>,
+    /// What the last command of that step still running goes by, if one
+    /// is (see [`called`]), and the command, as the agent gave it.
+    pub running: Option<(String, String)>,
     /// What the agent asks the human (see [`asked`]).
     pub asks: Option<String>,
 }
@@ -292,7 +302,10 @@ impl Chat {
                     .iter()
                     .rev()
                     .find(|command| command.result.is_none())
-                    .map(|command| command.line.clone())
+                    .map(|command| {
+                        let called = called(&command.line, command.about.as_deref());
+                        (called, command.line.clone())
+                    })
             }),
             asks: self.asks.clone(),
         }
@@ -548,7 +561,9 @@ mod tests {
             chat.now(),
             Now {
                 said: Some("Now I wait.".to_owned()),
-                running: Some("sleep 30 && echo done".to_owned()),
+                // The agent said nothing of what it is for: it goes by
+                // its gist.
+                running: Some(("sleep 30".to_owned(), "sleep 30 && echo done".to_owned())),
                 asks: None,
             }
         );

@@ -104,6 +104,49 @@ pub fn told(line: &str, folder: &Path, home: Option<&Path>) -> Value {
     json!(rows)
 }
 
+/// The row of the command `line` that says most of what it does, on one
+/// line: the first that neither goes to a folder, as `cd`, nor only sets
+/// up the environment, without what joins it to the row before, and its
+/// folds as `…`. The Commands page picks its gist of a command as so.
+#[must_use]
+pub fn gist(line: &str) -> String {
+    let first_line = || line.lines().next().unwrap_or_default().trim().to_owned();
+    let Some(laid) = lay_out(line) else {
+        return first_line();
+    };
+    let quiet = |range: &Range<usize>| {
+        laid.quiet
+            .iter()
+            .any(|quiet| quiet.start <= range.start && range.end <= quiet.end)
+    };
+    let shown: Vec<(String, bool)> = laid
+        .rows
+        .iter()
+        .map(|row| {
+            let pieces = pieces(row, &laid.folds, line);
+            let mut text = String::new();
+            for piece in &pieces {
+                match piece {
+                    Piece::Code(range) => text.push_str(&line[range.clone()]),
+                    Piece::Space => text.push(' '),
+                    Piece::Fold(_) => text.push('…'),
+                }
+            }
+            let sets_up = pieces.iter().all(|piece| match piece {
+                Piece::Code(range) => quiet(range),
+                Piece::Space | Piece::Fold(_) => true,
+            });
+            let goes = text == "cd" || text.starts_with("cd ");
+            (text, sets_up || goes)
+        })
+        .collect();
+    shown
+        .iter()
+        .find(|(_, set_up)| !set_up)
+        .or_else(|| shown.first())
+        .map_or_else(first_line, |(text, _)| text.clone())
+}
+
 /// A command laid out, with what it folds and the bytes that set up the
 /// environment, which show quiet.
 struct Laid {
@@ -330,7 +373,10 @@ fn rows(node: Node, depth: usize, joint: Option<String>, layout: &mut Vec<Row>, 
                 rows(part, depth, joint.take().or(next), layout, line);
             }
         }
-        "pipeline" if !fits(node, line) => {
+        // tree-sitter takes `a && b | c` as a pipeline of the chain
+        // `a && b` into `c`: its commands show a row each all the same,
+        // as those of a chain do.
+        "pipeline" if !fits(node, line) || (depth == 0 && chains(node)) => {
             let mut joint = joint;
             let mut cursor = node.walk();
             for child in node.children(&mut cursor) {
@@ -369,6 +415,17 @@ fn rows(node: Node, depth: usize, joint: Option<String>, layout: &mut Vec<Row>, 
         }
         _ => row(layout, depth, joint, node.byte_range()),
     }
+}
+
+/// Whether `pipeline` starts with a chain, as `a && b | c` parses, and
+/// `a && b 2>&1 | c`, its redirect taken as the chain's.
+fn chains(pipeline: Node) -> bool {
+    let first = pipeline.named_child(0);
+    let first = match first {
+        Some(first) if first.kind() == "redirected_statement" => first.child_by_field_name("body"),
+        _ => first,
+    };
+    first.is_some_and(|first| first.kind() == "list")
 }
 
 /// The commands of `list`, as `a && b || c` has, each with the operator
@@ -788,6 +845,23 @@ mod tests {
         );
         let text: String = row(&rows, 0).into_iter().map(|s| s.0).collect();
         assert_eq!(text, "cat notes.md /work/cox-old/a");
+    }
+
+    #[test]
+    fn the_gist_of_a_command_is_what_it_does_past_its_set_up() {
+        assert_eq!(
+            gist("cd /work/cox && export CARGO_TARGET_DIR=/t && cargo test -p cox 2>&1 | tail -5"),
+            "cargo test -p cox 2>&1"
+        );
+        assert_eq!(
+            gist("cd cox && python3 - <<'EOF'\nimport pathlib\nprint(1)\nEOF\n"),
+            "python3 - <<'EOF'…"
+        );
+        assert_eq!(gist("cd /tmp"), "cd /tmp");
+        assert_eq!(
+            gist("for n in $(seq 3); do echo $n; done"),
+            "for n in $(seq 3); do echo $n; done"
+        );
     }
 
     #[test]
