@@ -2,13 +2,14 @@
 //! runs with, by the language its fence names, and whether it looks
 //! destructive enough to ask before it runs. Plain Rust, without GPUI.
 //!
-//! Shell runs with the human's shell, as a terminal tab runs a command;
-//! a script is written to a file of its own and run with its
-//! interpreter, so that it can read what the human types. A block with
-//! no language, or one Cox has no interpreter for, does not run.
+//! Shell runs with the human's shell, as a terminal tab runs a command.
+//! Code in another language opens in a playground on the stage, which
+//! builds and runs it (see `crate::stage::playground`). A block with no
+//! language, or one Cox cannot run, does not run.
 
-use std::hash::{DefaultHasher, Hash as _, Hasher as _};
-use std::path::Path;
+/// How many of the last lines a snippet printed go to the chat, from its
+/// terminal or its playground.
+pub const HANDED_LINES: usize = 80;
 
 /// What runs a snippet.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -18,6 +19,8 @@ pub enum Lang {
     JavaScript,
     TypeScript,
     Ruby,
+    Go,
+    Rust,
 }
 
 /// The languages a fence names, and what each runs as.
@@ -38,6 +41,10 @@ const LANGS: &[(&str, Lang)] = &[
     ("ts", Lang::TypeScript),
     ("ruby", Lang::Ruby),
     ("rb", Lang::Ruby),
+    ("go", Lang::Go),
+    ("golang", Lang::Go),
+    ("rust", Lang::Rust),
+    ("rs", Lang::Rust),
 ];
 
 impl Lang {
@@ -55,15 +62,24 @@ impl Lang {
         info.split_whitespace().next().map(str::to_ascii_lowercase)
     }
 
-    /// The interpreter and the file extension of a script, or `None` for
-    /// shell, which runs as the command itself.
-    const fn script(self) -> Option<(&'static str, &'static str)> {
+    /// Whether a snippet in it opens in a playground, rather than running
+    /// in a terminal as shell does.
+    #[must_use]
+    pub const fn plays(self) -> bool {
+        !matches!(self, Self::Shell)
+    }
+
+    /// The language's name, as the human knows it.
+    #[must_use]
+    pub const fn title(self) -> &'static str {
         match self {
-            Self::Shell => None,
-            Self::Python => Some(("python3", "py")),
-            Self::JavaScript => Some(("node", "js")),
-            Self::TypeScript => Some(("npx --yes tsx", "ts")),
-            Self::Ruby => Some(("ruby", "rb")),
+            Self::Shell => "Shell",
+            Self::Python => "Python",
+            Self::JavaScript => "JavaScript",
+            Self::TypeScript => "TypeScript",
+            Self::Ruby => "Ruby",
+            Self::Go => "Go",
+            Self::Rust => "Rust",
         }
     }
 }
@@ -99,25 +115,6 @@ impl Snippet {
             danger,
         })
     }
-
-    /// The command line that runs the snippet with the human's shell: the
-    /// shell's own commands, or the script, written into `dir`, run with
-    /// its interpreter.
-    ///
-    /// # Errors
-    ///
-    /// When the script cannot be written.
-    pub fn command(&self, dir: &Path) -> std::io::Result<String> {
-        let Some((interpreter, extension)) = self.lang.script() else {
-            return Ok(self.source.clone());
-        };
-        std::fs::create_dir_all(dir)?;
-        let mut hasher = DefaultHasher::new();
-        self.source.hash(&mut hasher);
-        let file = dir.join(format!("snippet-{:016x}.{extension}", hasher.finish()));
-        std::fs::write(&file, &self.source)?;
-        Ok(format!("{interpreter} {}", quoted(&file.to_string_lossy())))
-    }
 }
 
 /// The commands of a shell block: when a line of it starts with a prompt,
@@ -139,11 +136,6 @@ fn shell_commands(info: &str, code: &str) -> Option<String> {
         Some("console" | "shell-session")
     );
     (!session).then(|| code.to_owned())
-}
-
-/// `text` between single quotes, for the shell to read as one word.
-fn quoted(text: &str) -> String {
-    format!("'{}'", text.replace('\'', r"'\''"))
 }
 
 /// A rule of what is destructive: its name, and whether a stage of a
@@ -250,10 +242,13 @@ mod tests {
             ("ts", Lang::TypeScript),
             ("ruby", Lang::Ruby),
             ("python title=\"x\"", Lang::Python),
+            ("go", Lang::Go),
+            ("rust", Lang::Rust),
+            ("rs", Lang::Rust),
         ] {
             assert_eq!(runs(info, "x").map(|(lang, _)| lang), Some(lang), "{info}");
         }
-        for info in ["", "rust", "json", "text", "mermaid", "diff"] {
+        for info in ["", "json", "text", "mermaid", "diff"] {
             assert_eq!(runs(info, "ls"), None, "{info}");
         }
     }
@@ -313,41 +308,5 @@ mod tests {
             Snippet::of("python", "import os\nos.system('sudo reboot')").and_then(|s| s.danger),
             None
         );
-    }
-
-    #[test]
-    fn writes_a_script_to_a_file_its_interpreter_runs() {
-        let folder = coxd::testing::TempDir::new();
-        let dir = folder.path().join("snippets");
-        let snippet = Snippet::of("python", "print(6 * 7)\n").unwrap();
-
-        let command = snippet.command(&dir).unwrap();
-
-        let path = command
-            .strip_prefix("python3 '")
-            .and_then(|rest| rest.strip_suffix('\''))
-            .unwrap();
-        assert_eq!(std::fs::read_to_string(path).unwrap(), "print(6 * 7)\n");
-        assert_eq!(Path::new(path).extension(), Some("py".as_ref()));
-        assert_eq!(snippet.command(&dir).unwrap(), command);
-        let output = std::process::Command::new("sh")
-            .args(["-c", &command])
-            .output()
-            .unwrap();
-        assert_eq!(String::from_utf8_lossy(&output.stdout), "42\n");
-    }
-
-    #[test]
-    fn runs_shell_as_the_command_itself() {
-        let snippet = Snippet::of("sh", "echo 'a b'").unwrap();
-        assert_eq!(
-            snippet.command(Path::new("/nonexistent")).unwrap(),
-            "echo 'a b'"
-        );
-    }
-
-    #[test]
-    fn quotes_a_path_with_a_quote_in_it() {
-        assert_eq!(quoted("/tmp/it's"), r"'/tmp/it'\''s'");
     }
 }

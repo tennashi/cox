@@ -323,6 +323,12 @@ pub enum Place {
     LineStart,
     /// At the end of its line (`A`).
     LineEnd,
+    /// On a new line below its own (`o`), where an input holds lines
+    /// of code.
+    LineBelow,
+    /// On a new line above its own (`O`), where an input holds lines
+    /// of code.
+    LineAbove,
 }
 
 /// Keys that do something, in a mode, in some regions.
@@ -346,6 +352,9 @@ pub type Within = fn(Region) -> bool;
 
 const FORMS: Within = |region| region.is(Kind::Form);
 const LINES: Within = |region| region.is(Kind::Line);
+/// An input that holds lines of code, where Enter starts a new one: a
+/// playground's.
+const CODE_LINES: Within = |region| region == Region::Playground;
 const PARTS: Within = |region| region.is(Kind::Part);
 const HINTERS: Within = |region| region.is(Kind::Hinter);
 const HINTED: Within = |region| region.is(Kind::Hinted);
@@ -440,6 +449,18 @@ impl Keymap {
             LINES,
             &["shift-a"],
             Command::Insert(Place::LineEnd),
+        ),
+        bind(
+            Mode::Normal,
+            CODE_LINES,
+            &["o"],
+            Command::Insert(Place::LineBelow),
+        ),
+        bind(
+            Mode::Normal,
+            CODE_LINES,
+            &["shift-o"],
+            Command::Insert(Place::LineAbove),
         ),
         edit(&["h"], Edit::Move(Across::Left)),
         edit(&["l"], Edit::Move(Across::Right)),
@@ -910,6 +931,26 @@ mod tests {
             Keymap::VIM.answer(Mode::Insert, Region::Chat, &["ctrl-w"]),
             Answer::None
         );
+    }
+
+    #[test]
+    fn o_opens_a_line_in_a_playground_alone() {
+        let answer = |region, keys: &[&str]| Keymap::VIM.answer(Mode::Normal, region, keys);
+        assert_eq!(
+            answer(Region::Playground, &["o"]),
+            Answer::Act(Command::Insert(Place::LineBelow))
+        );
+        assert_eq!(
+            answer(Region::Playground, &["shift-o"]),
+            Answer::Act(Command::Insert(Place::LineAbove))
+        );
+        for region in [Region::Chat, Region::Goal] {
+            assert_ne!(
+                answer(region, &["o"]),
+                Answer::Act(Command::Insert(Place::LineBelow)),
+                "{region:?}"
+            );
+        }
     }
 
     #[test]

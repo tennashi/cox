@@ -46,6 +46,8 @@ pub enum Region {
     Flow,
     Windows,
     MacWindow,
+    /// A playground's code, to edit and run.
+    Playground,
     /// The line at the window's foot, which `:` and `/` open.
     Command,
 }
@@ -129,7 +131,7 @@ impl Props {
 
 impl Region {
     /// Every region, in the order they are declared.
-    pub const ALL: [Self; 26] = [
+    pub const ALL: [Self; 27] = [
         Self::Workspace,
         Self::Rail,
         Self::List,
@@ -155,6 +157,7 @@ impl Region {
         Self::Flow,
         Self::Windows,
         Self::MacWindow,
+        Self::Playground,
         Self::Command,
     ];
 
@@ -326,6 +329,13 @@ impl Region {
             Self::MacWindow => Props {
                 context: crate::stage::mac_window::KEY_CONTEXT,
                 is: &[Part, Hinter, Hinted],
+                enters_in: NORMAL,
+                hints: STAGE,
+                ..Props::NONE
+            },
+            Self::Playground => Props {
+                context: crate::stage::playground::KEY_CONTEXT,
+                is: &[Form, Line, Part, Hinter, Hinted, Visual],
                 enters_in: NORMAL,
                 hints: STAGE,
                 ..Props::NONE

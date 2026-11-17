@@ -201,6 +201,15 @@ impl Terminal {
         text_of(&self.term.lock())
     }
 
+    /// The last `count` lines of what the terminal shows, as
+    /// [`Self::text`] gives them.
+    #[must_use]
+    pub fn last_lines(&self, count: usize) -> String {
+        let text = self.text();
+        let lines: Vec<_> = text.lines().collect();
+        lines[lines.len().saturating_sub(count)..].join("\n")
+    }
+
     /// The text selected.
     #[must_use]
     pub fn selected_text(&self) -> Option<String> {

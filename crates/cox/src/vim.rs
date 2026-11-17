@@ -755,17 +755,30 @@ fn intercept(event: &KeystrokeEvent, window: &mut Window, cx: &mut App) {
         Outcome::Do(Command::Insert(place), _) if region == Region::Reading => {
             window.dispatch_action(Box::new(TypeInInput { place }), cx);
         }
-        Outcome::Do(Command::Insert(place), _) => {
-            use crate::ui::input::{End, Home, Right};
-            match place {
-                Place::Cursor => {}
-                Place::After => window.dispatch_action(Box::new(Right), cx),
-                Place::LineStart => window.dispatch_action(Box::new(Home), cx),
-                Place::LineEnd => window.dispatch_action(Box::new(End), cx),
-            }
-        }
+        Outcome::Do(Command::Insert(place), _) => insert_at(place, window, cx),
     }
     cx.stop_propagation();
+}
+
+/// Puts the cursor of the input with the keyboard where `place` says, to
+/// type there in insert mode.
+fn insert_at(place: Place, window: &mut Window, cx: &mut App) {
+    use crate::ui::input::{End, Home, Newline, Right, Up};
+    match place {
+        Place::Cursor => {}
+        Place::After => window.dispatch_action(Box::new(Right), cx),
+        Place::LineStart => window.dispatch_action(Box::new(Home), cx),
+        Place::LineEnd => window.dispatch_action(Box::new(End), cx),
+        Place::LineBelow => {
+            window.dispatch_action(Box::new(End), cx);
+            window.dispatch_action(Box::new(Newline), cx);
+        }
+        Place::LineAbove => {
+            window.dispatch_action(Box::new(Home), cx);
+            window.dispatch_action(Box::new(Newline), cx);
+            window.dispatch_action(Box::new(Up), cx);
+        }
+    }
 }
 
 #[cfg(test)]

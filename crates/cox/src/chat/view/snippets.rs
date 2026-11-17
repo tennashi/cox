@@ -10,11 +10,8 @@ use gpui::{App, Context, Entity, Subscription, WeakEntity, Window};
 
 use super::ChatView;
 use crate::stage::terminal::Terminal;
-use crate::ui::snippet::Snippet;
+use crate::ui::snippet::{HANDED_LINES, Snippet};
 use crate::ui::text::{CodeAt, Run, RunClick, Runs};
-
-/// How many of the last lines a snippet printed go to the chat.
-const ATTACHED_LINES: usize = 80;
 
 /// What a snippet the human clicked Run on became.
 enum Clicked {
@@ -133,9 +130,7 @@ impl ChatView {
 /// What `snippet` is, the last lines it printed in `terminal`, and how
 /// it ended, under the snippet's first line.
 fn output_of(snippet: &Snippet, terminal: &Terminal) -> Attachment {
-    let text = terminal.text();
-    let lines: Vec<_> = text.lines().collect();
-    let printed = lines[lines.len().saturating_sub(ATTACHED_LINES)..].join("\n");
+    let printed = terminal.last_lines(HANDED_LINES);
     let ended = terminal
         .ended()
         .map_or_else(String::new, |ended| format!("\n({ended})"));

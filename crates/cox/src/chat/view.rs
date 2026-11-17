@@ -156,8 +156,9 @@ pub type ByKeys = Rc<dyn Fn(crate::stage::Tabs, &mut Window, &mut App)>;
 /// shown, which `ctrl-w` then stops at, as at a window of its own.
 pub type ShowsFiles = Rc<dyn Fn(&App) -> bool>;
 
-/// Runs a snippet of a reply in a terminal tab of a stage, answering the
-/// terminal, if it started.
+/// Runs a snippet of a reply on a stage: shell in a terminal tab, which it
+/// answers, if it started, and code in another language in a playground,
+/// which keeps its runs itself.
 pub type RunsSnippets = Rc<
     dyn Fn(
         &crate::ui::snippet::Snippet,
@@ -862,8 +863,12 @@ impl ChatView {
         match place {
             Place::Cursor => {}
             Place::After => window.dispatch_action(Box::new(input::Right), cx),
-            Place::LineStart => window.dispatch_action(Box::new(input::Home), cx),
-            Place::LineEnd => window.dispatch_action(Box::new(input::End), cx),
+            Place::LineStart | Place::LineAbove => {
+                window.dispatch_action(Box::new(input::Home), cx);
+            }
+            Place::LineEnd | Place::LineBelow => {
+                window.dispatch_action(Box::new(input::End), cx);
+            }
         }
         cx.notify();
     }

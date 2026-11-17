@@ -113,11 +113,15 @@ pub enum Kept {
     /// The plans the human dismissed from the Activity page (see
     /// `cox::stage::activity`).
     DismissedPlans,
+    /// The folders the stage's playgrounds build and run their code in,
+    /// and the target folder their Rust shares (see
+    /// `cox::stage::playground`).
+    Playgrounds,
 }
 
 impl Kept {
     /// All that Cox keeps.
-    pub const ALL: [Self; 25] = [
+    pub const ALL: [Self; 26] = [
         Self::Settings,
         Self::Agents,
         Self::Servers,
@@ -143,6 +147,7 @@ impl Kept {
         Self::Pushes,
         Self::History,
         Self::DismissedPlans,
+        Self::Playgrounds,
     ];
 
     /// Where it is kept, from the folder Cox keeps what lasts in.
@@ -174,6 +179,7 @@ impl Kept {
             Self::Pushes => "state/pushes.json",
             Self::History => "state/history.json",
             Self::DismissedPlans => "state/dismissed-plans.json",
+            Self::Playgrounds => "cache/playgrounds",
         }
     }
 }

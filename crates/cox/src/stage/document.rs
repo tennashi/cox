@@ -239,7 +239,8 @@ impl ShowsFile for Document {
             | TabContent::Android(_)
             | TabContent::Devices(_)
             | TabContent::MacWindow(_)
-            | TabContent::Windows(_) => None,
+            | TabContent::Windows(_)
+            | TabContent::Playground(_) => None,
         }
     }
 }

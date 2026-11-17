@@ -92,6 +92,7 @@ mod mirror;
 pub mod outline;
 pub mod owners;
 pub mod page;
+pub mod playground;
 pub mod plugins;
 mod pointer;
 pub mod servers;
@@ -126,6 +127,7 @@ use crate::stage::document::Document;
 use crate::stage::mac_window::MacWindow;
 use crate::stage::outline::Outlines;
 use crate::stage::page::{Opens, Page};
+use crate::stage::playground::Playground;
 use crate::stage::plugins::Plugins;
 use crate::stage::tab::{Shows, Tab, TabContent};
 use crate::stage::terminal::{Exited, Terminal};
@@ -529,20 +531,44 @@ impl Stage {
         self.start_terminal(Program::Shell, window, cx);
     }
 
-    /// A terminal running `snippet`, a code block of a reply the human
-    /// clicked Run on, its script, if it is one, written to a file in the
-    /// system's temporary folder.
+    /// Runs `snippet`, a code block of a reply the human clicked Run on:
+    /// shell in a terminal, which it answers, and code in another
+    /// language in a playground, the one that opened with it if it is
+    /// still open, which keeps its runs itself.
     pub fn run_snippet(
         &mut self,
         snippet: &Snippet,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<Entity<Terminal>> {
-        let command = snippet
-            .command(&std::env::temp_dir().join("cox-snippets"))
-            .inspect_err(|error| tracing::error!("cannot write a snippet: {error}"))
-            .ok()?;
-        self.start_terminal(Program::Command(command), window, cx)
+        if !snippet.lang.plays() {
+            return self.start_terminal(Program::Command(snippet.source.clone()), window, cx);
+        }
+        let open = self.tabs.iter().position(|tab| {
+            matches!(&tab.content, TabContent::Playground(playground)
+                if playground.read(cx).opened_with(snippet))
+        });
+        let playground = if let Some(index) = open {
+            self.show(index, window, cx);
+            let TabContent::Playground(playground) = &self.tabs[index].content else {
+                unreachable!("the tab found is a playground's");
+            };
+            playground.clone()
+        } else {
+            let playground = cx.new(|cx| Playground::new(snippet, &self.cwd, cx));
+            let changes = cx.observe(&playground, |stage, _, cx| stage.changed(cx));
+            self.push(
+                TabContent::Playground(playground.clone()),
+                changes,
+                None,
+                true,
+                cx,
+            );
+            playground
+        };
+        playground.update(cx, Playground::run);
+        self.focus_shown(window, cx);
+        None
     }
 
     /// A terminal running `program`, which the human started, with the
@@ -781,7 +807,8 @@ impl Stage {
             | TabContent::Android(_)
             | TabContent::Devices(_)
             | TabContent::MacWindow(_)
-            | TabContent::Windows(_) => false,
+            | TabContent::Windows(_)
+            | TabContent::Playground(_) => false,
         })
     }
 

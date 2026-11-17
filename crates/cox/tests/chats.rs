@@ -18,6 +18,7 @@ use std::sync::Arc;
 
 use cox::chat::view::ChatView;
 use cox::notices::{AppNotices, Notices};
+use cox::stage::playground::Playground;
 use cox::stage::terminal::Terminal;
 use cox::ui::input::LineInput;
 use cox::workspace::{Chat, Workspace};
@@ -5293,24 +5294,41 @@ async fn stopping_while_the_agent_asks_to_log_in_ends_the_turn(cx: &mut TestAppC
     }
 }
 
-/// A stage that runs the snippets the human clicks Run on in terminals of
-/// its own, which `ran` collects.
-fn running_stages(ran: &Rc<RefCell<Vec<Entity<Terminal>>>>) -> FakeStages {
+/// What a stage ran of the snippets the human clicked Run on: the
+/// terminals of shell, and the playgrounds of the rest.
+#[derive(Clone, Default)]
+struct Ran {
+    terminals: Rc<RefCell<Vec<Entity<Terminal>>>>,
+    playgrounds: Rc<RefCell<Vec<Entity<Playground>>>>,
+}
+
+/// A stage that runs the snippets the human clicks Run on as the stage
+/// does, in terminals and playgrounds of its own, which `ran` collects.
+fn running_stages(ran: &Ran) -> FakeStages {
     use gpui::AppContext as _;
 
-    let ran = Rc::clone(ran);
+    let ran = ran.clone();
     let built: fake_daemon::Built = Rc::new(move |cwd, _, cx| {
-        let ran = Rc::clone(&ran);
+        let ran = ran.clone();
         cox::chat::view::StageView {
             view: cx.new(|_| fake_daemon::FakeStage).into(),
             panel: cx.new(|_| cox::ui::Panel::default()),
             by_keys: Rc::new(|_, _, _| {}),
             shows_files: Rc::new(|_| false),
             runs: Rc::new(move |snippet, _, cx| {
-                let command = snippet.command(&cwd.join(".snippets")).unwrap();
-                let running = Running::start(Program::Command(command), &cwd).unwrap();
+                if snippet.lang.plays() {
+                    let playground = cx.new(|cx| {
+                        let mut playground = Playground::new(snippet, &cwd, cx);
+                        playground.run(cx);
+                        playground
+                    });
+                    ran.playgrounds.borrow_mut().push(playground);
+                    return None;
+                }
+                let command = Program::Command(snippet.source.clone());
+                let running = Running::start(command, &cwd).unwrap();
                 let terminal = cx.new(|cx| Terminal::new(running, None, cx));
-                ran.borrow_mut().push(terminal.clone());
+                ran.terminals.borrow_mut().push(terminal.clone());
                 Some(terminal)
             }),
         }
@@ -5341,7 +5359,7 @@ async fn a_snippet_of_a_reply_runs_in_the_chats_folder_and_hands_back_its_output
     let home = scratch::folder("snippet-home");
     std::fs::create_dir_all(&home).unwrap();
     std::fs::write(home.join("old.txt"), "").unwrap();
-    let ran = Rc::default();
+    let ran = Ran::default();
     let (workspace, cx) = fake_daemon::open_window(
         cx,
         home.clone(),
@@ -5356,7 +5374,8 @@ async fn a_snippet_of_a_reply_runs_in_the_chats_folder_and_hands_back_its_output
         view.input().update(cx, |input, cx| {
             input.set_text(
                 "try\n```console\n$ pwd\n/somewhere\n$ echo made > made.txt\n```\n\
-                 ```python\nprint(6 * 7)\n```\n```sh\nrm -rf old.txt\n```\n```text\nnot run\n```",
+                 ```python\nimport os\nprint(6 * 7, os.path.exists('made.txt'))\n```\n\
+                 ```sh\nrm -rf old.txt\n```\n```text\nnot run\n```",
                 cx,
             );
         });
@@ -5364,17 +5383,13 @@ async fn a_snippet_of_a_reply_runs_in_the_chats_folder_and_hands_back_its_output
     cx.simulate_keystrokes("enter");
     wait_for_turn(cx, &view).await;
     let entry = view.read_with(cx, |view, _| view.conversation().entries().len() - 1);
-    let ended =
-        |cx: &mut VisualTestContext, ran: &Rc<RefCell<Vec<Entity<Terminal>>>>, at: usize| {
-            let terminal = ran.borrow().get(at).cloned();
-            terminal.is_some_and(|terminal| {
-                terminal.read_with(cx, |terminal, _| terminal.ended().is_some())
-            })
-        };
+    let terminal = |ran: &Ran, at: usize| ran.terminals.borrow().get(at).cloned();
 
     click_snippet(cx, "run", entry, 0);
-    settle_until(cx, |cx| ended(cx, &ran, 0)).await;
-    let printed = ran.borrow()[0].read_with(cx, |terminal, _| terminal.text());
+    settle_until(cx, |cx| ended(cx, terminal(&ran, 0).as_ref())).await;
+    let printed = terminal(&ran, 0)
+        .unwrap()
+        .read_with(cx, |terminal, _| terminal.text());
     assert!(printed.contains(&*home.to_string_lossy()), "{printed}");
     assert!(
         home.join("made.txt").is_file(),
@@ -5394,16 +5409,15 @@ async fn a_snippet_of_a_reply_runs_in_the_chats_folder_and_hands_back_its_output
     );
 
     click_snippet(cx, "run", entry, 1);
-    settle_until(cx, |cx| ended(cx, &ran, 1)).await;
-    let printed = ran.borrow()[1].read_with(cx, |terminal, _| terminal.text());
-    assert_eq!(printed.trim(), "42");
+    assert_eq!(ran.terminals.borrow().len(), 1, "a script has no terminal");
+    assert_eq!(ran.playgrounds.borrow().len(), 1, "but a playground");
 
     // A destructive one asks once more before it runs.
     click_snippet(cx, "run", entry, 2);
-    assert_eq!(ran.borrow().len(), 2, "it waits to be confirmed");
+    assert_eq!(ran.terminals.borrow().len(), 1, "it waits to be confirmed");
     assert!(home.join("old.txt").exists());
     click_snippet(cx, "run", entry, 2);
-    settle_until(cx, |cx| ended(cx, &ran, 2)).await;
+    settle_until(cx, |cx| ended(cx, terminal(&ran, 1).as_ref())).await;
     assert!(!home.join("old.txt").exists());
 
     let runs = (0..20)
@@ -5413,4 +5427,87 @@ async fn a_snippet_of_a_reply_runs_in_the_chats_folder_and_hands_back_its_output
         })
         .count();
     assert_eq!(runs, 3, "a block of text has no Run");
+}
+
+/// Whether `terminal` is there and its program ended.
+fn ended(cx: &mut VisualTestContext, terminal: Option<&Entity<Terminal>>) -> bool {
+    terminal
+        .is_some_and(|terminal| terminal.read_with(cx, |terminal, _| terminal.ended().is_some()))
+}
+
+#[gpui::test]
+async fn a_script_of_a_reply_opens_in_a_playground_to_edit_run_again_and_send(
+    cx: &mut TestAppContext,
+) {
+    let home = scratch::folder("playground-home");
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::write(home.join("here.txt"), "").unwrap();
+    let ran = Ran::default();
+    let (workspace, cx) = fake_daemon::open_window(
+        cx,
+        home.clone(),
+        Kept::Memory,
+        Fakes::default(),
+        running_stages(&ran),
+    );
+    settled(cx, &workspace);
+    cx.simulate_keystrokes("secondary-n");
+    let view = shown(cx, &workspace);
+    view.update(cx, |view, cx| {
+        view.input().update(cx, |input, cx| {
+            input.set_text(
+                "try\n```python\nimport os\nprint(6 * 7, os.path.exists('here.txt'))\n```",
+                cx,
+            );
+        });
+    });
+    cx.simulate_keystrokes("enter");
+    wait_for_turn(cx, &view).await;
+    let entry = view.read_with(cx, |view, _| view.conversation().entries().len() - 1);
+    let played = |cx: &mut VisualTestContext, ran: &Ran| {
+        let playground = ran.playgrounds.borrow()[0].clone();
+        playground.read_with(cx, |playground, _| playground.terminal().cloned())
+    };
+
+    // Python opens in a playground, which runs it from the chat's folder.
+    click_snippet(cx, "run", entry, 0);
+    settle_until(cx, |cx| {
+        let output = played(cx, &ran);
+        ended(cx, output.as_ref())
+    })
+    .await;
+    let printed = played(cx, &ran)
+        .unwrap()
+        .read_with(cx, |terminal, _| terminal.text());
+    assert_eq!(printed.trim(), "42 True");
+
+    // Edited, it runs again, from a clean folder.
+    let playground = ran.playgrounds.borrow()[0].clone();
+    let first = played(cx, &ran).unwrap();
+    playground.update(cx, |playground, cx| {
+        playground.set_source("print(7 * 7)", cx);
+        playground.run(cx);
+    });
+    settle_until(cx, |cx| {
+        let output = played(cx, &ran);
+        output.as_ref() != Some(&first) && ended(cx, output.as_ref())
+    })
+    .await;
+    let printed = played(cx, &ran)
+        .unwrap()
+        .read_with(cx, |terminal, _| terminal.text());
+    assert_eq!(printed.trim(), "49");
+    let sent = playground.read_with(cx, Playground::attachment).unwrap();
+    assert_eq!(sent.label, "Python playground");
+    assert!(
+        sent.text
+            .starts_with("Ran in a Python playground:\n```python\nprint(7 * 7)\n```"),
+        "{}",
+        sent.text
+    );
+    assert!(
+        sent.text.contains("It printed:\n49\n(exit code 0, in "),
+        "{}",
+        sent.text
+    );
 }
