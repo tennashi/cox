@@ -189,7 +189,7 @@ fn at(cx: &mut VisualTestContext, selector: &'static str) -> Point<Pixels> {
 fn drawn(cx: &mut VisualTestContext, selector: &'static str) -> bool {
     let workspace = root(cx);
     settled(cx, &workspace);
-    let in_list = ["chat-", "new-chat-in-", "archived"]
+    let in_list = ["chat-", "new-chat-in-", "archived", "resolved"]
         .iter()
         .any(|start| selector.starts_with(start))
         && !selector.starts_with("chat-switcher");
@@ -277,13 +277,15 @@ async fn say(cx: &mut VisualTestContext, workspace: &Entity<Workspace>, text: &s
     wait_for_turn(cx, &view).await;
 }
 
-/// Waits until a turn of the chat `view` has ended.
+/// Waits until a turn of the chat `view` has ended: its agent waits for a
+/// line, or closed, as a subagent's does once it is done.
 async fn wait_for_turn(cx: &mut VisualTestContext, view: &Entity<ChatView>) {
     settle(cx).await;
     let (_waiting, timeout) = given_up();
     tokio::select! {
         () = cx.condition(view, |view, _| {
-            view.conversation().state() == State::Idle && !view.conversation().entries().is_empty()
+            matches!(view.conversation().state(), State::Idle | State::Closed)
+                && !view.conversation().entries().is_empty()
         }) => {}
         _ = timeout => panic!("the agent never answered"),
     }
@@ -3187,6 +3189,59 @@ async fn an_archived_chat_leaves_the_list_until_it_is_brought_back(cx: &mut Test
     assert!(!kept_names(&store)[1].2);
 }
 
+#[gpui::test]
+async fn a_chat_marked_done_folds_under_resolved_until_it_is_reopened(cx: &mut TestAppContext) {
+    let home = scratch::folder("resolved");
+    let store = kept_store("resolved-kept");
+    let (agents, workspace, cx) = open_window_keeping(cx, home.clone(), store.clone());
+    cx.simulate_keystrokes("secondary-n");
+    say(cx, &workspace, "first").await;
+    cx.simulate_keystrokes("secondary-n");
+    say(cx, &workspace, "second").await;
+    let done = |cx: &mut VisualTestContext, workspace: &Entity<Workspace>| {
+        settled(cx, workspace);
+        workspace.read_with(cx, |workspace, _| {
+            workspace
+                .chats(0)
+                .map(|chat| (chat.name().to_owned(), chat.is_resolved()))
+                .collect::<Vec<_>>()
+        })
+    };
+    let kept_done = |store: &Store| -> Vec<bool> {
+        store
+            .chats()
+            .unwrap()
+            .into_iter()
+            .map(|chat| chat.resolved.is_some())
+            .collect()
+    };
+
+    right_click(cx, "chat-2");
+    click(cx, "resolve-chat");
+    assert_eq!(
+        done(cx, &workspace),
+        [("first".to_owned(), false), ("second".to_owned(), true)]
+    );
+    assert_eq!(kept_done(&store), [false, true]);
+    assert!(drawn(cx, "resolved"), "the list folds it under Resolved");
+
+    // It stays done once Cox starts again.
+    let again = start_again(cx, home.clone(), &store, &agents);
+    assert_eq!(
+        done(cx, &again),
+        [("first".to_owned(), false), ("second".to_owned(), true)]
+    );
+
+    click(cx, "resolved");
+    right_click(cx, "chat-2");
+    click(cx, "reopen-chat");
+    assert_eq!(
+        done(cx, &workspace),
+        [("first".to_owned(), false), ("second".to_owned(), false)]
+    );
+    assert_eq!(kept_done(&store), [false, false]);
+}
+
 /// What Cox told the human through the app's [`Notices`].
 #[derive(Debug, PartialEq, Eq)]
 enum Told {
@@ -4093,14 +4148,17 @@ async fn a_chat_an_agent_opens_is_the_humans_once_they_send_it_a_line(cx: &mut T
     wait_for_turn(cx, &view).await;
     assert!(!unread(cx, &workspace, child));
 
-    // The human sends it a line, and looks at another chat while the
-    // turn runs.
+    // Its report heard, it is done, under "Resolved". The human sends it
+    // a line, which reopens it and starts its agent again, and looks at
+    // another chat while the turn runs.
+    click(cx, "resolved");
     click(cx, "chat-2");
     assert_eq!(shown(cx, &workspace), view);
     cx.simulate_input("slowly");
     cx.simulate_keystrokes("enter");
     click(cx, "chat-3");
-    let agent = Arc::clone(&agents.borrow()[2]);
+    settle_until(cx, |_| agents.borrow().len() == 4).await;
+    let agent = Arc::clone(&agents.borrow()[3]);
     settle_until(cx, |_| agent.did(&Event::Held)).await;
     agent.go_on();
     wait_for_turn(cx, &view).await;

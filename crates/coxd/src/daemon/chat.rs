@@ -1624,6 +1624,17 @@ impl Chat {
         self.conversation.close(note);
     }
 
+    /// Closes the agent, as when the chat is marked done: unlike
+    /// [`Self::close`], the next line starts it again, going on with its
+    /// session.
+    pub fn rest(&mut self) {
+        if !self.is_open() {
+            return;
+        }
+        self.stop_agent();
+        self.conversation.rest();
+    }
+
     /// Closes the chat, its agent stopped, as it switches from the agent
     /// named `from` to the agent named `to`, which `again` starts once the
     /// daemon starts it.

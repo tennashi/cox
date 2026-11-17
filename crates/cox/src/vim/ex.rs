@@ -60,6 +60,8 @@ pub enum Does {
     Goal,
     /// Opens the input that starts a sketch of the chat shown.
     Sketch,
+    /// Marks the chat shown done, or reopens it once it is.
+    Resolve,
     Reload,
     Back,
     Forward,
@@ -194,6 +196,13 @@ pub const COMMANDS: &[Entry] = &[
         Takes::Nothing,
         Does::Sketch,
         "Start a sketch of the chat shown",
+    ),
+    entry(
+        "resolve",
+        3,
+        Takes::Nothing,
+        Does::Resolve,
+        "Mark the chat shown done, or reopen it",
     ),
     entry(
         "reload",
@@ -359,6 +368,7 @@ mod tests {
         assert_eq!(does("tabo"), Some(Does::Open(Follow::NewTab)));
         assert_eq!(does("set"), Some(Does::Settings));
         assert_eq!(does("re"), Some(Does::Reload));
+        assert_eq!(does("res"), Some(Does::Resolve));
         assert_eq!(does("ba"), Some(Does::Back));
         assert_eq!(does("pro"), Some(Does::Project));
         assert_eq!(does("h"), Some(Does::Help));

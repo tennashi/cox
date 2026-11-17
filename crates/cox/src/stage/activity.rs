@@ -58,6 +58,10 @@ const READ_AGAIN: u8 = 2;
 
 /// A chat as the Activity page is told of it.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "how a chat stands, each apart"
+)]
 pub struct Chat {
     /// The number the window goes by for it this run, which a click on
     /// it, as `cox://chat/<key>`, shows.
@@ -86,9 +90,21 @@ pub struct Chat {
     pub pulls: Vec<PullRow>,
     /// What its agent spent, once it told any of it.
     pub spent: Option<Spent>,
+    /// Whether it is marked done: it leaves the page, but for a step of
+    /// the plan of the chat that opened it, and what it spent there.
+    pub resolved: bool,
+    /// Whether the human archived it: it waits for them only while it
+    /// asks.
+    pub archived: bool,
 }
 
 impl Chat {
+    /// Whether it waits for the human, as the bell counts it.
+    fn waits(&self) -> bool {
+        !self.resolved
+            && (self.asking || (!self.archived && (self.unread || !self.ci_ended().is_empty())))
+    }
+
     /// Whether CI runs on a pull request its agent opened, which it waits
     /// on, though its turn ended.
     fn waits_on_ci(&self) -> bool {
@@ -338,7 +354,7 @@ fn of_folder(told: &Told, chat: &Chat, root: &Path) -> bool {
 /// Whether `chat` waits for the human and is of the folder `root`, or
 /// of any, when `root` is the home of `told`.
 fn waits_in(told: &Told, chat: &Chat, root: &Path) -> bool {
-    (chat.asking || chat.unread || !chat.ci_ended().is_empty()) && of_folder(told, chat, root)
+    chat.waits() && of_folder(told, chat, root)
 }
 
 /// How many chats of the folder `root` wait for the human, for the bar.
@@ -613,7 +629,9 @@ fn planned(
     let listed_chats: Vec<&Chat> = told
         .chats
         .iter()
-        .filter(|chat| of_folder(told, chat, root) && (shown(chat) || chat.waits_on_ci()))
+        .filter(|chat| {
+            !chat.resolved && of_folder(told, chat, root) && (shown(chat) || chat.waits_on_ci())
+        })
         .collect();
     let mut listed = Vec::new();
     let mut under: Vec<(&Chat, usize)> = listed_chats
@@ -688,7 +706,9 @@ fn planned(
                 .zip(&links)
                 .rev()
                 .filter(|(other, link)| {
-                    link.is_none() && (!steps.is_empty() || listed_chats.contains(other))
+                    link.is_none()
+                        && !other.resolved
+                        && (!steps.is_empty() || listed_chats.contains(other))
                 })
                 .map(|(other, _)| (*other, depth + 1)),
         );
@@ -997,6 +1017,8 @@ mod tests {
             kept: None,
             pulls: Vec::new(),
             spent: None,
+            resolved: false,
+            archived: false,
         }
     }
 
@@ -1417,6 +1439,72 @@ mod tests {
         assert_eq!(json["plans"][3]["waits"], "waits");
         // Only the chats at work count as at work.
         assert_eq!(json["busy"], 3);
+    }
+
+    #[test]
+    fn a_chat_marked_done_leaves_the_plans_and_what_waits_and_one_archived_waits_only_asking() {
+        let root = TempDir::new();
+        let listed = |key: u64, parent: Option<u64>| {
+            let mut listed = chat(key, &root, &root, false, false);
+            listed.parent = parent;
+            listed.kept = Some(kept(key));
+            listed
+        };
+        let mut main = listed(1, None);
+        main.working = true;
+        let mut done = listed(2, None);
+        done.resolved = true;
+        done.unread = true;
+        let mut done_under = listed(3, Some(1));
+        done_under.resolved = true;
+        let mut archived_unread = listed(4, None);
+        archived_unread.archived = true;
+        archived_unread.unread = true;
+        let mut archived_asking = listed(5, None);
+        archived_asking.archived = true;
+        archived_asking.asking = true;
+        let told = Told {
+            chats: vec![main, done, done_under, archived_unread, archived_asking],
+            home: root.join("home"),
+            ..Told::default()
+        };
+        let not_done = || vec![step("Later", StepState::Pending)];
+        let kept_plans = [
+            KeptPlan {
+                chat: kept(1),
+                number: 1,
+                steps: not_done(),
+                at: 0,
+            },
+            KeptPlan {
+                chat: kept(2),
+                number: 1,
+                steps: not_done(),
+                at: 0,
+            },
+        ];
+        let plans = Plans {
+            kept: &kept_plans,
+            ..NO_PLANS
+        };
+        let places = Places {
+            wiki: &root.join("wiki"),
+            raw: &root.join("raw"),
+            triggers: &json!({}),
+        };
+
+        let json = told_of(&told, &root, &[], &plans, &|_| None, &places);
+
+        let keys = |tier: &str| -> Vec<u64> {
+            json[tier]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|chat| chat["key"].as_u64().unwrap())
+                .collect()
+        };
+        assert_eq!(keys("plans"), [1], "neither 2 nor 3 under 1");
+        assert_eq!(keys("waiting"), [5]);
     }
 
     #[test]

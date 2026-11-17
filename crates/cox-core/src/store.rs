@@ -22,7 +22,7 @@ use crate::settings::Setting;
 use crate::tabs::KeptTabs;
 
 /// The version of the tables below, as `SQLite`'s `user_version` holds it.
-const VERSION: i64 = 19;
+const VERSION: i64 = 20;
 
 const TABLES: &str = "
 CREATE TABLE projects (
@@ -81,7 +81,11 @@ CREATE TABLE chats (
     subagents TEXT,
     -- What its agent spent, as JSON, once the agent told any of it: the
     -- cost, how full the context is, and the tokens of its turns.
-    spent TEXT
+    spent TEXT,
+    -- When it was marked done, in milliseconds since the epoch, and by
+    -- whom, `human` or `agent`, while it is: both NULL, or both set.
+    resolved_at INTEGER,
+    resolved_by TEXT
 );
 CREATE TABLE entries (
     chat INTEGER NOT NULL REFERENCES chats (id),
@@ -156,6 +160,8 @@ const UPGRADES: &[&str] = &[
     "ALTER TABLE chats ADD COLUMN subagents TEXT;",
     "CREATE INDEX plans ON entries (chat, number) WHERE entry LIKE '{\"plan\":%';",
     "ALTER TABLE chats ADD COLUMN spent TEXT;",
+    "ALTER TABLE chats ADD COLUMN resolved_at INTEGER;
+     ALTER TABLE chats ADD COLUMN resolved_by TEXT;",
 ];
 
 /// How long a write waits for another Cox writing the same database.
@@ -228,6 +234,56 @@ pub struct KeptChat {
     /// What its agent spent, as JSON, as [`Store::keep_spent`] kept it,
     /// once the agent told any of it.
     pub spent: Option<String>,
+    /// When it was marked done, and by whom, while it is.
+    pub resolved: Option<Resolved>,
+}
+
+/// A chat marked done: it stays in the list, folded away at its end, its
+/// agent closed, until something arrives in it or someone reopens it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Resolved {
+    /// When, in milliseconds since the epoch.
+    pub at: i64,
+    pub by: ResolvedBy,
+}
+
+impl Resolved {
+    /// Marked done now, by `by`.
+    #[must_use]
+    pub fn now(by: ResolvedBy) -> Self {
+        Self { at: now(), by }
+    }
+}
+
+/// Who marked a chat done.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ResolvedBy {
+    /// The human, from the chat's menu.
+    Human,
+    /// Cox, for an agent's work that came to its end: a subagent whose
+    /// report reached the agent that opened it, or a chat whose merge
+    /// ended.
+    Agent,
+}
+
+impl ResolvedBy {
+    /// How it is kept.
+    const fn word(self) -> &'static str {
+        match self {
+            Self::Human => "human",
+            Self::Agent => "agent",
+        }
+    }
+
+    /// What `word` keeps; a word a newer Cox kept is the human's.
+    fn from_word(word: &str) -> Self {
+        if word == "agent" {
+            Self::Agent
+        } else {
+            Self::Human
+        }
+    }
 }
 
 /// The plan a chat's agent sent last, as [`Store::plans`] reads it.
@@ -409,7 +465,7 @@ impl Store {
     pub fn chats(&self) -> anyhow::Result<Vec<KeptChat>> {
         let mut statement = self.connection.prepare(
             "SELECT id, project, name, named, archived, goal_command, parent, setup, goal_words,
-             folder, spent
+             folder, spent, resolved_at, resolved_by
              FROM chats ORDER BY id",
         )?;
         let chats = statement.query_map([], |row| {
@@ -426,6 +482,13 @@ impl Store {
                 setup: row.get(7)?,
                 folder: row.get::<_, Option<String>>(9)?.map(PathBuf::from),
                 spent: row.get(10)?,
+                resolved: {
+                    let by: Option<String> = row.get(12)?;
+                    row.get::<_, Option<i64>>(11)?.map(|at| Resolved {
+                        at,
+                        by: ResolvedBy::from_word(by.as_deref().unwrap_or("")),
+                    })
+                },
             })
         })?;
         Ok(chats.collect::<Result<_, _>>()?)
@@ -638,6 +701,23 @@ impl Store {
         self.connection.execute(
             "UPDATE chats SET archived = ?2 WHERE id = ?1",
             params![chat.0, archived],
+        )?;
+        Ok(())
+    }
+
+    /// Keeps that `chat` is marked done as `resolved` says, or is not.
+    ///
+    /// # Errors
+    ///
+    /// When the database cannot be written.
+    pub fn resolve_chat(&self, chat: ChatId, resolved: Option<Resolved>) -> anyhow::Result<()> {
+        self.connection.execute(
+            "UPDATE chats SET resolved_at = ?2, resolved_by = ?3 WHERE id = ?1",
+            params![
+                chat.0,
+                resolved.map(|resolved| resolved.at),
+                resolved.map(|resolved| resolved.by.word()),
+            ],
         )?;
         Ok(())
     }
@@ -1485,6 +1565,51 @@ mod tests {
                 ("Chat 2".to_owned(), Named::Numbered, true),
             ]
         );
+    }
+
+    #[test]
+    fn keeps_whether_a_chat_is_resolved_and_by_whom_past_closing() {
+        let directory = scratch();
+        let path = directory.path().join("chats.sqlite");
+        let resolved = |path: &Path| {
+            Store::open(path)
+                .unwrap()
+                .chats()
+                .unwrap()
+                .into_iter()
+                .map(|chat| chat.resolved)
+                .collect::<Vec<_>>()
+        };
+        let (chat, other) = {
+            let store = Store::open(&path).unwrap();
+            (
+                store.add_chat(None, "Chat 1").unwrap(),
+                store.add_chat(None, "Chat 2").unwrap(),
+            )
+        };
+        assert_eq!(resolved(&path), [None, None]);
+
+        let by_human = Resolved {
+            at: 1_000,
+            by: ResolvedBy::Human,
+        };
+        let by_agent = Resolved {
+            at: 2_000,
+            by: ResolvedBy::Agent,
+        };
+        {
+            let store = Store::open(&path).unwrap();
+            store.resolve_chat(chat, Some(by_human)).unwrap();
+            store.resolve_chat(chat, Some(by_human)).unwrap();
+            store.resolve_chat(other, Some(by_agent)).unwrap();
+        }
+        assert_eq!(resolved(&path), [Some(by_human), Some(by_agent)]);
+
+        Store::open(&path)
+            .unwrap()
+            .resolve_chat(other, None)
+            .unwrap();
+        assert_eq!(resolved(&path), [Some(by_human), None]);
     }
 
     #[test]
