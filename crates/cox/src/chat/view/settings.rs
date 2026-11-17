@@ -9,7 +9,10 @@
 //! one sets it; a click anywhere else, the pill too, closes the list. The
 //! agent comes first, listing the agents the chat can talk to, those of
 //! the ACP Registry under its name, and is chosen only while no turn
-//! runs.
+//! runs. Right of the pill, what the chat's agent spent shows, once it
+//! told any of it.
+
+use std::fmt::Write as _;
 
 use gpui::{
     AnchoredPositionMode, AnyElement, Context, ElementId, Focusable as _, FontWeight,
@@ -22,8 +25,10 @@ use super::ChatView;
 use crate::ui::ellipsis::ellipsis;
 use crate::ui::menu::{ROW_HEIGHT, ROW_RADIUS};
 use crate::vim::hints::Hinted as _;
+use cox_acp::Microdollars;
 use coxd::agents::REGISTRY_GROUP;
 use coxd::chat::conversation::State;
+use coxd::chat::spent::Spent;
 use coxd::theme::{BORDER, BUTTON, DIM, FAINT, FOREGROUND, SELECTED, SURFACE, chat_color};
 
 /// How wide the list of a setting's choices is.
@@ -134,25 +139,52 @@ impl ChatView {
                 None => Self::render_list(Vec::new(), cx),
             },
         });
+        let pill = div()
+            .min_w_0()
+            .flex()
+            .flex_col()
+            .child(pill)
+            .children(list.map(|list| {
+                // Under the pill, kept in the window, which takes it
+                // left of the pill at the window's right edge.
+                deferred(
+                    anchored()
+                        .position_mode(AnchoredPositionMode::Local)
+                        .position(point(px(0.), px(PILL_HEIGHT + 4.)))
+                        .snap_to_window()
+                        .child(list),
+                )
+                .with_priority(2)
+            }));
         Some(
             div()
+                .w_full()
                 .min_w_0()
                 .flex()
-                .flex_col()
+                .items_center()
+                .gap(px(8.))
                 .child(pill)
-                .children(list.map(|list| {
-                    // Under the pill, kept in the window, which takes it
-                    // left of the pill at the window's right edge.
-                    deferred(
-                        anchored()
-                            .position_mode(AnchoredPositionMode::Local)
-                            .position(point(px(0.), px(PILL_HEIGHT + 4.)))
-                            .snap_to_window()
-                            .child(list),
-                    )
-                    .with_priority(2)
-                }))
+                .child(div().flex_1())
+                .children(self.render_spent())
                 .into_any_element(),
+        )
+    }
+
+    /// What the chat's agent spent, right of the pill, once it told any
+    /// of it: the cost of the chat's sessions, and how full the context
+    /// is, with the tokens of its turns when the mouse is over it.
+    fn render_spent(&self) -> Option<impl IntoElement + use<>> {
+        let spent = self.row.spent.as_ref()?;
+        let shown = shown_spent(spent)?;
+        Some(
+            div()
+                .id("spent")
+                .debug_selector(|| "spent".to_owned())
+                .flex_shrink_0()
+                .text_size(px(12.))
+                .text_color(rgb(FAINT))
+                .child(shown)
+                .tooltip(crate::ui::tip(spent_said(spent))),
         )
     }
 
@@ -379,4 +411,106 @@ fn chosen_name(setting: &Setting) -> &str {
     setting
         .chosen()
         .map_or(setting.value.as_str(), |choice| choice.name.as_str())
+}
+
+/// What the chat's agent spent, in short: the cost, once the agent told
+/// one, and how full the context is, as `$0.42 · 61% context`.
+fn shown_spent(spent: &Spent) -> Option<String> {
+    let cost = (spent.cost() > Microdollars::default()).then(|| spent.cost().to_string());
+    let context = spent
+        .context
+        .map(|context| format!("{}% context", context.percent()));
+    let shown: Vec<String> = cost.into_iter().chain(context).collect();
+    (!shown.is_empty()).then(|| shown.join(" · "))
+}
+
+/// What the chat's agent spent, in words, for the human who asks: the
+/// cost, the context, and the tokens of the turns.
+fn spent_said(spent: &Spent) -> String {
+    let mut said = format!("{} spent so far", spent.cost());
+    if let Some(context) = spent.context {
+        write!(
+            said,
+            "\nContext: {} of {} tokens",
+            thousands(context.used),
+            thousands(context.size)
+        )
+        .unwrap();
+    }
+    let tokens = spent.tokens;
+    if tokens.total() > 0 {
+        write!(
+            said,
+            "\nTurns: {} tokens in, {} out, {} read from the cache, {} written to it",
+            thousands(tokens.input),
+            thousands(tokens.output),
+            thousands(tokens.cache_read),
+            thousands(tokens.cache_write)
+        )
+        .unwrap();
+    }
+    said
+}
+
+/// `number` with its thousands set apart, as `1,000,000`.
+fn thousands(number: u64) -> String {
+    let digits = number.to_string();
+    let mut said = String::new();
+    for (at, digit) in digits.chars().enumerate() {
+        if at > 0 && (digits.len() - at).is_multiple_of(3) {
+            said.push(',');
+        }
+        said.push(digit);
+    }
+    said
+}
+
+#[cfg(test)]
+mod spent_tests {
+    use coxd::chat::spent::{Context, Spent};
+
+    use super::{shown_spent, spent_said};
+
+    #[test]
+    fn the_cost_shows_once_the_agent_told_one() {
+        let context = Some(Context {
+            used: 30_000,
+            size: 1_000_000,
+        });
+        let before = Spent {
+            context,
+            ..Spent::default()
+        };
+        assert_eq!(shown_spent(&before).as_deref(), Some("3% context"));
+        let after = Spent {
+            session: cox_acp::Microdollars(420_000),
+            context,
+            ..Spent::default()
+        };
+        assert_eq!(shown_spent(&after).as_deref(), Some("$0.42 · 3% context"));
+        assert_eq!(shown_spent(&Spent::default()), None);
+    }
+
+    #[test]
+    fn what_the_agent_spent_is_said_with_its_context_and_tokens() {
+        let spent = Spent {
+            session: cox_acp::Microdollars(206_010),
+            context: Some(Context {
+                used: 25_162,
+                size: 1_000_000,
+            }),
+            tokens: cox_acp::Tokens {
+                input: 6,
+                output: 9,
+                cache_read: 47_634,
+                cache_write: 24_509,
+            },
+            ..Spent::default()
+        };
+        assert_eq!(
+            spent_said(&spent),
+            "$0.21 spent so far\nContext: 25,162 of 1,000,000 tokens\nTurns: 6 tokens in, 9 out, \
+             47,634 read from the cache, 24,509 written to it"
+        );
+    }
 }

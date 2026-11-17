@@ -64,6 +64,7 @@ use coxd::agent::setup::Setup;
 use coxd::agents::Agents;
 use coxd::chat::conversation::State;
 use coxd::chat::sketch::{self, Sketch};
+use coxd::chat::spent::Spent;
 use coxd::daemon::Link;
 use coxd::daemon::wire::{Background, ChatRow, FromDaemon, Listing, ProjectRow, PullRow, ToDaemon};
 
@@ -266,6 +267,8 @@ pub struct Chat {
     background: Vec<Background>,
     /// The pull requests its agent opened.
     pulls: Vec<PullRow>,
+    /// What its agent spent, once it told any of it.
+    spent: Option<Spent>,
     /// Its view, once the window showed it, or something asked of its
     /// stage.
     view: Option<Entity<ChatView>>,
@@ -292,6 +295,7 @@ impl Chat {
             folder,
             background,
             pulls,
+            spent,
         } = row;
         Self {
             key,
@@ -311,6 +315,7 @@ impl Chat {
             folder,
             background,
             pulls,
+            spent,
             view,
         }
     }
@@ -868,6 +873,7 @@ impl Workspace {
                 && self.projects[chat.project].missing,
             setup: chat.setup.clone(),
             pulls: chat.pulls.clone(),
+            spent: chat.spent.clone(),
         }
     }
 
@@ -1459,6 +1465,7 @@ impl Workspace {
                     parent: chat.parent,
                     kept: chat.kept,
                     pulls: chat.pulls.clone(),
+                    spent: chat.spent.clone(),
                 })
                 .collect(),
             projects: self

@@ -62,6 +62,7 @@ use crate::agents::Agents;
 use crate::chat::conversation::{Content, Conversation, Entry, Gathered, Patch, State};
 use crate::chat::judge::{Heard, Starts};
 use crate::chat::sketch::{self, Sketch};
+use crate::chat::spent::Spent;
 use crate::settings::Subagents;
 use crate::storage;
 use crate::terminal::run_unseen;
@@ -453,6 +454,9 @@ struct Slot {
     ending: Option<(Ends, workflow::Ending)>,
     /// The pull requests its agent opened.
     pulls: pulls::Pulls,
+    /// What its agent spent, as it was kept, until the chat is read: its
+    /// conversation holds it from then.
+    spent: Option<Spent>,
     /// The chat, once it was read or opened in this run.
     chat: Option<Chat>,
 }
@@ -524,6 +528,10 @@ impl Slot {
             folder: self.folder.clone(),
             background: self.chat.as_ref().map_or_default(Chat::background),
             pulls: Vec::new(),
+            spent: match &self.chat {
+                Some(chat) => chat.conversation().spent().cloned(),
+                None => self.spent.clone(),
+            },
         }
     }
 }
@@ -821,6 +829,15 @@ impl Daemon {
                 folder: chat.folder,
                 ending: None,
                 pulls: pulls::Pulls::default(),
+                spent: chat.spent.as_deref().and_then(|spent| {
+                    serde_json::from_str(spent)
+                        .inspect_err(|error| {
+                            tracing::error!(
+                                "what the chat's agent spent cannot be read: {error:#}"
+                            );
+                        })
+                        .ok()
+                }),
                 chat: None,
             };
             if chat.archived {
@@ -969,6 +986,7 @@ impl Daemon {
         let cwd = self.cwd(slot);
         let setup = slot.setup.clone();
         let goal = slot.goal.clone();
+        let spent = slot.spent.clone();
         let entries = self.store.entries(kept).unwrap_or_else(|error| {
             tracing::error!("the chat cannot be read: {error:#}");
             vec![Entry::Note(format!("Cox cannot read this chat: {error:#}"))]
@@ -1005,6 +1023,7 @@ impl Daemon {
             .with_goal(goal)
             .with_settings(settings)
             .with_commands(commands)
+            .with_spent(spent)
             .with_keeping(keeps);
         let chat = self.make_chat(key, Some(kept), conversation, again);
         if let Some(slot) = self.slot_mut(key) {
@@ -1351,6 +1370,7 @@ impl Daemon {
             folder,
             ending: None,
             pulls: pulls::Pulls::default(),
+            spent: None,
             chat: Some(chat),
         });
         // Its triggers run on its opening once its agent has started.

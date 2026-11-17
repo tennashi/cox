@@ -30,6 +30,7 @@
 //! human dismissed from the page stays hidden until the chat's agent
 //! sends another (see [`dismiss`]).
 
+use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
@@ -39,6 +40,8 @@ use jiff::tz::TimeZone;
 use serde_json::{Value, json};
 
 use crate::stage::commands;
+use cox_acp::Microdollars;
+use coxd::chat::spent::Spent;
 use coxd::daemon::wire::PullRow;
 use coxd::github::CheckState;
 
@@ -81,6 +84,8 @@ pub struct Chat {
     pub kept: Option<ChatId>,
     /// The pull requests its agent opened, as coxd last read them.
     pub pulls: Vec<PullRow>,
+    /// What its agent spent, once it told any of it.
+    pub spent: Option<Spent>,
 }
 
 impl Chat {
@@ -659,6 +664,7 @@ fn planned(
             "said": does.said,
             "running": does.running.map(|(called, line)| json!({"called": called, "line": line})),
             "pulls": pulls_of(chat),
+            "spent": spent_of(told, chat),
             "background": chat
                 .background
                 .iter()
@@ -669,7 +675,7 @@ fn planned(
                     })
                 })
                 .collect::<Vec<_>>(),
-            "plan": steps_of(steps, &subagents, &links, now),
+            "plan": steps_of(told, steps, &subagents, &links, now),
             // Only a plan that keeps a chat listed on its own is
             // dismissed: one at work shows anyway.
             "dismiss": plan
@@ -690,9 +696,54 @@ fn planned(
     listed
 }
 
+/// What `chat`'s agent spent, with what the agents of the subagents'
+/// chats under it spent added, as JSON: the cost, as the human reads it,
+/// once one of the agents told one, how full the chat's context is, in
+/// hundredths, if its agent told, and what each part cost, for the page
+/// to tell when asked. Null when none of their agents told anything.
+fn spent_of(told: &Told, chat: &Chat) -> Value {
+    let mut subagents = None;
+    let mut under = vec![chat.key];
+    while let Some(key) = under.pop() {
+        for other in told.chats.iter().filter(|other| other.parent == Some(key)) {
+            under.push(other.key);
+            if let Some(spent) = &other.spent {
+                subagents = Some(subagents.unwrap_or_default() + spent.cost());
+            }
+        }
+    }
+    if chat.spent.is_none() && subagents.is_none() {
+        return Value::Null;
+    }
+    let own = chat
+        .spent
+        .as_ref()
+        .map_or_else(Microdollars::default, Spent::cost);
+    let context = chat
+        .spent
+        .as_ref()
+        .and_then(|spent| spent.context)
+        .map(coxd::chat::spent::Context::percent);
+    let mut title = format!("this chat {own}");
+    if let Some(subagents) = subagents {
+        write!(title, ", its subagents {subagents}").unwrap();
+    }
+    if let Some(context) = context {
+        write!(title, "; its context {context}% full").unwrap();
+    }
+    let cost = own + subagents.unwrap_or_default();
+    json!({
+        "cost": (cost > Microdollars::default()).then(|| cost.to_string()),
+        "context": context,
+        "title": title,
+    })
+}
+
 /// The steps of a plan, as JSON, each with those of `subagents` that
-/// `links` link to it, and what they do now, as `now` says.
+/// `links` link to it, what they do now, as `now` says, and what they
+/// spent, with the chats under them, of `told`.
 fn steps_of(
+    told: &Told,
     steps: &[Step],
     subagents: &[&Chat],
     links: &[Option<usize>],
@@ -712,6 +763,7 @@ fn steps_of(
                         "name": chat.name,
                         "working": chat.working,
                         "pulls": pulls_of(chat),
+                        "spent": spent_of(told, chat),
                         "said": chat
                             .working
                             .then(|| now(chat.key).and_then(|now| now.said))
@@ -944,7 +996,79 @@ mod tests {
             parent: None,
             kept: None,
             pulls: Vec::new(),
+            spent: None,
         }
+    }
+
+    #[test]
+    fn a_chat_at_work_tells_what_it_and_the_subagents_under_it_spent() {
+        use coxd::chat::spent::{Context, Spent};
+        let folder = TempDir::new();
+        let root = folder.path().join("app");
+        let spent = |micros, context: Option<u64>| {
+            Some(Spent {
+                session: cox_acp::Microdollars(micros),
+                context: context.map(|used| Context {
+                    used,
+                    size: 1_000_000,
+                }),
+                ..Spent::default()
+            })
+        };
+        let mut main = chat(1, &root, &root, false, false);
+        main.working = true;
+        main.spent = spent(420_000, Some(612_000));
+        let mut subagent = chat(2, &root, &root, false, false);
+        subagent.parent = Some(1);
+        subagent.working = true;
+        subagent.spent = spent(100_000, Some(30_000));
+        let mut under_it = chat(3, &root, &root, false, false);
+        under_it.parent = Some(2);
+        under_it.spent = spent(5_000, None);
+        let mut silent = chat(4, &root, &root, false, false);
+        silent.working = true;
+        let told = Told {
+            chats: vec![main, subagent, under_it, silent],
+            projects: vec![(root.clone(), "app".to_owned())],
+            home: folder.path().to_owned(),
+            github: None,
+        };
+        let places = Places {
+            wiki: &root.join("wiki"),
+            raw: &root.join("raw"),
+            triggers: &json!({}),
+        };
+
+        let json = told_of(&told, &root, &[], &NO_PLANS, &|_| None, &places);
+
+        let spent: Vec<(u64, &Value)> = json["plans"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|chat| (chat["key"].as_u64().unwrap(), &chat["spent"]))
+            .collect();
+        assert_eq!(
+            spent,
+            [
+                (
+                    1,
+                    &json!({
+                        "cost": "$0.53",
+                        "context": 61,
+                        "title": "this chat $0.42, its subagents $0.11; its context 61% full",
+                    })
+                ),
+                (
+                    2,
+                    &json!({
+                        "cost": "$0.11",
+                        "context": 3,
+                        "title": "this chat $0.10, its subagents $0.01; its context 3% full",
+                    })
+                ),
+                (4, &Value::Null),
+            ]
+        );
     }
 
     /// What goes on in the folder `root`, nothing decided, doing or
@@ -1282,11 +1406,11 @@ mod tests {
         assert_eq!(plan[0]["state"], "in_progress");
         assert_eq!(
             plan[0]["chats"],
-            json!([{ "key": 3, "name": "Add the --shout flag", "working": true, "pulls": [], "said": "step of 3" }])
+            json!([{ "key": 3, "name": "Add the --shout flag", "working": true, "pulls": [], "spent": null, "said": "step of 3" }])
         );
         assert_eq!(
             plan[1]["chats"],
-            json!([{ "key": 9, "name": "README docs update", "working": false, "pulls": [], "said": null }])
+            json!([{ "key": 9, "name": "README docs update", "working": false, "pulls": [], "spent": null, "said": null }])
         );
         assert_eq!(plan[2]["chats"], json!([]));
         assert_eq!(json["plans"][2]["waits"], "finished");

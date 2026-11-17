@@ -22,7 +22,7 @@ use crate::settings::Setting;
 use crate::tabs::KeptTabs;
 
 /// The version of the tables below, as `SQLite`'s `user_version` holds it.
-const VERSION: i64 = 18;
+const VERSION: i64 = 19;
 
 const TABLES: &str = "
 CREATE TABLE projects (
@@ -78,7 +78,10 @@ CREATE TABLE chats (
     -- Where the agent of its session runs subagents, `agent` or `chats`,
     -- as the settings said when the session started: NULL for a session
     -- that started before Cox kept it, which ran them as `agent`.
-    subagents TEXT
+    subagents TEXT,
+    -- What its agent spent, as JSON, once the agent told any of it: the
+    -- cost, how full the context is, and the tokens of its turns.
+    spent TEXT
 );
 CREATE TABLE entries (
     chat INTEGER NOT NULL REFERENCES chats (id),
@@ -152,6 +155,7 @@ const UPGRADES: &[&str] = &[
     "ALTER TABLE chats ADD COLUMN commands TEXT;",
     "ALTER TABLE chats ADD COLUMN subagents TEXT;",
     "CREATE INDEX plans ON entries (chat, number) WHERE entry LIKE '{\"plan\":%';",
+    "ALTER TABLE chats ADD COLUMN spent TEXT;",
 ];
 
 /// How long a write waits for another Cox writing the same database.
@@ -221,6 +225,9 @@ pub struct KeptChat {
     /// The folder it works in, when it is not its project's, as one that
     /// opened before another folder of the project became the project's.
     pub folder: Option<PathBuf>,
+    /// What its agent spent, as JSON, as [`Store::keep_spent`] kept it,
+    /// once the agent told any of it.
+    pub spent: Option<String>,
 }
 
 /// The plan a chat's agent sent last, as [`Store::plans`] reads it.
@@ -402,7 +409,7 @@ impl Store {
     pub fn chats(&self) -> anyhow::Result<Vec<KeptChat>> {
         let mut statement = self.connection.prepare(
             "SELECT id, project, name, named, archived, goal_command, parent, setup, goal_words,
-             folder
+             folder, spent
              FROM chats ORDER BY id",
         )?;
         let chats = statement.query_map([], |row| {
@@ -418,6 +425,7 @@ impl Store {
                 parent: row.get::<_, Option<i64>>(6)?.map(ChatId),
                 setup: row.get(7)?,
                 folder: row.get::<_, Option<String>>(9)?.map(PathBuf::from),
+                spent: row.get(10)?,
             })
         })?;
         Ok(chats.collect::<Result<_, _>>()?)
@@ -1005,6 +1013,21 @@ impl Store {
         Ok(())
     }
 
+    /// Keeps `spent` as what `chat`'s agent spent, as `T` is written as
+    /// JSON, whatever it is: [`KeptChat::spent`] reads it.
+    ///
+    /// # Errors
+    ///
+    /// When the database cannot be written, or `spent` cannot be written
+    /// as JSON.
+    pub fn keep_spent<T: serde::Serialize>(&self, chat: ChatId, spent: &T) -> anyhow::Result<()> {
+        self.connection.execute(
+            "UPDATE chats SET spent = ?2 WHERE id = ?1",
+            params![chat.0, serde_json::to_string(spent)?],
+        )?;
+        Ok(())
+    }
+
     /// The plan each chat's agent sent last, for the chats whose agent
     /// sent one.
     ///
@@ -1200,6 +1223,17 @@ impl Record {
     /// written as JSON.
     pub fn commands<T: serde::Serialize>(&self, commands: &[T]) -> anyhow::Result<()> {
         self.store.keep_commands(self.chat, commands)
+    }
+
+    /// Keeps `spent` as what the chat's agent spent, as
+    /// [`Store::keep_spent`] does.
+    ///
+    /// # Errors
+    ///
+    /// When the database cannot be written, or `spent` cannot be written
+    /// as JSON.
+    pub fn spent<T: serde::Serialize>(&self, spent: &T) -> anyhow::Result<()> {
+        self.store.keep_spent(self.chat, spent)
     }
 
     /// What the human set each setting of `agent`'s sessions to last, of
@@ -1790,6 +1824,21 @@ mod tests {
         assert_eq!(store.commands::<Command>(chat).unwrap(), commands);
         store.keep_commands::<Command>(chat, &[]).unwrap();
         assert_eq!(store.commands::<Command>(chat).unwrap(), []);
+    }
+
+    #[test]
+    fn keeps_what_a_chats_agent_spent_once_it_told() {
+        let store = Store::in_memory().unwrap();
+        let chat = store.add_chat(None, "Chat 1").unwrap();
+        assert_eq!(store.chats().unwrap()[0].spent, None);
+
+        store
+            .keep_spent(chat, &serde_json::json!({ "session": 91_728 }))
+            .unwrap();
+        assert_eq!(
+            store.chats().unwrap()[0].spent.as_deref(),
+            Some(r#"{"session":91728}"#)
+        );
     }
 
     #[test]

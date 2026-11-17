@@ -12,3 +12,4 @@ pub mod conversation;
 pub mod judge;
 pub mod mention;
 pub mod sketch;
+pub mod spent;

@@ -57,6 +57,16 @@ function waiting(chat) {
   );
 }
 
+/// What `chat`'s agent spent, with its subagents', and how full its
+/// context is, if its agent told any of it.
+function spent(chat) {
+  const spent = chat.spent;
+  if (!spent) return "";
+  const shown = [spent.cost, spent.context == null ? null : `${spent.context}% context`].filter((part) => part != null);
+  if (!shown.length) return "";
+  return ` <span class="spent" title="${esc(spent.title)}">${esc(shown.join(" · "))}</span>`;
+}
+
 /// The pull requests `chat`'s agent opened that are still open, each with
 /// how its CI does.
 function pulls(chat) {
@@ -92,7 +102,7 @@ function working(chat) {
     `<a class="row" href="cox://chat/${chat.key}" title="shows the chat" style="margin-left: ${chat.depth * 18}px">` +
     `<span class="dot ${dot}"></span>` +
     `<span class="what"><span class="name">${chat.depth || chat.sketch ? "↳ " : ""}${esc(chat.name)}</span>${why}` +
-    `${where(chat)}${goal}${said || running || background || chat.waits ? "" : `<div class="line">at work</div>`}${said}${running}${background}${pull}</span></a>` +
+    `${where(chat)}${spent(chat)}${goal}${said || running || background || chat.waits ? "" : `<div class="line">at work</div>`}${said}${running}${background}${pull}</span></a>` +
     plan(chat)
   );
 }
@@ -116,7 +126,7 @@ function plan(chat) {
         .map(
           (sub) =>
             `<a class="sub" href="cox://chat/${sub.key}" title="shows the chat">` +
-            `<span class="dot ${sub.working ? "busy" : "idle"}"></span>↳ ${esc(sub.name)}</a>` +
+            `<span class="dot ${sub.working ? "busy" : "idle"}"></span>↳ ${esc(sub.name)}${spent(sub)}</a>` +
             (sub.said ? `<div class="line">${esc(sub.said)}</div>` : "") +
             pulls(sub),
         )
