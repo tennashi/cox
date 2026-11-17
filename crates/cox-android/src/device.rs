@@ -47,6 +47,8 @@ pub struct Device {
     newest: Arc<Newest>,
     /// The process of the emulator Cox started, once it runs.
     started: Arc<AtomicI32>,
+    /// The display's size, in its own pixels, once the emulator answered.
+    display: Arc<Mutex<Option<(u32, u32)>>>,
 }
 
 /// What a device tells the tab.
@@ -128,6 +130,7 @@ impl Device {
             to,
             newest: Arc::default(),
             started: Arc::default(),
+            display: Arc::default(),
         };
         let worker = Worker {
             device: device.to_owned(),
@@ -136,6 +139,7 @@ impl Device {
             events,
             newest: this.newest.clone(),
             started: this.started.clone(),
+            display: this.display.clone(),
         };
         let spawned = std::thread::Builder::new()
             .name(format!("emulator {device}"))
@@ -155,6 +159,12 @@ impl Device {
     /// Sends `input` to the emulator.
     pub fn send(&self, input: Input) {
         self.to.send(input).ok();
+    }
+
+    /// The display's size, in its own pixels, once the emulator answered.
+    #[must_use]
+    pub fn display(&self) -> Option<(u32, u32)> {
+        *self.display.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
     /// The newest frame, if one came since the last taken.
@@ -189,6 +199,7 @@ struct Worker {
     events: UnboundedSender<Event>,
     newest: Arc<Newest>,
     started: Arc<AtomicI32>,
+    display: Arc<Mutex<Option<(u32, u32)>>>,
 }
 
 /// The newest frame, which the thread puts and the tab takes.
@@ -264,6 +275,7 @@ impl Worker {
                 anyhow::bail!("the emulator ended before it answered{}", said(&printed, &ended));
             }
         };
+        *self.display.lock().unwrap_or_else(PoisonError::into_inner) = Some(display);
         self.status(Status::Showing);
         // What the tab sent as the emulator started is taken first, so
         // that the first frames come at the size it asked for last.
@@ -348,6 +360,7 @@ impl Worker {
             device: self.device.clone(),
             port,
             token: None,
+            serial: None,
         };
         Ok((running, child))
     }

@@ -122,6 +122,7 @@ async fn serve(device: String, port: u16, still: bool) -> anyhow::Result<()> {
             device: device.clone(),
             port,
             token: None,
+            serial: None,
         },
     )?;
     println!("INFO    | {device} serves gRPC on 127.0.0.1:{port}");

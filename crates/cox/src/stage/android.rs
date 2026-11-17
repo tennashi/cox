@@ -30,7 +30,6 @@ use crate::stage::pointer;
 use crate::stage::tab::Shows;
 use crate::ui::button::{Kind, button};
 use crate::vim::hints::Hinted as _;
-use coxd::agent::mcp::AndroidAct;
 use coxd::theme::{BORDER, DIM, FAILED, FOREGROUND, RAISED};
 
 pub(crate) const KEY_CONTEXT: &str = "Android";
@@ -152,38 +151,35 @@ impl Android {
         Some((self.screen.picture()?, self.picture_size()?))
     }
 
-    /// Does `act`, which the agent asks, on the device: where it falls is
-    /// in the pixels of the agent's picture of the display (see
-    /// [`Android::picture`]). A swipe only lands; [`Android::touch`]
-    /// moves the finger on.
+    /// The display's size, in its own pixels, once the emulator answered.
+    #[must_use]
+    pub fn display(&self) -> Option<(u32, u32)> {
+        self.device.as_ref()?.display()
+    }
+
+    /// Whether the agent can act on the device now.
     ///
     /// # Errors
     ///
-    /// When the emulator does not run, or shows no display yet.
-    pub fn act(&mut self, act: &AndroidAct, cx: &mut Context<Self>) -> Result<(), String> {
-        if matches!(act, AndroidAct::List | AndroidAct::Look { .. }) {
-            return Ok(());
+    /// When the emulator does not run.
+    pub fn ready(&self) -> Result<(), String> {
+        if self.is_running() {
+            Ok(())
+        } else {
+            Err(format!("{} does not run yet: look at it first.", self.name))
         }
-        if !self.is_running() {
-            return Err(format!("{} does not run yet: look at it first.", self.name));
-        }
-        match act {
-            AndroidAct::List | AndroidAct::Look { .. } => {}
-            AndroidAct::Tap { x, y, .. } => {
-                self.touch(*x, *y, true, cx)?;
-                self.touch(*x, *y, false, cx)?;
-            }
-            AndroidAct::Swipe { x, y, .. } => self.touch(*x, *y, true, cx)?,
-            AndroidAct::Type { text, .. } => {
-                self.send(Input::Text(text.clone()));
-                self.agent_input(AgentInput::Type, cx);
-            }
-            AndroidAct::Key { key, .. } => {
-                self.send(Input::Key(key.clone()));
-                self.agent_input(AgentInput::Type, cx);
-            }
-        }
-        Ok(())
+    }
+
+    /// Types `text` where the device has the keyboard, as the agent does.
+    pub fn type_text(&mut self, text: String, cx: &mut Context<Self>) {
+        self.send(Input::Text(text));
+        self.agent_input(AgentInput::Type, cx);
+    }
+
+    /// Presses `key`, as `Enter` or `GoBack`, as the agent does.
+    pub fn press(&mut self, key: String, cx: &mut Context<Self>) {
+        self.send(Input::Key(key));
+        self.agent_input(AgentInput::Type, cx);
     }
 
     /// The agent's finger at `x` and `y`, in the pixels of its picture of

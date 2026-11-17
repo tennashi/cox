@@ -23,6 +23,8 @@ tracing.workspace = true
 # Whether the process an emulator's file names is there still, and
 # stopping an emulator Cox started.
 libc.workspace = true
+# The screen's elements, as `uiautomator dump` writes them.
+roxmltree = "0.20.0"
 # The letters `cox-fake-emulator` draws its screen with.
 font8x8 = { version = "0.3.1", default-features = false }
 

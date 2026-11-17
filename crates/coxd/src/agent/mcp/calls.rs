@@ -2122,6 +2122,7 @@ mod tests {
             "raw_read",
             "android_devices",
             "android_look",
+            "android_ui",
             "android_tap",
             "android_swipe",
             "android_type",
