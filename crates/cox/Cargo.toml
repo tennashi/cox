@@ -70,10 +70,11 @@ base64 = "0.22.1"
 # The stage's terminals, which the human types into and the agent runs
 # commands in: see `src/stage/terminal.rs`.
 alacritty_terminal = "0.26.0"
+# Whether the window a restart replaces has quit: see `src/restart.rs`.
+libc.workspace = true
 
 # The system's notifications, and the Dock's badge: see `src/notices/macos.rs`.
 [target.'cfg(target_os = "macos")'.dependencies]
-libc.workspace = true
 objc2 = "0.6.5"
 objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSAccessibility", "NSApplication", "NSDockTile", "NSEvent", "NSGraphicsContext", "NSResponder", "NSRunningApplication", "NSTextInputContext", "NSView", "NSWindow", "NSWorkspace", "objc2-core-graphics"] }
 objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSGeometry", "NSProcessInfo", "NSString", "NSUserNotification"] }

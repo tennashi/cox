@@ -5,7 +5,6 @@
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
-use std::time::SystemTime;
 
 use cox_core::entry::Attachment;
 use cox_core::goal::Goal;
@@ -285,35 +284,95 @@ pub enum StageAsk {
     },
 }
 
-/// Which build of Cox a window or coxd runs, as the file of its program
-/// was when it started: a window and a coxd of one build say the same
-/// [`ToDaemon`] and [`FromDaemon`], and of two builds they may not.
+/// What a build of Cox is, as its window and coxd compare it (see
+/// `build.rs`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Build {
-    size: u64,
-    modified: SystemTime,
+pub struct Version {
+    /// What its window and coxd say to each other: a hash of the types
+    /// that go between them.
+    #[serde(with = "hex")]
+    pub protocol: u64,
+    /// What its coxd does: a hash of the code coxd runs.
+    #[serde(with = "hex")]
+    pub daemon: u64,
 }
 
-impl Build {
-    /// The build this process runs, unless the file of its program
-    /// cannot be read.
+/// The version of this build.
+pub const VERSION: Version = Version {
+    protocol: hex::of(env!("COX_PROTOCOL")),
+    daemon: hex::of(env!("COX_DAEMON")),
+};
+
+/// What a window and coxd say to each other besides the types that go
+/// between them: one more makes [`Version::protocol`] another, as when a
+/// message comes to mean something else.
+pub const REVISION: u32 = 1;
+
+/// What it takes to run a build in place of the one that runs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Restart {
+    /// The window starts again, and joins the coxd that runs, whose chats
+    /// go on.
+    WindowOnly,
+    /// coxd stops too, once no chat is at work, and the window starts one
+    /// of its own build: the build says what coxd would not read.
+    WithCoxd,
+}
+
+impl Version {
+    /// What it takes to run a window of this version with coxd of
+    /// `coxd`'s.
     #[must_use]
-    pub fn now() -> Option<Self> {
-        let metadata = std::fs::metadata(std::env::current_exe().ok()?).ok()?;
-        Some(Self {
-            size: metadata.len(),
-            modified: metadata.modified().ok()?,
-        })
+    pub fn restart(self, coxd: Self) -> Restart {
+        if self.protocol == coxd.protocol {
+            Restart::WindowOnly
+        } else {
+            Restart::WithCoxd
+        }
     }
 }
 
-/// What a window and coxd of this build say to each other, as a hash of
-/// the sources that define it (see `build.rs`): a window and a coxd of
-/// two builds that speak alike read each other.
-pub const SPEAKS: u64 = match u64::from_str_radix(env!("COX_SPEAKS"), 16) {
-    Ok(speaks) => speaks,
-    Err(_) => panic!("build.rs tells COX_SPEAKS in hex"),
-};
+/// A version's hashes, as 16 hex digits: JSON's numbers do not hold all
+/// of a `u64`.
+mod hex {
+    use serde::{Deserialize as _, Deserializer, Serializer};
+
+    /// `hex`, as `build.rs` writes it.
+    pub(super) const fn of(hex: &str) -> u64 {
+        match u64::from_str_radix(hex, 16) {
+            Ok(value) => value,
+            Err(_) => panic!("build.rs tells hex"),
+        }
+    }
+
+    #[expect(
+        clippy::trivially_copy_pass_by_ref,
+        reason = "serde's `with` passes the field by reference"
+    )]
+    pub(super) fn serialize<S: Serializer>(value: &u64, to: S) -> Result<S::Ok, S::Error> {
+        to.serialize_str(&format!("{value:016x}"))
+    }
+
+    pub(super) fn deserialize<'de, D: Deserializer<'de>>(from: D) -> Result<u64, D::Error> {
+        let hex = String::deserialize(from)?;
+        u64::from_str_radix(&hex, 16).map_err(serde::de::Error::custom)
+    }
+}
+
+/// What a window asks of the coxd it comes to, as the human started it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Asks {
+    /// To join it, if it reads the window; else that it stops for one of
+    /// the window's build once no chat is at work.
+    #[default]
+    Join,
+    /// That it stops for one of the window's build once no chat is at
+    /// work, as the human restarts Cox and coxd.
+    Restart,
+    /// That it stops for one of the window's build now, cutting the chats
+    /// at work.
+    RestartNow,
+}
 
 /// What a window says first, as it comes to coxd, of the command line
 /// it was started with.
@@ -325,42 +384,41 @@ pub struct Hello {
     /// The agent a new chat talks to, and its arguments, as the command
     /// line gave it, or none for the one the settings name.
     pub command: Vec<String>,
-    /// The window's build, or none from a window of a build that did not
-    /// tell it.
+    /// The window's version, or none from a window of a build that did
+    /// not tell it.
     #[serde(default)]
-    pub build: Option<Build>,
-    /// What the window's build says to coxd (see [`SPEAKS`]), or none
-    /// from a window of a build that did not tell it.
+    pub version: Option<Version>,
     #[serde(default)]
-    pub speaks: Option<u64>,
+    pub asks: Asks,
 }
 
 impl Hello {
     /// What a window of this build says first, with `home` and `command`
-    /// from its command line.
+    /// from its command line, asking `asks`.
     #[must_use]
-    pub fn new(home: Option<PathBuf>, command: Vec<String>) -> Self {
+    pub fn new(home: Option<PathBuf>, command: Vec<String>, asks: Asks) -> Self {
         Self {
             home,
             command,
-            build: Build::now(),
-            speaks: Some(SPEAKS),
+            version: Some(VERSION),
+            asks,
         }
     }
 
-    /// How coxd of `build`, which `speaks` so, answers this hello from a
-    /// window it could take, as a chat of its is `at_work` or not: it
-    /// takes a window of its own build, and one of another that speaks
-    /// as it does while a chat is at work, and stops for any other once
-    /// no chat is at work.
+    /// How coxd of `coxd`'s version answers this hello from a window it
+    /// could take, as a chat of its is `at_work` or not: it takes a window
+    /// that speaks as it does, unless the window asks it to stop, and it
+    /// stops for any other once no chat is at work, or at once when the
+    /// window asks so.
     #[must_use]
-    pub fn answer(&self, build: Option<Build>, speaks: Option<u64>, at_work: bool) -> FromDaemon {
-        if self.build == build || (at_work && self.speaks.is_some() && self.speaks == speaks) {
-            FromDaemon::Joined
-        } else if at_work {
-            FromDaemon::Busy
-        } else {
-            FromDaemon::Outdated
+    pub fn answer(&self, coxd: Version, at_work: bool) -> FromDaemon {
+        let alike = self
+            .version
+            .is_some_and(|version| version.restart(coxd) == Restart::WindowOnly);
+        match self.asks {
+            Asks::Join if alike => FromDaemon::Joined(coxd),
+            Asks::Join | Asks::Restart if at_work => FromDaemon::Busy,
+            Asks::Join | Asks::Restart | Asks::RestartNow => FromDaemon::Outdated,
         }
     }
 }
@@ -368,23 +426,23 @@ impl Hello {
 /// What the daemon tells a window.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum FromDaemon {
-    /// The window's [`Hello`] was heard, from a window of the daemon's
-    /// build, or of one that speaks as it does: what follows is the
-    /// daemon's.
-    Joined,
+    /// The window's [`Hello`] was heard, from a window that speaks as
+    /// the daemon of this version does: what follows is the daemon's.
+    Joined(Version),
     /// What a coxd of a build that did not tell builds apart answers a
     /// window it takes, of any build: a window takes it as
     /// [`FromDaemon::Busy`], since what follows may not read.
     Welcome,
     /// Another window is there already, which the daemon goes on with.
     Taken,
-    /// The window is of another build than the daemon's, as when `cargo
-    /// xtask install` replaced its program, and no chat is at work: the
-    /// daemon stops, for the window to start one of its own build.
+    /// The window speaks otherwise than the daemon, as when `cargo xtask
+    /// install` replaced its program, or asks it to stop, and no chat is
+    /// at work, or the window asks it to stop now: the daemon stops, for
+    /// the window to start one of its own build.
     Outdated,
-    /// The window is of another build than the daemon's, which speaks
-    /// otherwise, and the daemon goes on as it is, since a chat is at
-    /// work: it does not take the window, which comes again later.
+    /// The window speaks otherwise than the daemon, or asks it to stop,
+    /// and the daemon goes on as it is, since a chat is at work: it does
+    /// not take the window, which comes again later.
     Busy,
     /// The projects and chats, as they are now.
     Listing(Listing),
@@ -560,47 +618,67 @@ pub enum ToDaemon {
 mod tests {
     use super::*;
 
-    fn built(size: u64) -> Build {
-        Build {
-            size,
-            modified: SystemTime::UNIX_EPOCH,
+    #[test]
+    fn coxd_takes_a_window_that_speaks_alike_and_stops_for_another_or_when_asked() {
+        use Asks::{Join, Restart, RestartNow};
+        use FromDaemon::{Busy, Joined, Outdated};
+        let coxd = Version {
+            protocol: 7,
+            daemon: 1,
+        };
+        let newer = Some(Version {
+            protocol: 7,
+            daemon: 2,
+        });
+        let unlike = Some(Version {
+            protocol: 8,
+            daemon: 1,
+        });
+        let table = [
+            (Some(coxd), Join, false, Joined(coxd)),
+            (newer, Join, false, Joined(coxd)),
+            (newer, Join, true, Joined(coxd)),
+            (unlike, Join, true, Busy),
+            (unlike, Join, false, Outdated),
+            (None, Join, true, Busy),
+            (None, Join, false, Outdated),
+            (newer, Restart, true, Busy),
+            (newer, Restart, false, Outdated),
+            (unlike, Restart, true, Busy),
+            (newer, RestartNow, true, Outdated),
+            (unlike, RestartNow, true, Outdated),
+        ];
+        for (version, asks, at_work, answer) in table {
+            let hello = Hello {
+                version,
+                asks,
+                ..Hello::default()
+            };
+            assert_eq!(
+                hello.answer(coxd, at_work),
+                answer,
+                "{hello:?} to coxd of {coxd:?}, at work: {at_work}"
+            );
         }
     }
 
     #[test]
-    fn coxd_takes_a_window_of_its_build_or_one_that_speaks_alike_while_at_work() {
-        use FromDaemon::{Busy, Joined, Outdated};
-        let ours = Some(built(1));
-        let theirs = Some(built(2));
-        let alike = Some(7);
-        let unlike = Some(8);
-        let table = [
-            (ours, alike, ours, alike, false, Joined),
-            (ours, alike, ours, alike, true, Joined),
-            (ours, None, ours, alike, true, Joined),
-            (theirs, alike, ours, alike, true, Joined),
-            (theirs, alike, ours, alike, false, Outdated),
-            (theirs, unlike, ours, alike, true, Busy),
-            (theirs, unlike, ours, alike, false, Outdated),
-            (theirs, None, ours, alike, true, Busy),
-            (theirs, None, ours, alike, false, Outdated),
-            (theirs, alike, ours, None, true, Busy),
-            (theirs, None, ours, None, true, Busy),
-            (None, None, ours, alike, true, Busy),
-            (None, None, ours, alike, false, Outdated),
-        ];
-        for (build, speaks, coxd_build, coxd_speaks, at_work, answer) in table {
-            let hello = Hello {
-                build,
-                speaks,
-                ..Hello::default()
-            };
-            assert_eq!(
-                hello.answer(coxd_build, coxd_speaks, at_work),
-                answer,
-                "{hello:?} to coxd of {coxd_build:?} speaking {coxd_speaks:?}, at work: {at_work}"
-            );
-        }
+    fn a_build_runs_in_place_of_another_with_the_window_alone_while_it_speaks_alike() {
+        let running = Version {
+            protocol: 7,
+            daemon: 1,
+        };
+        let coxd_changed = Version {
+            protocol: 7,
+            daemon: 2,
+        };
+        let protocol_changed = Version {
+            protocol: 8,
+            daemon: 2,
+        };
+        assert_eq!(running.restart(running), Restart::WindowOnly);
+        assert_eq!(coxd_changed.restart(running), Restart::WindowOnly);
+        assert_eq!(protocol_changed.restart(running), Restart::WithCoxd);
     }
 
     #[test]
@@ -679,16 +757,31 @@ mod tests {
     #[test]
     fn a_window_and_a_coxd_of_a_build_that_told_none_read_each_other_greeting() {
         let hello: Hello = serde_json::from_str(r#"{"home":null,"command":[]}"#).unwrap();
-        assert_eq!(hello.build, None);
-        assert_eq!(hello.speaks, None);
+        assert_eq!(hello.version, None);
+        assert_eq!(hello.asks, Asks::Join);
+        let older: Hello = serde_json::from_str(
+            r#"{"home":null,"command":[],"build":{"size":1,"modified":{"secs_since_epoch":0,"nanos_since_epoch":0}},"speaks":7}"#,
+        )
+        .unwrap();
         assert_eq!(
-            serde_json::from_str::<FromDaemon>(r#""Welcome""#).unwrap(),
-            FromDaemon::Welcome
+            older.version, None,
+            "a window of a build that told its build and speaks"
         );
-        let told = Hello::new(None, Vec::new());
+        for (line, answer) in [
+            (r#""Welcome""#, FromDaemon::Welcome),
+            (r#""Busy""#, FromDaemon::Busy),
+            (r#""Outdated""#, FromDaemon::Outdated),
+            (r#""Taken""#, FromDaemon::Taken),
+        ] {
+            assert_eq!(serde_json::from_str::<FromDaemon>(line).unwrap(), answer);
+        }
+        let told = Hello::new(None, Vec::new(), Asks::Restart);
         let line = serde_json::to_string(&told).unwrap();
         assert_eq!(serde_json::from_str::<Hello>(&line).unwrap(), told);
-        assert!(told.build.is_some(), "{line}");
-        assert_eq!(told.speaks, Some(SPEAKS), "{line}");
+        assert_eq!(told.version, Some(VERSION), "{line}");
+        assert!(
+            line.contains(&format!("{:016x}", VERSION.protocol)),
+            "{line}"
+        );
     }
 }

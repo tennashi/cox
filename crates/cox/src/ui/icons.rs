@@ -25,6 +25,7 @@ pub enum Icon {
     Phone,
     Plug,
     Plus,
+    Restart,
     Search,
     Settings,
     Sidebar,
@@ -34,7 +35,7 @@ pub enum Icon {
 }
 
 impl Icon {
-    const ALL: [Self; 22] = [
+    const ALL: [Self; 23] = [
         Self::Bell,
         Self::Bolt,
         Self::Book,
@@ -51,6 +52,7 @@ impl Icon {
         Self::Phone,
         Self::Plug,
         Self::Plus,
+        Self::Restart,
         Self::Search,
         Self::Settings,
         Self::Sidebar,
@@ -78,6 +80,7 @@ impl Icon {
             Self::Phone => "icons/phone.svg",
             Self::Plug => "icons/plug.svg",
             Self::Plus => "icons/plus.svg",
+            Self::Restart => "icons/restart.svg",
             Self::Search => "icons/search.svg",
             Self::Settings => "icons/settings.svg",
             Self::Sidebar => "icons/sidebar.svg",
@@ -106,6 +109,7 @@ impl Icon {
             Self::Phone => include_bytes!("../../assets/icons/phone.svg"),
             Self::Plug => include_bytes!("../../assets/icons/plug.svg"),
             Self::Plus => include_bytes!("../../assets/icons/plus.svg"),
+            Self::Restart => include_bytes!("../../assets/icons/restart.svg"),
             Self::Search => include_bytes!("../../assets/icons/search.svg"),
             Self::Settings => include_bytes!("../../assets/icons/settings.svg"),
             Self::Sidebar => include_bytes!("../../assets/icons/sidebar.svg"),

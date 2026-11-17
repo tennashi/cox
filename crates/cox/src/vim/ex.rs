@@ -5,6 +5,7 @@
 use cox_editor::fuzzy;
 
 use super::keymap::Follow;
+use crate::restart::How;
 
 /// A line typed after `:`, as Vim reads one: a command's name, maybe cut
 /// short, as `q` of `quit`, a `!` after it, and what follows.
@@ -69,6 +70,8 @@ pub enum Does {
     Chat,
     /// Chooses the project whose name fits.
     Project,
+    /// Restarts Cox as it says: the window alone, or with coxd.
+    Restart(How),
     /// Lists the commands, with what each does.
     Help,
 }
@@ -239,6 +242,27 @@ pub const COMMANDS: &[Entry] = &[
         Does::Project,
         "Choose the project by its name",
     ),
+    entry(
+        "restart",
+        4,
+        Takes::Nothing,
+        Does::Restart(How::Window),
+        "Restart the window: the chats go on in coxd",
+    ),
+    entry(
+        "restartcoxd",
+        8,
+        Takes::Nothing,
+        Does::Restart(How::WithCoxd),
+        "Restart Cox and coxd, once no chat is at work",
+    ),
+    entry(
+        "restartcoxdnow",
+        12,
+        Takes::Nothing,
+        Does::Restart(How::WithCoxdNow),
+        "Restart Cox and coxd now, cutting the chats at work",
+    ),
     entry("help", 1, Takes::Nothing, Does::Help, "List the commands"),
 ];
 
@@ -335,6 +359,7 @@ fn name_fits(name: &str, names: &Names) -> Vec<Fit> {
 #[cfg(test)]
 mod tests {
     use super::{Does, Ex, Names, command, fits};
+    use crate::restart::How;
     use crate::vim::keymap::Follow;
 
     #[test]
@@ -371,6 +396,9 @@ mod tests {
         assert_eq!(does("res"), Some(Does::Resolve));
         assert_eq!(does("ba"), Some(Does::Back));
         assert_eq!(does("pro"), Some(Does::Project));
+        assert_eq!(does("rest"), Some(Does::Restart(How::Window)));
+        assert_eq!(does("restartc"), Some(Does::Restart(How::WithCoxd)));
+        assert_eq!(does("restartcoxdn"), Some(Does::Restart(How::WithCoxdNow)));
         assert_eq!(does("h"), Some(Does::Help));
         for unknown in ["s", "ne", "quitter", "x", "pr"] {
             assert_eq!(does(unknown), None, "{unknown}");

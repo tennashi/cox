@@ -17,6 +17,8 @@
 //!   the human sets as it changes.
 //! - [`notices`] tells the human of chats that need them while they look
 //!   elsewhere.
+//! - [`restart`] restarts the window alone, or with coxd, and tells the
+//!   human which a build installed since needs.
 //! - [`inspect`] answers for the window to an agent that debugs Cox, on a
 //!   socket, and is the client that asks it.
 //! - [`vim`] is the keys as in Vim, which the human turns on, read ahead
@@ -42,6 +44,7 @@ pub mod inspect;
 #[cfg(target_os = "macos")]
 pub mod login_item;
 pub mod notices;
+pub mod restart;
 pub mod settings;
 pub mod stage;
 pub mod ui;

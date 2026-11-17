@@ -16,7 +16,7 @@ use coxd::agent::Start;
 use coxd::agents::Agents;
 use coxd::chat::judge::Starts;
 use coxd::daemon::client::{self, Connected};
-use coxd::daemon::wire::{FromDaemon, Hello, ToDaemon};
+use coxd::daemon::wire::{Asks, FromDaemon, Hello, ToDaemon, VERSION};
 use coxd::daemon::{Spawned, Spawns};
 use coxd::settings::Subagents;
 
@@ -89,7 +89,7 @@ fn run_keeping(
 /// `home`, marking `gone` once coxd goes.
 fn reach(socket: &Path, home: &Path, gone: &Arc<AtomicBool>) -> anyhow::Result<Connected> {
     let gone = Arc::clone(gone);
-    let hello = Hello::new(Some(home.to_owned()), Vec::new());
+    let hello = Hello::new(Some(home.to_owned()), Vec::new(), Asks::Join);
     client::connect(
         socket,
         &hello,
@@ -276,12 +276,13 @@ fn what_the_window_and_coxd_say_reads_back_as_it_was() {
     let hello = Hello::new(
         Some(PathBuf::from("/tmp/home")),
         vec!["node".to_owned(), "agent.mjs".to_owned()],
+        Asks::Join,
     );
     let line = serde_json::to_string(&hello).unwrap();
     assert!(!line.contains('\n'));
     assert_eq!(serde_json::from_str::<Hello>(&line).unwrap(), hello);
     for message in [
-        FromDaemon::Joined,
+        FromDaemon::Joined(VERSION),
         FromDaemon::Welcome,
         FromDaemon::Taken,
         FromDaemon::Outdated,

@@ -75,6 +75,7 @@ pub(crate) mod project_card;
 mod render;
 mod render_panel;
 mod render_rail;
+mod restarting;
 mod sheet;
 mod stages;
 mod vim;
@@ -490,6 +491,9 @@ pub struct Workspace {
     /// The menu of the projects put away, where it opened in the window,
     /// while it is open.
     archived_projects: Option<Point<Pixels>>,
+    /// The menu that restarts Cox, where it opened in the window, while
+    /// it is open.
+    restart_menu: Option<Point<Pixels>>,
     /// The list of what waits for the human, beside the rail, while it is
     /// open, and where its keys go.
     waits: Option<FocusHandle>,
@@ -619,6 +623,7 @@ impl Workspace {
             project_menu: None,
             deleting: None,
             archived_projects: None,
+            restart_menu: None,
             waits: None,
             drawing: HashSet::new(),
             not_drawn: HashMap::new(),
@@ -707,7 +712,7 @@ impl Workspace {
                 }
             }
             // The greeting is over before the window hears the daemon.
-            FromDaemon::Joined
+            FromDaemon::Joined(_)
             | FromDaemon::Welcome
             | FromDaemon::Taken
             | FromDaemon::Outdated
