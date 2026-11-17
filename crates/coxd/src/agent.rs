@@ -1813,6 +1813,165 @@ mod tests {
         );
     }
 
+    /// An agent in `sh` that writes its pid to `pid`, opens a session, and
+    /// does `on_prompt`, a line of `sh`, when it is sent a prompt.
+    fn scripted(pid: &Path, on_prompt: &str) -> Agent {
+        let script = format!(
+            r#"echo $$ > '{pid}'
+while IFS= read -r line; do
+  id=$(printf '%s' "$line" | sed -n 's/^{{"jsonrpc":"2.0","id":"\([^"]*\)".*/\1/p')
+  case "$line" in
+    *'"method":"initialize"'*) printf '{{"jsonrpc":"2.0","id":"%s","result":{{"protocolVersion":1,"agentCapabilities":{{}}}}}}\n' "$id" ;;
+    *'"method":"session/new"'*) printf '{{"jsonrpc":"2.0","id":"%s","result":{{"sessionId":"s"}}}}\n' "$id" ;;
+    *'"method":"session/prompt"'*) {on_prompt} ;;
+  esac
+done"#,
+            pid = pid.display(),
+        );
+        spawn(
+            move |_| cox_acp::launch(["sh".to_owned(), "-c".to_owned(), script]),
+            // allow-temp-dir: only the agent's working folder, which nothing writes in
+            std::env::temp_dir(),
+            Vec::new(),
+            None,
+            Start::New {
+                instructions: None,
+                setup: None,
+            },
+        )
+    }
+
+    /// The events `agent` tells until it tells `last`, or within `within`.
+    fn told_until(
+        agent: &mut Agent,
+        within: Duration,
+        last: impl Fn(&AgentEvent) -> bool,
+    ) -> Vec<AgentEvent> {
+        let deadline = Instant::now() + within;
+        let mut told = Vec::new();
+        while Instant::now() < deadline {
+            match agent.events.try_recv() {
+                Ok(event) => {
+                    let done = last(&event);
+                    told.push(event);
+                    if done {
+                        break;
+                    }
+                }
+                // allow-sleep: polls the channel until the deadline above
+                Err(_) => thread::sleep(Duration::from_millis(20)),
+            }
+        }
+        told
+    }
+
+    #[test]
+    fn an_agent_that_exits_in_a_turn_closes_and_is_reaped() {
+        let folder = TempDir::new();
+        let file = folder.join("pid");
+        let mut agent = scripted(&file, "exit 3");
+        let _ = told_until(&mut agent, Duration::from_secs(10), |event| {
+            matches!(event, AgentEvent::Opened { .. })
+        });
+        let pid = std::fs::read_to_string(&file).unwrap();
+        let pid = pid.trim();
+
+        agent
+            .commands
+            .send(Command::Prompt("hello".to_owned().into()))
+            .unwrap();
+        let told = told_until(&mut agent, Duration::from_secs(10), |event| {
+            matches!(event, AgentEvent::Closed(_))
+        });
+
+        assert!(
+            matches!(told.last(), Some(AgentEvent::Closed(Some(_)))),
+            "the agent's exit was not told: {told:?}"
+        );
+        assert!(
+            wait_until(|| !there(pid)),
+            "the agent's process was not reaped"
+        );
+    }
+
+    #[test]
+    fn an_agent_that_exits_while_the_human_is_to_log_in_closes_and_is_reaped() {
+        let folder = TempDir::new();
+        let file = folder.join("pid");
+        let mut agent = scripted(
+            &file,
+            r#"printf '{"jsonrpc":"2.0","id":"%s","error":{"code":-32000,"message":"Authentication required"}}\n' "$id"; sleep 1; exit 3"#,
+        );
+        let _ = told_until(&mut agent, Duration::from_secs(10), |event| {
+            matches!(event, AgentEvent::Opened { .. })
+        });
+        let pid = std::fs::read_to_string(&file).unwrap();
+        let pid = pid.trim();
+
+        agent
+            .commands
+            .send(Command::Prompt("hello".to_owned().into()))
+            .unwrap();
+        let told = told_until(&mut agent, Duration::from_secs(10), |event| {
+            matches!(event, AgentEvent::Closed(_))
+        });
+
+        assert!(
+            told.iter()
+                .any(|event| matches!(event, AgentEvent::LoginNeeded { .. })),
+            "{told:?}"
+        );
+        assert!(
+            matches!(told.last(), Some(AgentEvent::Closed(Some(_)))),
+            "the agent's exit was not told: {told:?}"
+        );
+        assert!(
+            wait_until(|| !there(pid)),
+            "the agent's process was not reaped"
+        );
+    }
+
+    #[test]
+    fn an_agent_that_answers_neither_prompt_nor_cancel_ends_once_dropped() {
+        let folder = TempDir::new();
+        let file = folder.join("pid");
+        let mut agent = scripted(&file, ":");
+        let _ = told_until(&mut agent, Duration::from_secs(10), |event| {
+            matches!(event, AgentEvent::Opened { .. })
+        });
+        let pid = std::fs::read_to_string(&file).unwrap();
+        let pid = pid.trim().to_owned();
+        agent
+            .commands
+            .send(Command::Prompt("hello".to_owned().into()))
+            .unwrap();
+        agent.commands.send(Command::Cancel).unwrap();
+        let told = told_until(&mut agent, Duration::from_secs(1), |_| false);
+        assert!(
+            !told.iter().any(|event| matches!(
+                event,
+                AgentEvent::TurnEnded(_) | AgentEvent::TurnFailed(_) | AgentEvent::Closed(_)
+            )),
+            "{told:?}"
+        );
+
+        drop(agent);
+        assert!(
+            wait_until(|| !there(&pid)),
+            "the agent's process outlived it, or was not reaped"
+        );
+    }
+
+    /// Whether process `pid` is there at all, a zombie or not.
+    fn there(pid: &str) -> bool {
+        std::process::Command::new("ps")
+            .args(["-o", "stat=", "-p", pid])
+            .output()
+            .expect("ps runs")
+            .status
+            .success()
+    }
+
     /// A way to reach an agent that says, on the channel it holds, whether
     /// it was connected to, or dropped without.
     struct Watched(std::sync::mpsc::Sender<&'static str>);

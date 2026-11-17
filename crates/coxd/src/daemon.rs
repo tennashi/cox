@@ -199,6 +199,9 @@ pub enum Internal {
     },
     /// The time the human waits on the triggers that gather is up.
     GatheredEnough { key: u64, generation: u64 },
+    /// [`chat::STOP_WAIT`] passed since the human asked the agent of the
+    /// chat to stop.
+    StopDue { key: u64, generation: u64 },
     /// [`chat::BACKGROUND_SETTLES`] passed since the last of what the
     /// chat's agent ran in the background ended.
     Settled { key: u64 },
@@ -1881,6 +1884,11 @@ impl Daemon {
             Internal::GatheredEnough { key, generation } => {
                 if let Some(chat) = self.chat(key) {
                     chat.gathered_enough(generation);
+                }
+            }
+            Internal::StopDue { key, generation } => {
+                if let Some(chat) = self.chat(key) {
+                    chat.stop_due(generation);
                 }
             }
             Internal::Cancel { id } => {
