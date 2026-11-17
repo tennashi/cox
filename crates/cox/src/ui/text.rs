@@ -13,6 +13,7 @@
 //! of it, and the links they click.
 
 use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
 use std::ops::Range;
 use std::rc::Rc;
 
@@ -30,12 +31,13 @@ pub mod cursor;
 use crate::ui::diagram;
 use crate::ui::markdown::{self, Block, Kind};
 use crate::ui::selection::{Piece, Selection, Spot, TextId};
+use crate::ui::snippet::Snippet;
 use crate::vim::hints::Hinted as _;
 use crate::vim::keymap::Selects;
 use crate::vim::search::{self, Direction};
 use coxd::theme::{
-    ACCENT, BORDER, BORDER_STRONG, BUTTON, BUTTON_HOVER, CODE, CODE_FONT, DIM, LINK, RAISED,
-    SELECTION,
+    ACCENT, BORDER, BORDER_STRONG, BUTTON, BUTTON_HOVER, CODE, CODE_FONT, DIM, FAILED, LINK,
+    RAISED, SELECTION,
 };
 
 use self::cursor::{Cursor, Laid, Step};
@@ -915,6 +917,8 @@ impl IntoElement for SelectableText {
 /// the conversation, numbering them in order.
 pub struct Writer {
     painted: Painted,
+    /// What runs the code blocks that are snippets, where they run.
+    runs: Option<Runs>,
     selection: Option<Selection>,
     /// Where the cursor of Vim's keys is drawn, if it is.
     cursor: Option<Spot>,
@@ -928,11 +932,19 @@ impl Writer {
     pub fn new(painted: &Painted, selection: Option<Selection>, entry: usize) -> Self {
         Self {
             painted: painted.clone(),
+            runs: None,
             selection,
             cursor: None,
             entry,
             part: 0,
         }
+    }
+
+    /// Gives the code blocks that are snippets the buttons of `runs`.
+    #[must_use]
+    pub fn running(mut self, runs: Runs) -> Self {
+        self.runs = Some(runs);
+        self
     }
 
     /// A piece showing `text` in its styles, joined to the piece before it
@@ -1017,7 +1029,7 @@ impl Writer {
                         .child(marker.clone()),
                 )
                 .child(div().flex_1().min_w_0().child(self.text(text, "\n"))),
-            Kind::Code(text) => self.code(text).ml(indent(block.depth)),
+            Kind::Code(text, snippet) => self.code(text, snippet.as_ref()).ml(indent(block.depth)),
             Kind::Rule => div().ml(indent(block.depth)).h(px(1.)).bg(rgb(BORDER)),
             Kind::Table(rows) => self.table(rows).ml(indent(block.depth)),
             Kind::Diagram(source) => self.diagram(source).ml(indent(block.depth)),
@@ -1035,10 +1047,15 @@ impl Writer {
     }
 
     /// A code block, with a button that copies all of it, at its right,
-    /// beside the code rather than over its first line.
-    fn code(&mut self, text: &markdown::Text) -> gpui::Div {
+    /// beside the code rather than over its first line, and, where the
+    /// writer runs snippets, the buttons that run it (see [`Runs`]).
+    fn code(&mut self, text: &markdown::Text, snippet: Option<&Snippet>) -> gpui::Div {
         let code = text.text.clone();
-        let button = ElementId::Name(format!("copy-{}-{}", self.entry, self.part).into());
+        let at = (self.entry, self.part);
+        let button = ElementId::Name(format!("copy-{}-{}", at.0, at.1).into());
+        let run = snippet
+            .zip(self.runs.as_ref())
+            .map(|(snippet, runs)| runs.buttons(at, snippet));
         div()
             .flex()
             .items_start()
@@ -1065,13 +1082,14 @@ impl Writer {
                         cx.write_to_clipboard(ClipboardItem::new_string(code.clone()));
                     }),
             )
+            .children(run)
     }
 
     /// A Mermaid diagram, drawn at its size, or less where there is less
     /// room, or its source as a code block when it cannot be drawn.
     fn diagram(&mut self, source: &str) -> gpui::Div {
         let Some(picture) = diagram::of(source) else {
-            return self.code(&markdown::Text::plain(source));
+            return self.code(&markdown::Text::plain(source), None);
         };
         let size = picture.size(0);
         #[expect(clippy::cast_precision_loss, reason = "a picture's pixels")]
@@ -1190,6 +1208,89 @@ fn highlights(
 
 fn color(hex: u32) -> Hsla {
     rgb(hex).into()
+}
+
+/// Where a code block that is a snippet stands, as its buttons show it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Run {
+    /// Not run yet, or run and closed: Run runs it.
+    #[default]
+    Ready,
+    /// Destructive, and Run was clicked once: Run again runs it.
+    Confirming,
+    /// Running in a terminal tab.
+    Running,
+    /// Ended in its tab, which still shows what it printed.
+    Ended,
+}
+
+/// What the human clicked on a snippet.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RunClick {
+    Run,
+    /// Hands what it printed to the chat, to go with the next line.
+    Attach,
+}
+
+/// Where a code block is in the text: its entry, and its piece in it.
+pub type CodeAt = (usize, usize);
+
+/// What a writer's snippets show, and who hears their buttons.
+#[derive(Clone)]
+pub struct Runs {
+    /// Where each snippet stands that is not [`Run::Ready`].
+    pub states: Rc<HashMap<CodeAt, Run>>,
+    pub clicked: Rc<RunClicked>,
+}
+
+/// Hears a click on a snippet's button.
+pub type RunClicked = dyn Fn(CodeAt, RunClick, &Snippet, &mut Window, &mut App);
+
+impl Runs {
+    /// The buttons of the snippet at `at`: Run, which asks once more for a
+    /// destructive one, and, once it ended, the one that hands its output
+    /// to the chat.
+    fn buttons(&self, at: CodeAt, snippet: &Snippet) -> gpui::Div {
+        let state = self.states.get(&at).copied().unwrap_or_default();
+        let button = |name: &str, label: String, color: u32, click: RunClick| {
+            let clicked = Rc::clone(&self.clicked);
+            let snippet = snippet.clone();
+            div()
+                .id(ElementId::Name(format!("{name}-{}-{}", at.0, at.1).into()))
+                .debug_selector({
+                    let name = name.to_owned();
+                    move || format!("{name}-{}-{}", at.0, at.1)
+                })
+                .flex_shrink_0()
+                .px_1()
+                .rounded_sm()
+                .text_size(px(11.))
+                .text_color(rgb(color))
+                .bg(rgb(BUTTON))
+                .cursor_pointer()
+                .hover(|style| style.bg(rgb(BUTTON_HOVER)))
+                .child(label)
+                .on_hint_click(move |_, window, cx| clicked(at, click, &snippet, window, cx))
+        };
+        let run = match (state, snippet.danger) {
+            (Run::Confirming, Some(danger)) => {
+                button("run", format!("Run {danger}?"), FAILED, RunClick::Run)
+            }
+            (Run::Running, _) => button("run", "Running".to_owned(), DIM, RunClick::Run),
+            _ => button("run", "Run".to_owned(), ACCENT, RunClick::Run),
+        };
+        div().flex().flex_col().items_end().gap_1().child(run).when(
+            state == Run::Ended,
+            |buttons| {
+                buttons.child(button(
+                    "attach-output",
+                    "Attach output".to_owned(),
+                    DIM,
+                    RunClick::Attach,
+                ))
+            },
+        )
+    }
 }
 
 #[cfg(test)]

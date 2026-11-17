@@ -25,6 +25,7 @@ use super::document::Document;
 use super::flow::Flow;
 use super::mac_window::MacWindow;
 use super::page::Page;
+use super::playground::Playground;
 use super::terminal::Terminal;
 use super::tree::Unchosen;
 use super::windows::Windows;
@@ -98,6 +99,7 @@ pub(super) enum TabContent {
     Devices(Entity<Devices>),
     MacWindow(Entity<MacWindow>),
     Windows(Entity<Windows>),
+    Playground(Entity<Playground>),
 }
 
 /// An entity that [`Shows`], asked as the stage asks of every kind alike.
@@ -141,6 +143,7 @@ impl TabContent {
             Self::Devices(devices) => devices,
             Self::MacWindow(window) => window,
             Self::Windows(windows) => windows,
+            Self::Playground(playground) => playground,
         }
     }
 
@@ -184,7 +187,8 @@ impl TabContent {
             | Self::Android(_)
             | Self::Devices(_)
             | Self::MacWindow(_)
-            | Self::Windows(_) => None,
+            | Self::Windows(_)
+            | Self::Playground(_) => None,
         }
     }
 
@@ -201,7 +205,8 @@ impl TabContent {
             | Self::Android(_)
             | Self::Devices(_)
             | Self::MacWindow(_)
-            | Self::Windows(_) => None,
+            | Self::Windows(_)
+            | Self::Playground(_) => None,
         }
     }
 
@@ -227,7 +232,8 @@ impl TabContent {
             | Self::Android(_)
             | Self::Devices(_)
             | Self::MacWindow(_)
-            | Self::Windows(_) => false,
+            | Self::Windows(_)
+            | Self::Playground(_) => false,
         }
     }
 }

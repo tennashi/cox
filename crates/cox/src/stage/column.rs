@@ -271,7 +271,7 @@ fn glyph(content: &TabContent) -> Icon {
     match content {
         TabContent::Page { .. } => Icon::Globe,
         TabContent::Document(_) => Icon::Document,
-        TabContent::Code(_) => Icon::Code,
+        TabContent::Code(_) | TabContent::Playground(_) => Icon::Code,
         TabContent::Files(_) => Icon::Files,
         TabContent::Changes(_) => Icon::Changes,
         TabContent::Flow(_) => Icon::Flow,

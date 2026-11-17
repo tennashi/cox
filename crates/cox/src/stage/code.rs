@@ -1290,7 +1290,8 @@ impl ShowsFile for Code {
             | tab::TabContent::Android(_)
             | tab::TabContent::Devices(_)
             | tab::TabContent::MacWindow(_)
-            | tab::TabContent::Windows(_) => None,
+            | tab::TabContent::Windows(_)
+            | tab::TabContent::Playground(_) => None,
         }
     }
 }

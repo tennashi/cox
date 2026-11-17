@@ -257,7 +257,7 @@ pub fn fake_terminal(ran: Shared<Vec<String>>) -> UnboundedSender<ToolRequest> {
 pub type Opened = Rc<std::cell::RefCell<Vec<String>>>;
 
 /// A stand-in for the stage, which needs CEF.
-struct FakeStage;
+pub struct FakeStage;
 
 impl Render for FakeStage {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
@@ -313,6 +313,7 @@ impl Stages for FakeStages {
             panel: cx.new(|_| Panel::default()),
             by_keys: Rc::new(move |tabs, _, _| keyed.borrow_mut().push(tabs)),
             shows_files: Rc::new(|_| false),
+            runs: Rc::new(|_, _, _| None),
         };
         let open_link: OpenLink =
             Rc::new(move |url, _, _| opened.borrow_mut().push(url.to_owned()));

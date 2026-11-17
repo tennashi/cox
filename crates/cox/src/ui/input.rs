@@ -11,7 +11,8 @@
 //! The human selects with the mouse or with Shift and the arrows, and cuts,
 //! copies and pastes with the usual keys. Enter submits. In an input that
 //! wraps, Shift+Enter starts a new line; in one that holds one line, a
-//! pasted line break becomes a space. The input tells when the keyboard
+//! pasted line break becomes a space. An input that fills the height it
+//! is given, as an editor of code, takes Enter for a new line too. The input tells when the keyboard
 //! leaves it, for what keeps what was typed without Enter. On macOS, a key with Control that no
 //! binding takes goes to the input method, as macSKK's Control-J.
 //!
@@ -165,9 +166,8 @@ pub struct LineInput {
     /// What the mouse selects by while its button, which went down on the
     /// input, is held.
     drag: Option<Drag>,
-    /// Whether lines wrap at the input's width, rather than the input
-    /// holding one line.
-    wraps: bool,
+    /// How the input holds its lines.
+    shape: Shape,
     /// What the last paint drew, and where, for placing the input method's
     /// candidate window and finding the text under the mouse.
     last_layout: Option<Layout>,
@@ -194,6 +194,19 @@ enum Drag {
     Lines(Range<usize>),
 }
 
+/// How an input holds its lines.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Shape {
+    /// One line, which scrolls sideways.
+    OneLine,
+    /// Lines that wrap at the input's width, growing it downwards up to
+    /// [`MAX_ROWS`].
+    Grows,
+    /// Lines that wrap at the input's width, in all the height it is
+    /// given, Enter starting a new one.
+    Fills,
+}
+
 /// How many rows an input that wraps grows to before it scrolls.
 const MAX_ROWS: usize = 8;
 
@@ -204,7 +217,7 @@ impl LineInput {
             focus_handle: cx.focus_handle(),
             draft: Draft::new(),
             drag: None,
-            wraps: false,
+            shape: Shape::OneLine,
             last_layout: None,
             last_bounds: None,
             scroll: Point::default(),
@@ -218,9 +231,24 @@ impl LineInput {
     /// with them, up to eight rows.
     pub fn wrapping(cx: &mut Context<Self>) -> Self {
         Self {
-            wraps: true,
+            shape: Shape::Grows,
             ..Self::new(cx)
         }
+    }
+
+    /// An input whose lines wrap at its width, in all the height it is
+    /// given, where Enter starts a new line, as in an editor.
+    pub fn filling(cx: &mut Context<Self>) -> Self {
+        Self {
+            shape: Shape::Fills,
+            ..Self::new(cx)
+        }
+    }
+
+    /// Whether lines wrap at the input's width, rather than the input
+    /// holding one line.
+    fn wraps(&self) -> bool {
+        self.shape != Shape::OneLine
     }
 
     #[must_use]
@@ -331,16 +359,18 @@ impl LineInput {
         cx.notify();
     }
 
-    fn submit(&mut self, _: &Submit, _window: &mut Window, cx: &mut Context<Self>) {
-        // Enter while composing belongs to the input method.
-        if !self.draft.is_composing() {
+    fn submit(&mut self, _: &Submit, window: &mut Window, cx: &mut Context<Self>) {
+        if self.shape == Shape::Fills {
+            self.newline(&Newline, window, cx);
+        } else if !self.draft.is_composing() {
+            // Enter while composing belongs to the input method.
             cx.emit(Submitted);
         }
     }
 
     /// Shift+Enter: a new line where lines wrap, else the same as Enter.
     fn newline(&mut self, _: &Newline, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.wraps {
+        if !self.wraps() {
             self.submit(&Submit, window, cx);
         } else if !self.draft.is_composing() {
             self.edit(cx, |draft| draft.commit(None, "\n"));
@@ -565,7 +595,7 @@ impl LineInput {
             .then(|| cx.read_from_clipboard().and_then(|item| item.text()))
             .flatten()
             .map(|kept| {
-                if self.wraps {
+                if self.wraps() {
                     unix_line_breaks(&kept)
                 } else {
                     one_line(kept.strip_suffix('\n').unwrap_or(&kept))
@@ -600,7 +630,7 @@ impl LineInput {
 
     fn paste(&mut self, _: &Paste, _window: &mut Window, cx: &mut Context<Self>) {
         if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
-            let text = if self.wraps {
+            let text = if self.wraps() {
                 unix_line_breaks(&text)
             } else {
                 one_line(&text)
@@ -926,6 +956,7 @@ impl Render for LineInput {
             self.came = Some(cx.on_focus(&self.focus_handle, window, came));
         }
         div()
+            .when(self.shape == Shape::Fills, Styled::size_full)
             .key_context(KEY_CONTEXT)
             .track_focus(&self.focus_handle)
             .on_action(cx.listener(Self::submit))
@@ -1228,9 +1259,16 @@ impl Element for LineElement {
         let mut style = Style::default();
         style.size.width = relative(1.).into();
         let input = self.input.read(cx);
-        if !input.wraps {
-            style.size.height = window.line_height().into();
-            return (window.request_layout(style, [], cx), ());
+        match input.shape {
+            Shape::OneLine => {
+                style.size.height = window.line_height().into();
+                return (window.request_layout(style, [], cx), ());
+            }
+            Shape::Fills => {
+                style.size.height = relative(1.).into();
+                return (window.request_layout(style, [], cx), ());
+            }
+            Shape::Grows => {}
         }
         // As many rows as the text wraps into at the width the input gets.
         // The text style is the input's only now, not when GPUI measures.
@@ -1267,7 +1305,7 @@ impl Element for LineElement {
     ) -> Self::PrepaintState {
         let input = self.input.read(cx);
         let (text, runs) = input.styled(window);
-        let wraps = input.wraps;
+        let wraps = input.wraps();
         let selected = input.draft.selected().clone();
         let cursor = input.draft.cursor();
         // Where the character the cursor is on ends, if it is on one.
