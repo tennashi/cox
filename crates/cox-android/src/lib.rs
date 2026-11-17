@@ -9,13 +9,19 @@
 //!   of itself as it starts.
 //! - [`device`] starts or reaches one emulator, streams its display and
 //!   sends it input.
+//! - [`ui`] reads the screen's elements, which [`adb`] asks the device
+//!   for, with what else its gRPC service does not do.
+//! - [`settle`] waits for the display to stop changing after an act.
 //! - [`proto`] is the part of the emulator's gRPC service Cox uses, which
 //!   `cox-fake-emulator` serves too.
 
+pub mod adb;
 pub mod avd;
 pub mod device;
 pub mod running;
 pub mod sdk;
+pub mod settle;
+pub mod ui;
 
 #[cfg(test)]
 mod scratch;

@@ -1,4 +1,4 @@
-//! The Android SDK's emulator: where its program is.
+//! The Android SDK's programs: where its emulator and `adb` are.
 
 use std::ffi::OsString;
 use std::path::PathBuf;
@@ -18,6 +18,23 @@ pub fn emulator_from(env: impl Fn(&str) -> Option<OsString>) -> Option<PathBuf> 
     sdk_roots(env)
         .into_iter()
         .map(|root| root.join("emulator").join("emulator"))
+        .find(|program| program.is_file())
+}
+
+/// `adb`: `platform-tools/adb` in the SDK, found as [`emulator`] finds
+/// the emulator's.
+#[must_use]
+pub fn adb() -> Option<PathBuf> {
+    adb_from(|name| std::env::var_os(name))
+}
+
+/// `adb`, as [`adb`] finds it, with `env` saying the environment's
+/// variables.
+#[must_use]
+pub fn adb_from(env: impl Fn(&str) -> Option<OsString>) -> Option<PathBuf> {
+    sdk_roots(env)
+        .into_iter()
+        .map(|root| root.join("platform-tools").join("adb"))
         .find(|program| program.is_file())
 }
 
@@ -104,6 +121,16 @@ mod tests {
             ("HOME", &home),
         ]));
         assert_eq!(found, Some(program));
+    }
+
+    #[test]
+    fn adb_is_in_the_sdks_platform_tools() {
+        let scratch = Scratch::new("sdk-adb");
+        let root = scratch.path().join("root");
+        std::fs::create_dir_all(root.join("platform-tools")).unwrap();
+        std::fs::write(root.join("platform-tools/adb"), "").unwrap();
+        let found = adb_from(env(&[("ANDROID_HOME", &root)]));
+        assert_eq!(found, Some(root.join("platform-tools/adb")));
     }
 
     #[test]

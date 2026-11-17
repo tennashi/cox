@@ -467,23 +467,74 @@ impl MacAct {
 pub enum AndroidAct {
     /// Lists the devices.
     List,
-    /// Looks at the device's display, starting its emulator if it does
-    /// not run.
-    Look { device: String },
-    /// Taps there.
-    Tap { device: String, x: u32, y: u32 },
+    /// Does `act` on `device`, starting its emulator if it does not run,
+    /// then waits up to `settle_ms` for its display to stop changing
+    /// before the agent sees it.
+    On {
+        device: String,
+        act: DeviceAct,
+        settle_ms: u32,
+    },
+}
+
+/// What the agent does on one device.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum DeviceAct {
+    /// Looks at the display.
+    Look,
+    /// Reads the screen's elements.
+    Ui,
+    /// Taps `at`, `times` times, `interval_ms` apart, holding the finger
+    /// down `hold_ms` each time.
+    Tap {
+        at: Spot,
+        times: u32,
+        interval_ms: u32,
+        hold_ms: u32,
+    },
     /// Swipes from there to `to_x` and `to_y`.
     Swipe {
-        device: String,
         x: u32,
         y: u32,
         to_x: u32,
         to_y: u32,
     },
-    /// Types `text`, where the device has the keyboard.
-    Type { device: String, text: String },
-    /// Presses `key`, as `Enter` or `GoBack`.
-    Key { device: String, key: String },
+    /// Types `text` into the field that has the keyboard, or `into`,
+    /// tapped first, emptied first if `clear_first`.
+    Type {
+        text: String,
+        into: Option<Element>,
+        clear_first: bool,
+    },
+    /// Presses `key`, as `Enter` or `GoBack`, `times` times.
+    Key { key: String, times: u32 },
+}
+
+/// Where on the display the agent acts.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum Spot {
+    /// A pixel of the agent's picture.
+    At { x: u32, y: u32 },
+    /// The middle of an element of the screen.
+    On(Element),
+}
+
+/// An element of a device's screen, as the agent names it.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum Element {
+    /// Its text, or what it says to accessibility.
+    Text(String),
+    /// Its resource id, whole or after the package's.
+    Id(String),
+}
+
+impl std::fmt::Display for Element {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Text(text) => write!(f, "{text:?}"),
+            Self::Id(id) => write!(f, "#{id}"),
+        }
+    }
 }
 
 impl AndroidAct {
@@ -492,11 +543,7 @@ impl AndroidAct {
     pub fn device(&self) -> Option<&str> {
         match self {
             Self::List => None,
-            Self::Look { device }
-            | Self::Tap { device, .. }
-            | Self::Swipe { device, .. }
-            | Self::Type { device, .. }
-            | Self::Key { device, .. } => Some(device),
+            Self::On { device, .. } => Some(device),
         }
     }
 
@@ -504,22 +551,45 @@ impl AndroidAct {
     /// it says only how long it is.
     #[must_use]
     pub fn said(&self) -> String {
-        match self {
-            Self::List => "list the Android devices".to_owned(),
-            Self::Look { device } => format!("look at Android device {device}"),
-            Self::Tap { device, x, y } => format!("tap Android device {device} at {x},{y}"),
-            Self::Swipe {
-                device,
-                x,
-                y,
-                to_x,
-                to_y,
-            } => format!("swipe Android device {device} from {x},{y} to {to_x},{to_y}"),
-            Self::Type { device, text } => format!(
-                "type {} characters on Android device {device}",
-                text.chars().count()
-            ),
-            Self::Key { device, key } => format!("press {key} on Android device {device}"),
+        let Self::On { device, act, .. } = self else {
+            return "list the Android devices".to_owned();
+        };
+        let on = format!("Android device {device}");
+        match act {
+            DeviceAct::Look => format!("look at {on}"),
+            DeviceAct::Ui => format!("read the elements of {on}"),
+            DeviceAct::Tap {
+                at, times, hold_ms, ..
+            } => {
+                let at = match at {
+                    Spot::At { x, y } => format!("{x},{y}"),
+                    Spot::On(element) => element.to_string(),
+                };
+                let verb = if *hold_ms > 0 { "long-press" } else { "tap" };
+                let times = if *times > 1 {
+                    format!(" ×{times}")
+                } else {
+                    String::new()
+                };
+                format!("{verb} {on} at {at}{times}")
+            }
+            DeviceAct::Swipe { x, y, to_x, to_y } => {
+                format!("swipe {on} from {x},{y} to {to_x},{to_y}")
+            }
+            DeviceAct::Type { text, into, .. } => {
+                let into = into
+                    .as_ref()
+                    .map_or_else(String::new, |into| format!(" into {into}"));
+                format!("type {} characters on {on}{into}", text.chars().count())
+            }
+            DeviceAct::Key { key, times } => {
+                let times = if *times > 1 {
+                    format!(" ×{times}")
+                } else {
+                    String::new()
+                };
+                format!("press {key}{times} on {on}")
+            }
         }
     }
 }
@@ -1034,7 +1104,7 @@ mod tests {
         let cwd = Path::new("/");
         let listed = answer_now(&ask("tools/list", &json!({})), cwd, &sent).unwrap();
         // Cox's own, the Android emulator's, and the Mac's windows' on macOS.
-        let tools = 21 + 6 + if cfg!(target_os = "macos") { 6 } else { 0 };
+        let tools = 21 + 7 + if cfg!(target_os = "macos") { 6 } else { 0 };
         assert_eq!(listed["result"]["tools"].as_array().unwrap().len(), tools);
         let called = ask("tools/call", &json!({ "name": "no_such_tool" }));
         let called = answer_now(&called, cwd, &sent).unwrap();

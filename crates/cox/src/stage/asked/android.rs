@@ -1,20 +1,25 @@
 //! What an agent's tools do with the Android emulators: the device acted
 //! on shows on a tab of the stage, where the agent's taps, swipes, text
 //! and keys go on to its emulator, and the agent sees a picture of its
-//! display after, as the human sees it on the tab.
+//! display once it settles, as the human sees it on the tab. What the
+//! emulator's gRPC service does not tell, as the screen's elements, is
+//! asked of the device through `adb`.
 
 use std::fmt::Write as _;
 use std::time::Duration;
 
+use cox_android::adb::Adb;
 use cox_android::device::Boot;
+use cox_android::settle::{self, Settled, Settling};
+use cox_android::ui::{self, Find, Node, Scale};
 use gpui::{AppContext as _, AsyncApp, Context, Entity, WeakEntity, Window};
 use tokio::sync::oneshot;
 
-use super::mac::{FIRST_PICTURE, LOOK_AGAIN, SETTLE, png};
+use super::mac::{FIRST_PICTURE, LOOK_AGAIN, png};
 use crate::stage::Stage;
 use crate::stage::android::Android;
 use crate::stage::tab::TabContent;
-use coxd::agent::mcp::{AndroidAct, Seen};
+use coxd::agent::mcp::{AndroidAct, DeviceAct, Element, Seen, Spot};
 
 /// How many steps a swipe's finger moves in, and how long each takes, as
 /// a finger moves.
@@ -24,6 +29,17 @@ const SWIPE_STEP: Duration = Duration::from_millis(16);
 /// How long a look waits for the display of an emulator that boots,
 /// before it tells the agent to look again.
 const BOOTING: Duration = Duration::from_secs(30);
+
+/// How long typing waits for a field to have the keyboard, and how long
+/// the display may take to settle after the field is tapped.
+const FOCUS: Duration = Duration::from_secs(2);
+
+/// How often typing asks whether a field has the keyboard.
+const ASK_AGAIN: Duration = Duration::from_millis(150);
+
+/// How long typing waits after each character: the keyboard drops some
+/// of the characters the emulator types at once.
+const TYPE_STEP: Duration = Duration::from_millis(30);
 
 /// What the agent's answer goes to.
 type Answer = oneshot::Sender<Result<Seen, String>>;
@@ -40,7 +56,12 @@ impl Stage {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(name) = act.device().map(str::to_owned) else {
+        let AndroidAct::On {
+            device: name,
+            act,
+            settle_ms,
+        } = act
+        else {
             cx.background_executor()
                 .spawn(async move {
                     let _ = answer.send(Ok(Seen {
@@ -57,28 +78,17 @@ impl Stage {
             )));
             return;
         }
-        let tab = self.android_tab(&name, cx);
-        if let Err(why) = tab.update(cx, |tab, cx| tab.act(&act, cx)) {
-            let _ = answer.send(Err(why));
-            return;
-        }
-        let settle = if matches!(act, AndroidAct::Look { .. }) {
-            Duration::ZERO
-        } else {
-            SETTLE
-        };
-        let tab = tab.downgrade();
+        let tab = self.android_tab(&name, cx).downgrade();
+        let settle = Duration::from_millis(u64::from(settle_ms));
         cx.spawn(async move |_, cx| {
-            if let AndroidAct::Swipe {
-                x, y, to_x, to_y, ..
-            } = act
-                && let Err(why) = swipe(&tab, (x, y), (to_x, to_y), cx).await
-            {
-                let _ = answer.send(Err(why));
-                return;
-            }
-            cx.background_executor().timer(settle).await;
-            let _ = answer.send(seen(&tab, cx).await);
+            let seen = match act {
+                DeviceAct::Ui => elements(&tab, &name, cx).await,
+                act => match acted(&tab, &name, act, cx).await {
+                    Ok(()) => settled_seen(&tab, settle, cx).await,
+                    Err(why) => Err(why),
+                },
+            };
+            let _ = answer.send(seen);
         })
         .detach();
     }
@@ -113,14 +123,117 @@ impl Stage {
     }
 }
 
-/// Moves the agent's finger, down on the display already, from `from` to
-/// `to`, in steps, and lifts it there.
+/// Does `act` on the device of `tab`, `name`, as the agent asks: a look
+/// does nothing.
+async fn acted(
+    tab: &WeakEntity<Android>,
+    name: &str,
+    act: DeviceAct,
+    cx: &mut AsyncApp,
+) -> Result<(), String> {
+    if matches!(act, DeviceAct::Look | DeviceAct::Ui) {
+        return Ok(());
+    }
+    on_tab(tab, cx, |tab, _| tab.ready())?;
+    match act {
+        DeviceAct::Look | DeviceAct::Ui => {}
+        DeviceAct::Tap {
+            at,
+            times,
+            interval_ms,
+            hold_ms,
+        } => {
+            let at = match at {
+                Spot::At { x, y } => (x, y),
+                Spot::On(element) => found(tab, name, &element, cx).await?,
+            };
+            let (interval, hold) = (ms(interval_ms), ms(hold_ms));
+            for time in 0..times.max(1) {
+                if time > 0 {
+                    cx.background_executor().timer(interval).await;
+                }
+                tap(tab, at, hold, cx).await?;
+            }
+        }
+        DeviceAct::Swipe { x, y, to_x, to_y } => swipe(tab, (x, y), (to_x, to_y), cx).await?,
+        DeviceAct::Type {
+            text,
+            into,
+            clear_first,
+        } => {
+            let adb = adb_of(name, cx).await;
+            if let Some(into) = into {
+                let at = found(tab, name, &into, cx).await?;
+                tap(tab, at, Duration::ZERO, cx).await?;
+                settled(tab, FOCUS, cx).await?;
+            }
+            match &adb {
+                Ok(adb) => wait_for_field(adb, cx).await?,
+                Err(why) if clear_first => return Err(why.clone()),
+                // With no adb, as on a fake emulator, the text is typed
+                // where it goes.
+                Err(_) => {}
+            }
+            if clear_first && let Ok(adb) = adb {
+                cx.background_executor()
+                    .spawn(async move { adb.clear_field() })
+                    .await?;
+            }
+            for typed in text.chars() {
+                on_tab(tab, cx, |tab, cx| {
+                    tab.type_text(typed.to_string(), cx);
+                    Ok(())
+                })?;
+                cx.background_executor().timer(TYPE_STEP).await;
+            }
+        }
+        DeviceAct::Key { key, times } => on_tab(tab, cx, |tab, cx| {
+            for _ in 0..times.max(1) {
+                tab.press(key.clone(), cx);
+            }
+            Ok(())
+        })?,
+    }
+    Ok(())
+}
+
+fn ms(ms: u32) -> Duration {
+    Duration::from_millis(u64::from(ms))
+}
+
+/// `act` on the tab, as it is now.
+fn on_tab<T>(
+    tab: &WeakEntity<Android>,
+    cx: &mut AsyncApp,
+    act: impl FnOnce(&mut Android, &mut Context<Android>) -> Result<T, String>,
+) -> Result<T, String> {
+    tab.update(cx, act)
+        .map_err(|_| "the device's tab closed".to_owned())?
+}
+
+/// Taps `at`, holding the finger down `hold`.
+async fn tap(
+    tab: &WeakEntity<Android>,
+    (x, y): (u32, u32),
+    hold: Duration,
+    cx: &mut AsyncApp,
+) -> Result<(), String> {
+    on_tab(tab, cx, |tab, cx| tab.touch(x, y, true, cx))?;
+    if !hold.is_zero() {
+        cx.background_executor().timer(hold).await;
+    }
+    on_tab(tab, cx, |tab, cx| tab.touch(x, y, false, cx))
+}
+
+/// Lands the agent's finger at `from`, moves it to `to`, in steps, and
+/// lifts it there.
 async fn swipe(
     tab: &WeakEntity<Android>,
     from: (u32, u32),
     to: (u32, u32),
     cx: &mut AsyncApp,
 ) -> Result<(), String> {
+    on_tab(tab, cx, |tab, cx| tab.touch(from.0, from.1, true, cx))?;
     let along = |from: u32, to: u32, step: u32| {
         let (from, to) = (i64::from(from), i64::from(to));
         let at = from + (to - from) * i64::from(step) / i64::from(SWIPE_STEPS);
@@ -130,16 +243,166 @@ async fn swipe(
         cx.background_executor().timer(SWIPE_STEP).await;
         let (x, y) = (along(from.0, to.0, step), along(from.1, to.1, step));
         let last = step == SWIPE_STEPS;
-        tab.update(cx, |tab, cx| {
+        on_tab(tab, cx, |tab, cx| {
             tab.touch(x, y, true, cx)?;
             if last {
                 tab.touch(x, y, false, cx)?;
             }
-            Ok::<(), String>(())
-        })
-        .map_err(|_| "the device's tab closed".to_owned())??;
+            Ok(())
+        })?;
     }
     Ok(())
+}
+
+/// `adb` for the device `name`, as its emulator runs now.
+async fn adb_of(name: &str, cx: &mut AsyncApp) -> Result<Adb, String> {
+    let name = name.to_owned();
+    cx.background_executor()
+        .spawn(async move {
+            let running = cox_android::running::of(&name)
+                .ok_or_else(|| format!("{name} does not run yet: look at it first."))?;
+            Adb::of(&running)
+        })
+        .await
+}
+
+/// The screen's elements, and how its pixels go to those of the picture
+/// the agent sees.
+async fn nodes(
+    tab: &WeakEntity<Android>,
+    name: &str,
+    cx: &mut AsyncApp,
+) -> Result<(Vec<Node>, Scale), String> {
+    let scale = on_tab(tab, cx, |tab, _| {
+        tab.ready()?;
+        let display = tab.display();
+        let picture = tab.picture_size();
+        display
+            .zip(picture)
+            .map(|(display, picture)| Scale { display, picture })
+            .ok_or_else(|| format!("{} shows no display yet: look again.", tab.name()))
+    })?;
+    let adb = adb_of(name, cx).await?;
+    let nodes = cx
+        .background_executor()
+        .spawn(async move { adb.ui() })
+        .await?;
+    Ok((nodes, scale))
+}
+
+/// Where the agent's picture has the middle of `element`.
+async fn found(
+    tab: &WeakEntity<Android>,
+    name: &str,
+    element: &Element,
+    cx: &mut AsyncApp,
+) -> Result<(u32, u32), String> {
+    let (nodes, scale) = nodes(tab, name, cx).await?;
+    let find = match element {
+        Element::Text(text) => Find::Text(text.clone()),
+        Element::Id(id) => Find::Id(id.clone()),
+    };
+    let node = find.in_nodes(&nodes, scale)?;
+    Ok(scale.to_picture(node.bounds.center()))
+}
+
+/// The screen's elements, as the agent is told of them.
+async fn elements(
+    tab: &WeakEntity<Android>,
+    name: &str,
+    cx: &mut AsyncApp,
+) -> Result<Seen, String> {
+    let (nodes, scale) = nodes(tab, name, cx).await?;
+    let (width, height) = scale.picture;
+    Ok(Seen {
+        text: format!(
+            "The elements on {name}'s screen, in the {width}×{height} pixels of the picture \
+             android_look answers: `at` is the middle, then [left,top right,bottom].\n{}",
+            ui::told(&nodes, scale)
+        ),
+        png: None,
+    })
+}
+
+/// Waits for a text field of the device to have the keyboard.
+async fn wait_for_field(adb: &Adb, cx: &mut AsyncApp) -> Result<(), String> {
+    let mut waited = Duration::ZERO;
+    loop {
+        let asked = adb.clone();
+        let editing = cx
+            .background_executor()
+            .spawn(async move { asked.is_editing() })
+            .await?;
+        if editing {
+            return Ok(());
+        }
+        if waited >= FOCUS {
+            return Err(
+                "No text field has the keyboard: tap one first, or name it with into_text or \
+                 into_resource_id."
+                    .to_owned(),
+            );
+        }
+        cx.background_executor().timer(ASK_AGAIN).await;
+        waited += ASK_AGAIN;
+    }
+}
+
+/// Waits up to `most` for the display `tab` shows to stop changing.
+async fn settled(
+    tab: &WeakEntity<Android>,
+    most: Duration,
+    cx: &mut AsyncApp,
+) -> Result<Settled, String> {
+    let mut settling = Settling::new(most);
+    let mut at = Duration::ZERO;
+    loop {
+        cx.background_executor().timer(settle::LOOK_AGAIN).await;
+        at += settle::LOOK_AGAIN;
+        let picture = tab
+            .read_with(cx, |tab, _| tab.picture())
+            .map_err(|_| "the device's tab closed".to_owned())?;
+        let sum = match picture {
+            Some(((_, _, bgra), _)) => {
+                cx.background_executor()
+                    .spawn(async move { settle::sum(&bgra) })
+                    .await
+            }
+            None => 0,
+        };
+        if let Some(settled) = settling.see(at, sum) {
+            return Ok(settled);
+        }
+    }
+}
+
+/// The display `tab` shows, as the agent sees it once it settles, waiting
+/// up to `most` for it.
+async fn settled_seen(
+    tab: &WeakEntity<Android>,
+    most: Duration,
+    cx: &mut AsyncApp,
+) -> Result<Seen, String> {
+    let settled = if most.is_zero() {
+        None
+    } else {
+        Some(settled(tab, most, cx).await?)
+    };
+    let mut seen = seen(tab, cx).await?;
+    match settled {
+        Some(Settled::Still(at)) => {
+            let _ = write!(seen.text, " It settled {} ms after.", at.as_millis());
+        }
+        Some(Settled::Moving(at)) => {
+            let _ = write!(
+                seen.text,
+                " It was changing still {} ms after: look again if it should have stopped.",
+                at.as_millis()
+            );
+        }
+        None => {}
+    }
+    Ok(seen)
 }
 
 /// The display `tab` shows, as the agent sees it now: what it is, and its

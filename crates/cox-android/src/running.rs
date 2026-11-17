@@ -1,6 +1,6 @@
 //! The emulators running: each writes a file of itself as it starts,
 //! `pid_<pid>.ini` in a folder of the system's, and takes it away as it
-//! ends, saying the device it runs, `avd.name`, and where its gRPC service
+//! ends, saying the device it runs, `avd.id`, and where its gRPC service
 //! listens, `grpc.port`, with the token it asks for, `grpc.token`, when it
 //! asks for one, as one Android Studio starts does.
 
@@ -18,6 +18,18 @@ pub struct Running {
     pub port: u16,
     /// The token its gRPC service asks for, if it asks for one.
     pub token: Option<String>,
+    /// The port of its console, which `adb` names it by, as
+    /// `emulator-5554`, if its file says one.
+    pub serial: Option<u16>,
+}
+
+impl Running {
+    /// The name `adb -s` takes for it, if its file says its console's
+    /// port.
+    #[must_use]
+    pub fn adb_serial(&self) -> Option<String> {
+        self.serial.map(|port| format!("emulator-{port}"))
+    }
 }
 
 /// The folders the emulators write their files in, the one they write in
@@ -120,9 +132,12 @@ fn parse(pid: i32, text: &str) -> Option<Running> {
     };
     Some(Running {
         pid,
-        device: value("avd.name")?.to_owned(),
+        // `avd.name` is the name the device is shown by, which may not
+        // be the one `emulator -avd` takes.
+        device: value("avd.id").or_else(|| value("avd.name"))?.to_owned(),
         port: value("grpc.port")?.parse().ok()?,
         token: value("grpc.token").map(str::to_owned),
+        serial: value("port.serial").and_then(|port| port.parse().ok()),
     })
 }
 
@@ -136,8 +151,11 @@ fn parse(pid: i32, text: &str) -> Option<Running> {
 pub fn write(folder: &Path, running: &Running) -> std::io::Result<Written> {
     std::fs::create_dir_all(folder)?;
     let path = folder.join(format!("pid_{}.ini", running.pid));
+    let serial = running
+        .serial
+        .map_or_else(String::new, |serial| format!("port.serial={serial}\n"));
     let mut text = format!(
-        "avd.name={}\ngrpc.port={}\nport.serial=5554\n",
+        "avd.name={}\ngrpc.port={}\n{serial}",
         running.device, running.port
     );
     if let Some(token) = &running.token {
@@ -170,6 +188,7 @@ mod tests {
             device: device.into(),
             port: 8554,
             token: token.map(str::to_owned),
+            serial: None,
         }
     }
 
@@ -187,6 +206,32 @@ mod tests {
         let running = this_process("Pixel_8", Some("abc=="));
         let _written = write(&folder, &running).unwrap();
         assert_eq!(in_folders(&[folder]), [running]);
+    }
+
+    #[test]
+    fn an_emulator_is_named_to_adb_by_its_consoles_port() {
+        let scratch = Scratch::new("running-serial");
+        let folder = scratch.path().to_owned();
+        let running = Running {
+            serial: Some(5580),
+            ..this_process("Pixel_8", None)
+        };
+        let _written = write(&folder, &running).unwrap();
+        let found = &in_folders(&[folder])[0];
+        assert_eq!(found.adb_serial().as_deref(), Some("emulator-5580"));
+    }
+
+    #[test]
+    fn an_emulator_is_found_by_its_devices_id_not_the_name_it_is_shown_by() {
+        let scratch = Scratch::new("running-id");
+        let pid = std::process::id();
+        std::fs::write(
+            scratch.path().join(format!("pid_{pid}.ini")),
+            "avd.id=Pixel_8\navd.name=My Pixel\ngrpc.port=8554\n",
+        )
+        .unwrap();
+        let found = in_folders(&[scratch.path().to_owned()]);
+        assert_eq!(found[0].device, "Pixel_8");
     }
 
     #[test]
