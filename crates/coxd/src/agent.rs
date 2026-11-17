@@ -150,6 +150,11 @@ pub enum AgentEvent {
     /// running in the background, or a turn it took by itself. It may run
     /// on after the turn that started it.
     Task(cox_acp::Task),
+    /// How full the session's context is, and what the session cost so
+    /// far, as the agent tells it, in a turn or out of one.
+    Usage(cox_acp::Usage),
+    /// The tokens the turn spent, as the agent told them as it ended.
+    TurnTokens(cox_acp::Tokens),
     /// The turn ended.
     TurnEnded(StopReason),
     /// The agent answered the prompt with an error.
@@ -1131,6 +1136,8 @@ fn update_event(update: Update) -> Result<AgentEvent, Ask> {
             result: call.result.map(ended),
         },
         Update::Task(task) => AgentEvent::Task(task),
+        Update::Usage(usage) => AgentEvent::Usage(usage),
+        Update::TurnTokens(tokens) => AgentEvent::TurnTokens(tokens),
         Update::PermissionRequest(request) => return Err(Ask::Permission(request)),
         Update::Question(request) => return Err(Ask::Question(request)),
     })
@@ -1175,8 +1182,13 @@ async fn between_turns(
             command = commands.recv() => return Ok(command),
             Some(update) = session.next_unprompted() => {
                 // A task the agent left running that ends is not yet the
-                // agent going on: what it sends after is.
-                if !matches!(update, Update::Task(_)) && !std::mem::replace(went_on, true) {
+                // agent going on, nor is what it tells of what it spent:
+                // what it sends after is.
+                let going_on = !matches!(
+                    update,
+                    Update::Task(_) | Update::Usage(_) | Update::TurnTokens(_)
+                );
+                if going_on && !std::mem::replace(went_on, true) {
                     let _ = events.send(AgentEvent::WentOn);
                 }
                 unprompted(session, update, policy, settings, commands, events).await?;

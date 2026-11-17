@@ -45,8 +45,10 @@ use base64::engine::general_purpose::STANDARD;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
 mod question;
+mod usage;
 
 pub use question::{Picked, Question, QuestionAnswer, QuestionOption, QuestionRequest};
+pub use usage::{Microdollars, Tokens, Usage};
 
 /// A way to reach an agent: a process speaking ACP on its stdio, or, in
 /// tests, an in-memory channel.
@@ -629,6 +631,7 @@ fn translate(update: SessionUpdate) -> Option<Received> {
             content: fields.content.map(translate_content),
             status: fields.status,
         }),
+        SessionUpdate::UsageUpdate(update) => Some(Received::Update(Update::Usage(update.into()))),
         _ => None,
     }
 }
@@ -1115,7 +1118,15 @@ impl Turn<'_> {
             };
             match received {
                 Received::Answered { turn, answer } if turn == self.number => {
+                    let tokens = answer
+                        .as_ref()
+                        .ok()
+                        .and_then(|answer| answer.usage.clone())
+                        .map(Tokens::from);
                     self.answer = Some(answer);
+                    if let Some(tokens) = tokens {
+                        return Some(Update::TurnTokens(tokens));
+                    }
                 }
                 received => {
                     if let Some(update) = follow(self.tool_calls, received) {
@@ -1317,6 +1328,13 @@ pub enum Update {
     /// left running in the background, or a turn it took by itself,
     /// started or ended.
     Task(Task),
+    /// How full the session's context is, and what the session cost so
+    /// far, when the agent tells it: in a turn, or as it goes on by
+    /// itself.
+    Usage(Usage),
+    /// The tokens the turn spent, as the agent told them as it answered
+    /// the prompt: the last update of the turn.
+    TurnTokens(Tokens),
 }
 
 /// Work the agent runs apart from its turns, as `claude-agent-acp` tells

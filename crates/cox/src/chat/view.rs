@@ -186,6 +186,8 @@ pub struct Row {
     pub setup: Option<coxd::agent::setup::Setup>,
     /// The pull requests its agent opened, as coxd last read them.
     pub pulls: Vec<coxd::daemon::wire::PullRow>,
+    /// What its agent spent, once it told any of it.
+    pub spent: Option<coxd::chat::spent::Spent>,
 }
 
 /// Where the frame after the next puts the cursor of Vim's keys in the

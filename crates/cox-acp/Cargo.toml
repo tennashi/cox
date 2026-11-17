@@ -9,7 +9,8 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
-agent-client-protocol = { workspace = true, features = ["process"] }
+# What a turn spent, which the agent tells as it answers the prompt.
+agent-client-protocol = { workspace = true, features = ["process", "unstable_end_turn_token_usage"] }
 anyhow.workspace = true
 # A picture in a prompt goes as base64.
 base64 = "0.22.1"

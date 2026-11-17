@@ -22,6 +22,7 @@ use cox_core::store::ChatId;
 
 use crate::agent::mcp::{Ended, Ran};
 use crate::agent::{AgentEvent, Command, Opened, Prompt};
+use crate::chat::spent::Spent;
 
 mod checks;
 
@@ -202,6 +203,7 @@ struct Drift {
 struct Unkept {
     settings: bool,
     commands: bool,
+    spent: bool,
 }
 
 /// The conversation the window shows.
@@ -224,8 +226,10 @@ pub struct Conversation {
     /// their names, as it last told them, while it runs or since, as they
     /// were kept: a line sent to a closed chat starts it again.
     commands: Vec<SlashCommand>,
-    /// Which of the settings and the commands changed since that was last
-    /// taken, to keep.
+    /// What the agent spent, once it told any of it, as it was kept.
+    spent: Option<Spent>,
+    /// Which of the settings, the commands and what the agent spent
+    /// changed since that was last taken, to keep.
     unkept: Unkept,
     /// Whose move it was when the agent asked the human to log in, or for
     /// their permission, which it is again once they have answered: the
@@ -288,6 +292,7 @@ impl Conversation {
             goal: None,
             settings: Vec::new(),
             commands: Vec::new(),
+            spent: None,
             unkept: Unkept::default(),
             before_asking: State::Idle,
             keeps: true,
@@ -333,6 +338,7 @@ impl Conversation {
             goal: None,
             settings: Vec::new(),
             commands: Vec::new(),
+            spent: None,
             unkept: Unkept::default(),
             before_asking: State::Idle,
             keeps: true,
@@ -380,6 +386,14 @@ impl Conversation {
     #[must_use]
     pub fn with_commands(mut self, commands: Vec<SlashCommand>) -> Self {
         self.commands = commands;
+        self
+    }
+
+    /// The conversation, of a chat whose agent spent `spent`, as it was
+    /// kept, if it told any of it.
+    #[must_use]
+    pub fn with_spent(mut self, spent: Option<Spent>) -> Self {
+        self.spent = spent;
         self
     }
 
@@ -447,6 +461,18 @@ impl Conversation {
     #[must_use]
     pub fn commands(&self) -> &[SlashCommand] {
         &self.commands
+    }
+
+    /// What the agent spent, once it told any of it.
+    #[must_use]
+    pub fn spent(&self) -> Option<&Spent> {
+        self.spent.as_ref()
+    }
+
+    /// Whether what the agent spent changed since this was last called,
+    /// to keep.
+    pub fn take_spent_changed(&mut self) -> bool {
+        std::mem::take(&mut self.unkept.spent)
     }
 
     /// Whether the settings changed since this was last called, to keep.
@@ -1579,6 +1605,9 @@ impl Conversation {
 
     /// Shows what the agent side sent.
     pub fn apply(&mut self, event: AgentEvent) {
+        if Spent::hear(&mut self.spent, &event) {
+            self.unkept.spent = true;
+        }
         match event {
             AgentEvent::Titled(title) => self.title = Some(title),
             AgentEvent::Commands(commands) => self.commands_told(commands),
@@ -1594,9 +1623,10 @@ impl Conversation {
             }
             AgentEvent::Steered => self.steering = self.steering.saturating_sub(1),
             AgentEvent::WentOn => self.push(Entry::Note(WENT_ON.to_owned())),
-            // The chat keeps which tasks run, for coxd's updates: the
-            // conversation shows none.
-            AgentEvent::Task(_) => {}
+            // The chat keeps which tasks run, for coxd's updates, and
+            // shows what the agent spent apart from the conversation,
+            // which shows neither.
+            AgentEvent::Task(_) | AgentEvent::Usage(_) | AgentEvent::TurnTokens(_) => {}
             AgentEvent::Opened { how, steers, .. } => {
                 self.steers = steers;
                 self.opened(how);

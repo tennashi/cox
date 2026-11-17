@@ -17,6 +17,7 @@ use crate::agent::mcp::{AndroidAct, MacAct, Ran, Seen};
 use crate::agent::setup::Setup;
 use crate::chat::conversation::{Answer, Patch, QuestionAnswer, State};
 use crate::chat::sketch::Sketch;
+use crate::chat::spent::Spent;
 use crate::github::{CheckState, Pull, Status};
 
 /// A project, as the window lists it on its rail.
@@ -89,6 +90,9 @@ pub struct ChatRow {
     /// first, each as it stood when Cox last read it.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub pulls: Vec<PullRow>,
+    /// What its agent spent, once it told any of it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spent: Option<Spent>,
 }
 
 /// A pull request a chat's agent opened, as the window shows it.
@@ -655,6 +659,7 @@ mod tests {
             folder: None,
             background: Vec::new(),
             pulls: Vec::new(),
+            spent: None,
         };
         let line = serde_json::to_string(&row).unwrap();
         assert!(!line.contains("background"), "{line}");

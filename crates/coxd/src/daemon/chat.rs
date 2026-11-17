@@ -1769,6 +1769,7 @@ impl Chat {
         let changed = self.conversation.take_changed();
         let settings_changed = self.conversation.take_settings_changed();
         let commands_changed = self.conversation.take_commands_changed();
+        let spent_changed = self.conversation.take_spent_changed();
         let baseline_changed = self.conversation.take_baseline_changed();
         if let Some(record) = &self.record {
             if settings_changed && let Err(error) = record.settings(self.conversation.settings()) {
@@ -1779,6 +1780,12 @@ impl Chat {
             }
             if baseline_changed && let Err(error) = record.baseline(self.conversation.baseline()) {
                 tracing::error!("the chat's plan is not kept: {error:#}");
+            }
+            if spent_changed
+                && let Some(spent) = self.conversation.spent()
+                && let Err(error) = record.spent(spent)
+            {
+                tracing::error!("what the chat's agent spent is not kept: {error:#}");
             }
             for &index in &changed {
                 if let Err(error) = record.entry(index, &self.conversation.entries()[index]) {
