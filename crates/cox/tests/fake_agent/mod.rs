@@ -15,7 +15,13 @@
 //! it go on, goes on by itself, with no prompt, as `claude-agent-acp` does
 //! once a task left running in the background ends: it asks permission to
 //! edit `x.txt` as above when the prompt mentions "ask" too, and replies
-//! [`BACKGROUND_FINISHED`]. When the prompt mentions "wait", it replies
+//! [`BACKGROUND_FINISHED`]. When the prompt mentions "compacts", it
+//! replies with an echo and ends the turn, and once the test lets it go
+//! on, compacts its context by itself, with no prompt, as
+//! `claude-agent-acp` does with a session left idle: it starts the
+//! compaction's tool call, waits for the test to let it go on again, and
+//! ends it, telling the tokens before and after ([`COMPACTED_FROM`],
+//! [`COMPACTED_TO`]). When the prompt mentions "wait", it replies
 //! `waiting` and goes on until Cox cancels the turn, or steers a line into
 //! it, which it echoes, ending the turn. A turn cancelled, or whose
 //! permission request Cox answers as cancelled, ends as cancelled. A
@@ -162,6 +168,10 @@ pub enum Event {
     Failed,
     /// It went on by itself after a turn and is done.
     WentOn,
+    /// It started compacting its context by itself after a turn.
+    Compacting,
+    /// It compacted its context by itself after a turn and is done.
+    Compacted,
 }
 
 /// What Cox sent the agent: the text blocks of each prompt, without how
@@ -772,6 +782,10 @@ async fn take_turn(
         say(turn, session, BACKGROUND_STARTED)?;
         return Ok(Ended::Background);
     }
+    if mentions(text, "compacts") {
+        say(turn, session, &format!("echo: {text}"))?;
+        return Ok(Ended::Background);
+    }
     if mentions(text, "wait") {
         let woken = turns.wait(|| say(turn, session, "waiting")).await?;
         let Woken::Steered(steered) = woken else {
@@ -852,6 +866,9 @@ async fn go_on(
     turns: &Turns,
 ) -> Result<()> {
     turns.held().await;
+    if mentions(text, "compacts") {
+        return compact(cx, session, turns).await;
+    }
     if mentions(text, "ask") {
         let answer = ask_permission(cx, session, turns).await?;
         answers.lock().unwrap().push(answer.clone());
@@ -863,6 +880,49 @@ async fn go_on(
     }
     say(cx, session, BACKGROUND_FINISHED)?;
     turns.note(Event::WentOn);
+    Ok(())
+}
+
+/// The tokens in the context before and after the agent compacts it.
+const COMPACTED_FROM: u64 = 206_713;
+const COMPACTED_TO: u64 = 12_136;
+
+/// Compacts the context by itself, as `claude-agent-acp` reports it to a
+/// client of the `JetBrains` AIR extension: a "Compact conversation" tool
+/// call, marked as a compaction in its `_meta`, which ends, once the test
+/// lets it, with an update of its own telling the tokens before and
+/// after.
+async fn compact(cx: &ConnectionTo<Client>, session: &SessionId, turns: &Turns) -> Result<()> {
+    let update = |update| cx.send_notification(SessionNotification::new(session.clone(), update));
+    let compaction = |facts: serde_json::Value| {
+        let serde_json::Value::Object(meta) = serde_json::json!({
+            "jetbrains": { "air": { "contextCompaction": facts } }
+        }) else {
+            unreachable!("an object");
+        };
+        meta
+    };
+    update(SessionUpdate::ToolCall(
+        ToolCall::new("compact-1", "Compact conversation")
+            .kind(ToolKind::Think)
+            .status(ToolCallStatus::InProgress)
+            .meta(compaction(serde_json::json!({ "version": 1 }))),
+    ))?;
+    turns.note(Event::Compacting);
+    turns.held().await;
+    update(SessionUpdate::ToolCallUpdate(ToolCallUpdate::new(
+        "compact-1",
+        ToolCallUpdateFields::new().status(ToolCallStatus::Completed),
+    )))?;
+    update(SessionUpdate::ToolCallUpdate(
+        ToolCallUpdate::new("compact-1", ToolCallUpdateFields::new()).meta(compaction(
+            serde_json::json!({
+                "version": 1, "trigger": "idle", "preTokens": COMPACTED_FROM,
+                "postTokens": COMPACTED_TO, "durationMs": 42_410,
+            }),
+        )),
+    ))?;
+    turns.note(Event::Compacted);
     Ok(())
 }
 

@@ -1188,6 +1188,45 @@ async fn what_the_agent_says_after_its_turn_ended_shows_as_it_comes(cx: &mut Tes
 }
 
 #[gpui::test]
+async fn a_compaction_while_idle_shows_as_one_note_and_no_work(cx: &mut TestAppContext) {
+    let (agents, workspace, cx) = open_window(cx, scratch::folder("compacts"));
+    cx.simulate_keystrokes("secondary-n");
+    let view = shown(cx, &workspace);
+    say(cx, &workspace, "compacts").await;
+    // The human looks at another chat as the agent compacts.
+    cx.simulate_keystrokes("secondary-n");
+    let agent = Arc::clone(&agents.borrow()[0]);
+
+    agent.go_on();
+    settle_until(cx, |_| agent.did(&Event::Compacting)).await;
+    assert!(
+        !drawn(cx, "chat-1-in-background"),
+        "the compaction shows as work in the background"
+    );
+    agent.go_on();
+    let note = "Context compacted while idle: 207k → 12k tokens.";
+    wait_until(cx, &view, |conversation| {
+        conversation.entries().last() == Some(&Entry::Note(note.to_owned()))
+    })
+    .await;
+
+    assert_eq!(
+        entries(cx, &view),
+        [
+            Entry::Human("compacts".to_owned()),
+            Entry::Reply("echo: compacts".to_owned()),
+            Entry::Note(note.to_owned()),
+        ]
+    );
+    assert!(agent.did(&Event::Compacted));
+    let state = view.read_with(cx, |view, _| view.conversation().state());
+    assert_eq!(state, State::Idle);
+    assert!(drawn(cx, "chat-1-idle"), "read, and not at work");
+    assert!(!drawn(cx, "chat-1-background"), "at work in the background");
+    assert!(!drawn(cx, "chat-1-unread"), "news for the human");
+}
+
+#[gpui::test]
 async fn the_agent_asks_after_its_turn_ended_and_goes_on_once_answered(cx: &mut TestAppContext) {
     let (agents, workspace, cx) = open_window(cx, scratch::folder("went-on-asks"));
     cx.simulate_keystrokes("secondary-n");

@@ -40,6 +40,40 @@
         { "update": { "sessionUpdate": "usage_update", "used": 12136, "size": 1000000 } }
       ]
     },
-    { "steps": [{ "say": "Back with a compacted context." }] }
+    {
+      "steps": [
+        { "say": "Back with a compacted context. Reading the whole log now." },
+        {
+          "tool": {
+            "id": "compact-2",
+            "title": "Compact conversation",
+            "kind": "think",
+            "status": "in_progress",
+            "_meta": { "jetbrains": { "air": { "version": 1, "contextCompaction": { "version": 1 } } } }
+          }
+        },
+        { "sleep": 2000 },
+        { "tool_update": { "id": "compact-2", "status": "completed" } },
+        {
+          "tool_update": {
+            "id": "compact-2",
+            "_meta": {
+              "jetbrains": {
+                "air": {
+                  "contextCompaction": {
+                    "version": 1,
+                    "trigger": "automatic",
+                    "preTokens": 1003412,
+                    "postTokens": 18950,
+                    "durationMs": 2000
+                  }
+                }
+              }
+            }
+          }
+        },
+        { "say": "The log is read; the context was compacted on the way." }
+      ]
+    }
   ]
 }

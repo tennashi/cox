@@ -9,7 +9,7 @@ use std::collections::{BTreeSet, VecDeque};
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
-use cox_acp::{PermissionAnswer, SlashCommand, StopReason};
+use cox_acp::{Compaction, CompactionTrigger, PermissionAnswer, SlashCommand, StopReason};
 use cox_core::diff::Line;
 pub use cox_core::entry::{
     Answer, Attachment, Check, CheckState, Committed, Content, Entry, LoginOption, Picked,
@@ -53,6 +53,57 @@ pub enum State {
 /// The note that says the agent went on by itself after its turn ended,
 /// as when work it left running ended, ahead of what it said then.
 pub const WENT_ON: &str = "The agent went on by itself.";
+
+/// The note that says the agent compacted its context, in place of the
+/// tool call it reports it with: what started it, and how many tokens the
+/// context held before and after, as "Context compacted while idle: 207k
+/// → 12k tokens.", or why it failed.
+#[must_use]
+pub fn compaction_note(compaction: &Compaction) -> String {
+    let when = match compaction.trigger {
+        Some(CompactionTrigger::Idle) => " while idle",
+        Some(CompactionTrigger::Automatic) => " as it filled up",
+        Some(CompactionTrigger::Manual) | None => "",
+    };
+    if let Some(error) = &compaction.failed {
+        return if error.is_empty() {
+            format!("Compacting the context{when} failed.")
+        } else {
+            format!("Compacting the context{when} failed: {error}")
+        };
+    }
+    match (compaction.before, compaction.after) {
+        (Some(before), Some(after)) => format!(
+            "Context compacted{when}: {} → {} tokens.",
+            tokens(before),
+            tokens(after)
+        ),
+        (Some(before), None) => {
+            format!("Context compacted{when}, from {} tokens.", tokens(before))
+        }
+        (None, _) => format!("Context compacted{when}."),
+    }
+}
+
+/// `count` tokens, as the human reads them at a glance: as many as they
+/// are below a thousand, in thousands, as `207k`, below a million, and in
+/// millions, as `1.2M`, from there.
+fn tokens(count: u64) -> String {
+    const K: u64 = 1_000;
+    const M: u64 = 1_000_000;
+    if count < K {
+        count.to_string()
+    } else if count < M - K / 2 {
+        format!("{}k", (count + K / 2) / K)
+    } else {
+        let tenths = (count + M / 20) / (M / 10);
+        if tenths.is_multiple_of(10) {
+            format!("{}M", tenths / 10)
+        } else {
+            format!("{}.{}M", tenths / 10, tenths % 10)
+        }
+    }
+}
 
 /// How many turns a chat takes toward its goal on one line of the human's,
 /// at most.
@@ -1646,6 +1697,9 @@ impl Conversation {
             }
             AgentEvent::Steered => self.steering = self.steering.saturating_sub(1),
             AgentEvent::WentOn => self.push(Entry::Note(WENT_ON.to_owned())),
+            AgentEvent::Compacted(compaction) => {
+                self.push(Entry::Note(compaction_note(&compaction)));
+            }
             // The chat keeps which tasks run, for coxd's updates, and
             // shows what the agent spent apart from the conversation,
             // which shows neither.
@@ -2392,6 +2446,68 @@ mod tests {
                 Entry::Reply("listing".to_owned()),
             ]
         );
+    }
+
+    fn compaction(trigger: Option<CompactionTrigger>) -> Compaction {
+        Compaction {
+            trigger,
+            before: Some(206_713),
+            after: Some(12_136),
+            took: None,
+            failed: None,
+        }
+    }
+
+    #[test]
+    fn a_compaction_while_idle_shows_as_one_note_and_leaves_the_chat_idle() {
+        let mut conversation = Conversation::new();
+        conversation.apply(AgentEvent::Compacted(compaction(Some(
+            CompactionTrigger::Idle,
+        ))));
+
+        assert_eq!(
+            conversation.entries(),
+            [Entry::Note(
+                "Context compacted while idle: 207k → 12k tokens.".to_owned()
+            )]
+        );
+        assert_eq!(conversation.state(), State::Idle);
+    }
+
+    #[test]
+    fn a_compaction_says_what_started_it_and_how_it_went() {
+        let failed = Compaction {
+            failed: Some("Not enough messages to compact.".to_owned()),
+            ..compaction(Some(CompactionTrigger::Manual))
+        };
+        let untold = Compaction {
+            before: None,
+            after: None,
+            ..compaction(None)
+        };
+
+        assert_eq!(
+            compaction_note(&compaction(Some(CompactionTrigger::Automatic))),
+            "Context compacted as it filled up: 207k → 12k tokens."
+        );
+        assert_eq!(
+            compaction_note(&compaction(Some(CompactionTrigger::Manual))),
+            "Context compacted: 207k → 12k tokens."
+        );
+        assert_eq!(
+            compaction_note(&failed),
+            "Compacting the context failed: Not enough messages to compact."
+        );
+        assert_eq!(compaction_note(&untold), "Context compacted.");
+    }
+
+    #[test]
+    fn tokens_read_at_a_glance() {
+        assert_eq!(tokens(950), "950");
+        assert_eq!(tokens(12_136), "12k");
+        assert_eq!(tokens(999_400), "999k");
+        assert_eq!(tokens(999_600), "1M");
+        assert_eq!(tokens(1_250_000), "1.3M");
     }
 
     #[test]
