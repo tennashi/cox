@@ -14,7 +14,7 @@ use anyhow::{Context as _, bail};
 use tokio::sync::mpsc::{UnboundedReceiver, unbounded_channel};
 
 use super::Link;
-use super::wire::{FromDaemon, Hello, ToDaemon, Version};
+use super::wire::{Asks, FromDaemon, Hello, ToDaemon, Version};
 
 /// How long a window waits for a coxd it started to answer.
 const STARTS_WITHIN: Duration = Duration::from_secs(10);
@@ -37,7 +37,7 @@ pub struct Connected {
 
 /// Reaches coxd on `socket`, saying `hello`, starting it with `start`
 /// when none answers there, or when the one there stopped for the
-/// window. While the one there is to stop but a chat of it is at work,
+/// window, which then joins the one it started, whatever `hello` asked. While the one there is to stop but a chat of it is at work,
 /// the window comes again until none is, having called `waiting` once.
 /// Once the daemon goes, the window hears no more, and `gone` is called.
 ///
@@ -51,6 +51,7 @@ pub fn connect(
     waiting: &dyn Fn(),
     gone: impl FnOnce() + Send + 'static,
 ) -> anyhow::Result<Connected> {
+    let mut hello = hello.clone();
     let mut restarted = false;
     let mut waited = false;
     loop {
@@ -60,7 +61,7 @@ pub fn connect(
             start().context("coxd does not start")?;
             wait_for(socket)?
         };
-        match greet(&stream, hello)? {
+        match greet(&stream, &hello)? {
             (FromDaemon::Joined(coxd), reader) => return Ok(carry(stream, reader, coxd, gone)),
             (FromDaemon::Taken, _) => bail!("another Cox window has the chats already"),
             (FromDaemon::Outdated, mut reader) => {
@@ -73,6 +74,7 @@ pub fn connect(
                     bail!("coxd stays outdated");
                 }
                 restarted = true;
+                hello.asks = Asks::Join;
             }
             (FromDaemon::Busy | FromDaemon::Welcome, _) => {
                 tracing::warn!("coxd is to stop for the window, but at work: the window waits");
@@ -190,7 +192,7 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use super::*;
-    use crate::daemon::wire::{Asks, VERSION};
+    use crate::daemon::wire::VERSION;
     use crate::testing::TempDir;
 
     /// A coxd on `socket` that answers each window that comes, in turn,
@@ -294,6 +296,58 @@ mod tests {
             connected.unwrap().coxd,
             coxd,
             "the window knows coxd's version"
+        );
+    }
+
+    /// Serves one window on `socket`, as coxd of this build with a
+    /// chat at work, and stops if it answers anything but Joined.
+    fn serve(socket: &Path, asked: &Arc<std::sync::Mutex<Vec<Asks>>>) {
+        let listener = UnixListener::bind(socket).unwrap();
+        let asked = Arc::clone(asked);
+        let socket = socket.to_owned();
+        std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut line = String::new();
+            BufReader::new(stream.try_clone().unwrap())
+                .read_line(&mut line)
+                .unwrap();
+            let hello: Hello = serde_json::from_str(&line).unwrap();
+            asked.lock().unwrap().push(hello.asks);
+            let answer = hello.answer(VERSION, true);
+            (&stream)
+                .write_all(format!("{}\n", serde_json::to_string(&answer).unwrap()).as_bytes())
+                .unwrap();
+            if matches!(answer, FromDaemon::Joined(_)) {
+                std::thread::park();
+            }
+            drop(listener);
+            std::fs::remove_file(&socket).unwrap();
+        });
+    }
+
+    #[test]
+    fn a_window_that_asked_coxd_to_stop_joins_the_coxd_it_starts() {
+        let folder = TempDir::new();
+        let socket = folder.join("restart.sock");
+        let asked = Arc::new(std::sync::Mutex::new(Vec::new()));
+        serve(&socket, &asked);
+
+        let connected = connect(
+            &socket,
+            &Hello::new(None, Vec::new(), Asks::RestartNow),
+            &|| {
+                serve(&socket, &asked);
+                Ok(())
+            },
+            &|| panic!("the window does not wait for coxd to stop now"),
+            || {},
+        );
+
+        assert!(connected.is_ok(), "{:?}", connected.err());
+        assert_eq!(
+            *asked.lock().unwrap(),
+            [Asks::RestartNow, Asks::Join],
+            "the coxd the window started is not asked to stop too"
         );
     }
 }
