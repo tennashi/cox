@@ -523,13 +523,14 @@ impl Chat {
         self.generation
     }
 
-    /// Takes what starts the agent of the closed chat again, if it can,
-    /// and has the conversation go on: a line sent waits for the agent.
+    /// What starts the agent of the closed chat again, if it can, and has
+    /// the conversation go on: a line sent waits for the agent. The chat
+    /// keeps it, to start its agent again each time it closes.
     pub fn take_again(&mut self) -> Option<Again> {
         if self.conversation.state() != State::Closed || self.starting {
             return None;
         }
-        let again = self.again.take()?;
+        let again = self.again.clone()?;
         self.conversation.reopen();
         Some(again)
     }
@@ -2370,6 +2371,25 @@ mod tests {
             let taken = talk.chat.take_again().unwrap();
 
             assert_eq!(taken.session.as_deref(), Some("session-1"));
+        });
+    }
+
+    #[test]
+    fn a_chat_whose_agent_closes_again_starts_it_again() {
+        on_daemon(async {
+            let cwd = TempDir::new();
+            let mut talk = Talk::new(Some(again(&cwd)));
+            talk.hear(AgentEvent::Closed(None));
+            talk.chat.take_again().unwrap();
+            talk.generation = talk.chat.next_generation();
+            let (agent, played) = played(&cwd);
+            talk.chat.attach(agent, talk.generation, Vec::new());
+            talk.agent = played;
+
+            talk.hear(AgentEvent::Closed(None));
+
+            assert!(talk.chat.starts_again());
+            assert!(talk.chat.take_again().is_some());
         });
     }
 

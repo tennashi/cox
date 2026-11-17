@@ -1322,7 +1322,17 @@ impl Daemon {
         }
         let key = self.next_key();
         let conversation = Chat::opening(&instructions.paths(), setup.as_ref());
-        let chat = self.make_chat(key, kept, conversation, None);
+        // Its agent, once it closed, as when it ended or did not stop,
+        // starts again with the next line, going on with its session.
+        let again = Again {
+            cwd: setup
+                .as_ref()
+                .and_then(|setup| setup.folder.clone())
+                .unwrap_or(cwd),
+            session: None,
+            setup: setup.clone(),
+        };
+        let chat = self.make_chat(key, kept, conversation, Some(again));
         self.add(Slot {
             key,
             project: index,
