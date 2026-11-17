@@ -65,6 +65,7 @@ use crate::chat::region::{self, Described};
 use crate::stage::follow::{self, Follows};
 use crate::stage::servers::{LanguageServer, Servers};
 use crate::stage::tab::{self, Shows, ShowsFile};
+use crate::ui::drag::{self, Dragging, Drags};
 use crate::ui::selected::{self, Selected};
 use crate::ui::{Copy, LinkClicked};
 use crate::vim::keymap::Motion;
@@ -165,6 +166,8 @@ struct Look {
     selection: Option<(Place, Place)>,
     /// Whether a drag is selecting.
     selecting: bool,
+    /// The drag that selects, while the button is held.
+    dragging: Dragging,
     /// How the last frame laid the text out.
     laid: Option<Laid>,
     /// The cursor Vim's keys move, once drawn with them on.
@@ -797,6 +800,9 @@ impl Code {
             _ => (Place::new(place.line, 0), Place::new(place.line + 1, 0)),
         });
         self.look.selecting = event.click_count == 1;
+        if self.look.selecting {
+            self.look.dragging.start(event.position);
+        }
         cx.notify();
     }
 
@@ -820,17 +826,6 @@ impl Code {
         if event.pressed_button.is_none() {
             let word = self.word_at(event.position);
             self.rest_on(word, cx);
-            return;
-        }
-        if !self.look.selecting || event.pressed_button != Some(MouseButton::Left) {
-            return;
-        }
-        if let Some(place) = self.place_at(event.position)
-            && let Some((_, head)) = &mut self.look.selection
-            && *head != place
-        {
-            *head = place;
-            cx.notify();
         }
     }
 
@@ -1389,9 +1384,38 @@ impl Render for Code {
                         move |_, over, cx| code.upgrade()?.read(cx).described(over)
                     }))
                     .children(self.render_hover(cx))
-                    .children(self.render_menu(cx)),
+                    .children(self.render_menu(cx))
+                    .children(drag::follow(&self.look.dragging, cx)),
             )
             .children(self.render_locations(cx))
+    }
+}
+
+impl Drags for Code {
+    fn dragging(&mut self) -> &mut Dragging {
+        &mut self.look.dragging
+    }
+
+    fn select_to(&mut self, position: Point<Pixels>, _: &mut Context<Self>) -> bool {
+        if !self.look.selecting {
+            return false;
+        }
+        let place = self.place_at(position);
+        match (place, &mut self.look.selection) {
+            (Some(place), Some((_, head))) if *head != place => {
+                *head = place;
+                true
+            }
+            _ => false,
+        }
+    }
+
+    fn scroll_by(&mut self, distance: Pixels, _: &mut Context<Self>) {
+        let Some(laid) = &self.look.laid else {
+            return;
+        };
+        let most = self.most_scroll(laid);
+        self.look.scroll.y = (self.look.scroll.y + distance).clamp(px(0.), most.y);
     }
 }
 

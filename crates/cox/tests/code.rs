@@ -486,3 +486,68 @@ fn lists_where_a_name_is_used_to_go_to_each(cx: &mut TestAppContext) {
     cx.dispatch_action(Back);
     assert_eq!(shown(&code, cx).0, "lib.rs");
 }
+
+/// Lets a drag held past an edge go on for a few frames.
+fn hold(cx: &mut VisualTestContext) {
+    for _ in 0..30 {
+        cx.executor().advance_clock(Duration::from_millis(16));
+        cx.run_until_parked();
+    }
+}
+
+#[gpui::test]
+fn a_drag_held_past_the_bottom_scrolls_and_selects_on(cx: &mut TestAppContext) {
+    let directory = scratch("drag-past");
+    let path = directory.join("long.rs");
+    let text = numbered(1_000);
+    std::fs::write(&path, &text).unwrap();
+    let (code, cx) = open(cx, path, &text, None);
+    let shown = in_sight(&code, cx);
+
+    let bounds = cx.debug_bounds("code").expect("the code is drawn");
+    let first = bounds.origin + point(px(1.), px(12.));
+    let below = point(bounds.center().x, bounds.bottom() + px(40.));
+    cx.simulate_mouse_down(first, MouseButton::Left, Modifiers::none());
+    cx.simulate_mouse_move(below, MouseButton::Left, Modifiers::none());
+    hold(cx);
+    cx.simulate_mouse_up(below, MouseButton::Left, Modifiers::none());
+
+    let scrolled = in_sight(&code, cx);
+    assert!(scrolled.start > shown.start, "{shown:?} then {scrolled:?}");
+    let selected = code.read_with(cx, |code, _| code.selected_text());
+    assert!(selected.starts_with("let line_1 = 1;"), "{selected}");
+    assert!(
+        selected.lines().count() > shown.len(),
+        "past the lines in sight at first, {shown:?}: {selected}"
+    );
+}
+
+#[gpui::test]
+fn the_wheel_during_a_drag_selects_to_where_the_pointer_is_then(cx: &mut TestAppContext) {
+    let directory = scratch("drag-wheel");
+    let path = directory.join("long.rs");
+    let text = numbered(1_000);
+    std::fs::write(&path, &text).unwrap();
+    let (code, cx) = open(cx, path, &text, None);
+
+    let bounds = cx.debug_bounds("code").expect("the code is drawn");
+    let first = bounds.origin + point(px(1.), px(12.));
+    let middle = bounds.center();
+    cx.simulate_mouse_down(first, MouseButton::Left, Modifiers::none());
+    cx.simulate_mouse_move(middle, MouseButton::Left, Modifiers::none());
+    let lines = |cx: &mut VisualTestContext| {
+        code.read_with(cx, |code, _| code.selected_text().lines().count())
+    };
+    let before = lines(cx);
+    cx.simulate_event(ScrollWheelEvent {
+        position: middle,
+        delta: ScrollDelta::Lines(point(0., -10.)),
+        modifiers: Modifiers::none(),
+        touch_phase: TouchPhase::Moved,
+    });
+    cx.run_until_parked();
+    cx.simulate_mouse_up(middle, MouseButton::Left, Modifiers::none());
+
+    assert!(in_sight(&code, cx).start > 0);
+    assert!(lines(cx) > before, "{before} lines, then {}", lines(cx));
+}

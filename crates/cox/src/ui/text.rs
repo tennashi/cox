@@ -446,6 +446,12 @@ impl Reading {
         self.selecting = self.selection.is_some();
     }
 
+    /// Whether the button that went down on the text is held, selecting.
+    #[must_use]
+    pub fn selecting(&self) -> bool {
+        self.selecting
+    }
+
     /// The mouse moved to `position`: answers whether that changed what is
     /// selected.
     pub fn drag(&mut self, position: Point<Pixels>) -> bool {

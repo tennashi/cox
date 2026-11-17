@@ -47,13 +47,13 @@ use cox_core::goal;
 use cox_core::tabs::KeptTabs;
 use gpui::{
     AnyView, App, Bounds, Context, Entity, FocusHandle, Focusable, FontWeight, KeyBinding,
-    KeyDownEvent, ListAlignment, ListOffset, ListState, MouseButton, MouseDownEvent,
-    MouseMoveEvent, MouseUpEvent, Pixels, Point, Subscription, Window, actions, div, list,
-    prelude::*, px, relative, rgb,
+    KeyDownEvent, ListAlignment, ListOffset, ListState, MouseButton, MouseDownEvent, MouseUpEvent,
+    Pixels, Point, Subscription, Window, actions, div, list, prelude::*, px, relative, rgb,
 };
 
 use crate::chat::region::{self, AddRegionToChat, Described};
 use crate::stage::Stage;
+use crate::ui::drag::{self, Dragging, Drags};
 use crate::ui::icons::{Icon, icon};
 use crate::ui::input::{self, LineInput, Submitted};
 use crate::ui::selected::{self, Selected};
@@ -237,6 +237,8 @@ pub struct ChatView {
     open_link: OpenLink,
     /// The conversation's text, and what the human selects of it.
     reading: Reading,
+    /// A drag that selects in the conversation, while the button is held.
+    dragging: Dragging,
     /// The conversation, as it has the keyboard, for Vim's keys to move a
     /// cursor through it.
     reading_focus: FocusHandle,
@@ -319,6 +321,7 @@ impl ChatView {
             stage: None,
             open_link: Rc::new(|_, _, _| {}),
             reading: Reading::default(),
+            dragging: Dragging::default(),
             reading_focus: cx.focus_handle(),
             settle: None,
             wheeled,
@@ -704,13 +707,10 @@ impl ChatView {
         window.prevent_default();
         self.input.update(cx, LineInput::deselect);
         self.reading.press(event);
-        cx.notify();
-    }
-
-    fn mouse_move(&mut self, event: &MouseMoveEvent, _: &mut Window, cx: &mut Context<Self>) {
-        if self.reading.drag(event.position) {
-            cx.notify();
+        if self.reading.selecting() {
+            self.dragging.start(event.position);
         }
+        cx.notify();
     }
 
     /// The button came up: a click that selected nothing opens the link
@@ -863,12 +863,12 @@ impl ChatView {
             .size_full()
             .on_mouse_down(MouseButton::Left, cx.listener(Self::mouse_down))
             .on_mouse_down(MouseButton::Right, cx.listener(Self::offer_selection))
-            .on_mouse_move(cx.listener(Self::mouse_move))
             .on_mouse_up(MouseButton::Left, cx.listener(Self::mouse_up))
             .on_mouse_up_out(
                 MouseButton::Left,
                 cx.listener(|view, _, _, _| view.reading.stop()),
             )
+            .relative()
             .child(
                 list(
                     self.list.clone(),
@@ -878,6 +878,7 @@ impl ChatView {
             )
             .children(self.render_finding(cx))
             .children(self.render_settling(window, cx))
+            .children(drag::follow(&self.dragging, cx))
     }
 
     /// Draws the cursor of Vim's keys in the conversation while it has
@@ -1874,5 +1875,19 @@ impl Render for ChatView {
                     .min_h_0()
                     .child(self.render_conversation(window, cx)),
             )
+    }
+}
+
+impl Drags for ChatView {
+    fn dragging(&mut self) -> &mut Dragging {
+        &mut self.dragging
+    }
+
+    fn select_to(&mut self, position: Point<Pixels>, _: &mut Context<Self>) -> bool {
+        self.reading.drag(position)
+    }
+
+    fn scroll_by(&mut self, distance: Pixels, _: &mut Context<Self>) {
+        self.list.scroll_by(distance);
     }
 }

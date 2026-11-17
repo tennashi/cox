@@ -44,8 +44,8 @@ use cox_core::entry::Attachment;
 use cox_core::tabs::KeptTab;
 use gpui::{
     App, Bounds, ClipboardItem, Context, EntityInputHandler, FocusHandle, Focusable, IntoElement,
-    KeyBinding, KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels,
-    Point, ScrollDelta, ScrollWheelEvent, Subscription, Task, UTF16Selection, Window, div, point,
+    KeyBinding, KeyDownEvent, MouseButton, MouseDownEvent, MouseUpEvent, Pixels, Point,
+    ScrollDelta, ScrollWheelEvent, Subscription, Task, UTF16Selection, Window, div, point,
     prelude::*, px, rgb,
 };
 use tokio::sync::oneshot;
@@ -55,6 +55,7 @@ use self::keys::{key_bytes, pasted};
 use crate::chat::region::{self, Described};
 use crate::stage::tab::Shows;
 use crate::ui::Copy;
+use crate::ui::drag::{self, Dragging, Drags};
 use crate::ui::ellipsis::ellipsis;
 use crate::ui::input::Paste;
 use crate::ui::selected::{self, Selected};
@@ -115,6 +116,8 @@ pub struct Terminal {
     composing: Option<String>,
     /// Lines of a wheel scroll not scrolled yet.
     scrolling: f32,
+    /// A drag that selects, while the button is held.
+    dragging: Dragging,
     focus_handle: FocusHandle,
     /// Tells Vim's keys when the tab gets the keyboard, once drawn.
     focused: Option<Subscription>,
@@ -175,6 +178,7 @@ impl Terminal {
             answer,
             composing: None,
             scrolling: 0.,
+            dragging: Dragging::default(),
             focus_handle: cx.focus_handle(),
             focused: None,
             _held: held,
@@ -409,19 +413,7 @@ impl Terminal {
             _ => SelectionType::Simple,
         };
         self.term.lock().selection = Some(Selection::new(kind, cell, side));
-        cx.notify();
-    }
-
-    fn mouse_move(&mut self, event: &MouseMoveEvent, _: &mut Window, cx: &mut Context<Self>) {
-        if event.pressed_button != Some(MouseButton::Left) {
-            return;
-        }
-        let Some((cell, side)) = self.cell_at(event.position) else {
-            return;
-        };
-        if let Some(selection) = self.term.lock().selection.as_mut() {
-            selection.update(cell, side);
-        }
+        self.dragging.start(event.position);
         cx.notify();
     }
 
@@ -811,7 +803,6 @@ impl Render for Terminal {
                             }
                         }),
                     )
-                    .on_mouse_move(cx.listener(Self::mouse_move))
                     .on_mouse_up(MouseButton::Left, cx.listener(Self::mouse_up))
                     .on_scroll_wheel(cx.listener(Self::scroll))
                     .cursor_text()
@@ -821,7 +812,47 @@ impl Render for Terminal {
                     .child(region::mark({
                         let terminal = cx.weak_entity();
                         move |_, over, cx| terminal.upgrade()?.read(cx).described(over)
-                    })),
+                    }))
+                    .children(drag::follow(&self.dragging, cx)),
             )
+    }
+}
+
+impl Drags for Terminal {
+    fn dragging(&mut self) -> &mut Dragging {
+        &mut self.dragging
+    }
+
+    fn select_to(&mut self, position: Point<Pixels>, _: &mut Context<Self>) -> bool {
+        let Some((cell, side)) = self.cell_at(position) else {
+            return false;
+        };
+        let mut term = self.term.lock();
+        let was = term
+            .selection
+            .as_ref()
+            .and_then(|selection| selection.to_range(&term));
+        let Some(selection) = term.selection.as_mut() else {
+            return false;
+        };
+        selection.update(cell, side);
+        term.selection
+            .as_ref()
+            .and_then(|selection| selection.to_range(&term))
+            != was
+    }
+
+    fn scroll_by(&mut self, distance: Pixels, _: &mut Context<Self>) {
+        let line = self.laid.map_or(px(START_CELL.1), |laid| laid.cell.height);
+        let mut term = self.term.lock();
+        // A full-screen program, such as a pager, keeps nothing that
+        // scrolled off.
+        if term.mode().contains(TermMode::ALT_SCREEN) {
+            return;
+        }
+        self.scrolling -= distance / line;
+        let lines = self.scrolling.trunc();
+        self.scrolling -= lines;
+        term.scroll_display(Scroll::Delta(whole_lines(lines)));
     }
 }

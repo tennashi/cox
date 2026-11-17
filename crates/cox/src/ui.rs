@@ -16,10 +16,13 @@
 //! - [`selected`] is what every part does alike with what the human
 //!   selects in it: copies, translates, or hands it to the chat shown.
 //! - [`screen`] captures what the screen shows of the window.
+//! - [`drag`] scrolls a part as a drag that selects in it goes past its
+//!   edge.
 
 pub mod button;
 pub mod composing;
 pub mod diagram;
+pub mod drag;
 pub mod ellipsis;
 pub mod icons;
 pub mod input;
