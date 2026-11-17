@@ -292,6 +292,9 @@ fn row(chat: &Chat, workspace: &Workspace) -> String {
     if chat.is_unread() {
         row.push_str(", unread");
     }
+    if chat.is_resolved() {
+        row.push_str(", resolved");
+    }
     if chat.goal().is_some() {
         row.push_str(", goal");
     }

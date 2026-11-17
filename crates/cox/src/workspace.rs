@@ -26,9 +26,11 @@
 //! The panel folds to the window's right edge, where a dot for each chat
 //! stays, which shows it. The menu of the right button on a chat renames
 //! it, as a double click on the head does, sets or clears its goal, ends
-//! a sketch (see [`coxd::chat::sketch`]), or archives it: an archived
-//! chat leaves the list for "Archived" at its foot, from where a click
-//! brings it back.
+//! a sketch (see [`coxd::chat::sketch`]), marks it done or reopens it,
+//! or archives it. A chat marked done folds away under "Resolved" at the
+//! end of the list, its agent closed, until it is reopened or something
+//! arrives in it (see [`coxd::daemon`]); an archived chat leaves the list
+//! for "Archived" at its foot, from where a click brings it back.
 //!
 //! The gear at the foot of the rail opens the settings screen over the
 //! window (see [`crate::settings::view`]), where the human sets Cox's
@@ -47,7 +49,7 @@ use std::sync::Arc;
 
 use cox_core::goal::Goal;
 use cox_core::list::List;
-use cox_core::store::{ChatId, Named, ProjectId};
+use cox_core::store::{ChatId, Named, ProjectId, Resolved};
 use gpui::{
     App, Context, Entity, FocusHandle, Focusable, Image, ImageFormat, KeyBinding,
     PathPromptOptions, Pixels, Point, SharedString, Subscription, Task, Window, actions,
@@ -269,6 +271,9 @@ pub struct Chat {
     pulls: Vec<PullRow>,
     /// What its agent spent, once it told any of it.
     spent: Option<Spent>,
+    /// When it was marked done, and by whom, while it is: the list folds
+    /// it away under "Resolved" at its end.
+    resolved: Option<Resolved>,
     /// Its view, once the window showed it, or something asked of its
     /// stage.
     view: Option<Entity<ChatView>>,
@@ -296,6 +301,7 @@ impl Chat {
             background,
             pulls,
             spent,
+            resolved,
         } = row;
         Self {
             key,
@@ -316,6 +322,7 @@ impl Chat {
             background,
             pulls,
             spent,
+            resolved,
             view,
         }
     }
@@ -389,6 +396,12 @@ impl Chat {
         self.unread
     }
 
+    /// Whether it is marked done.
+    #[must_use]
+    pub fn is_resolved(&self) -> bool {
+        self.resolved.is_some()
+    }
+
     /// What it works until, if the human set a goal.
     #[must_use]
     pub fn goal(&self) -> Option<&Goal> {
@@ -450,6 +463,9 @@ pub struct Workspace {
     /// Whether the archived chats are open, at the foot of the list of
     /// chats.
     archived_open: bool,
+    /// Whether the chats marked done are open, at the end of the list of
+    /// chats, before "Archived".
+    resolved_open: bool,
     /// Whether the list of chats is open, at the head of the panel.
     switching: bool,
     /// Whether the panel of the chat is folded to the window's right
@@ -593,6 +609,7 @@ impl Workspace {
             chats: List::new(),
             archived: Vec::new(),
             archived_open: false,
+            resolved_open: false,
             switching: false,
             folded: false,
             chosen: 0,
@@ -1446,8 +1463,9 @@ impl Workspace {
             chats: self
                 .chats
                 .iter()
-                .chain(&self.archived)
-                .map(|chat| crate::stage::activity::Chat {
+                .map(|chat| (chat, false))
+                .chain(self.archived.iter().map(|chat| (chat, true)))
+                .map(|(chat, archived)| crate::stage::activity::Chat {
                     key: chat.key,
                     name: chat.name.to_string(),
                     cwd: self.cwd_of(chat),
@@ -1466,6 +1484,8 @@ impl Workspace {
                     kept: chat.kept,
                     pulls: chat.pulls.clone(),
                     spent: chat.spent.clone(),
+                    resolved: chat.is_resolved(),
+                    archived,
                 })
                 .collect(),
             projects: self
@@ -1477,16 +1497,7 @@ impl Workspace {
             home: self.projects[0].folder.clone(),
             github: self.github.clone(),
         });
-        let count = self
-            .chats
-            .iter()
-            .chain(&self.archived)
-            .filter(|chat| {
-                chat.unread
-                    || chat.state == State::Asking
-                    || chat.pulls.iter().any(|row| row.unseen.is_some())
-            })
-            .count();
+        let count = self.rings().count();
         if count != self.badged {
             self.badged = count;
             if let Some(notices) = cx.try_global::<AppNotices>() {
@@ -1764,6 +1775,19 @@ impl Workspace {
                 archived: false,
             });
         }
+    }
+
+    /// Marks the chat at `index` done, which closes its agent, its turn
+    /// stopped first, or reopens it, as `resolved` says.
+    pub fn resolve(&mut self, index: usize, resolved: bool, cx: &mut Context<Self>) {
+        self.menu = None;
+        if let Some(chat) = self.chats.get(index) {
+            self.tell(ToDaemon::Resolve {
+                key: chat.key,
+                resolved,
+            });
+        }
+        cx.notify();
     }
 
     /// Shows the chat `step` places along the list, going round.

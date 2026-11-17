@@ -237,6 +237,13 @@ impl Workspace {
                 Some(index) => self.edit_sketch(index, window, cx),
                 None => self.say("No chat is shown", cx),
             },
+            Does::Resolve => match shown {
+                Some(index) => {
+                    let resolved = self.chats[index].is_resolved();
+                    self.resolve(index, !resolved, cx);
+                }
+                None => self.say("No chat is shown", cx),
+            },
             Does::Chat => match self.fitting(Region::List, args, |index, workspace| {
                 workspace.chats[index].name()
             }) {
@@ -278,8 +285,9 @@ impl Workspace {
 
     /// The rows of the part `region` says, by their indices among the
     /// projects or the chats: the projects on the rail, or the chats of
-    /// the project chosen.
-    fn rows(&self, region: Region) -> Vec<usize> {
+    /// the project chosen, those marked done after the others, while
+    /// "Resolved" is open.
+    pub(super) fn rows(&self, region: Region) -> Vec<usize> {
         match region {
             Region::Rail => self
                 .projects
@@ -288,13 +296,19 @@ impl Workspace {
                 .filter(|(_, project)| !project.archived && !project.deleted)
                 .map(|(index, _)| index)
                 .collect(),
-            Region::List => self
-                .chats
-                .iter()
-                .enumerate()
-                .filter(|(_, chat)| chat.project == self.chosen)
-                .map(|(index, _)| index)
-                .collect(),
+            Region::List => {
+                let (done, open): (Vec<(usize, &super::Chat)>, Vec<_>) = self
+                    .chats
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, chat)| chat.project == self.chosen)
+                    .partition(|(_, chat)| chat.is_resolved());
+                let done = done.into_iter().filter(|_| self.resolved_open);
+                open.into_iter()
+                    .chain(done)
+                    .map(|(index, _)| index)
+                    .collect()
+            }
             _ => Vec::new(),
         }
     }

@@ -184,6 +184,17 @@ impl Daemon {
             ("outcome", outcome),
             ("failed", &failed),
         ];
+        // CI that ended arrives in a chat done, which reopens it.
+        let done: Vec<u64> = self
+            .chats
+            .iter()
+            .chain(&self.archived)
+            .filter(|slot| slot.resolved.is_some() && slot.pulls.opened.contains(pull))
+            .map(|slot| slot.key)
+            .collect();
+        for key in done {
+            self.reopen(key);
+        }
         let shown = self.shown;
         let mut news = Vec::new();
         for slot in self.chats.iter_mut().chain(&mut self.archived) {

@@ -626,6 +626,13 @@ impl Conversation {
         self.checks = None;
     }
 
+    /// Closes the conversation without a note, as its agent closes once
+    /// the chat is marked done: what the agent said last stays its last.
+    pub fn rest(&mut self) {
+        self.state = State::Closed;
+        self.checks = None;
+    }
+
     /// Closes the conversation as the human switches it from the agent
     /// named `from` to the one named `to`, which goes on from it. The
     /// settings and the commands were of the agent before.
@@ -718,6 +725,19 @@ impl Conversation {
         }
         self.push(Entry::Merge);
         self.told(text)
+    }
+
+    /// Whether the last line the agent was sent asks it to merge what it
+    /// made (see [`Self::merge`]).
+    #[must_use]
+    pub fn merging(&self) -> bool {
+        let mut before = self
+            .entries
+            .iter()
+            .rev()
+            .skip_while(|entry| !matches!(entry, Entry::Human(_) | Entry::Cox(_)))
+            .skip(1);
+        matches!(before.next(), Some(Entry::Merge))
     }
 
     /// Starts a turn on `text`, shown as `entry` makes it, when the agent
@@ -2245,6 +2265,7 @@ mod tests {
     fn asks_to_merge_once_the_turn_ends() {
         let mut conversation = Conversation::new();
         conversation.submit("fix it");
+        assert!(!conversation.merging());
         assert_eq!(conversation.merge("Merge it."), None);
         conversation.apply(AgentEvent::TurnEnded(StopReason::EndTurn));
 
@@ -2256,6 +2277,7 @@ mod tests {
             [Entry::Merge, Entry::Cox("Merge it.".to_owned())]
         );
         assert_eq!(conversation.state(), State::Busy);
+        assert!(conversation.merging());
     }
 
     #[test]

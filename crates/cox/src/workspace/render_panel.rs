@@ -14,6 +14,7 @@ use super::{
 use crate::ui::ellipsis::ellipsis;
 use crate::ui::icons::{Icon, icon};
 use crate::ui::{card, tip};
+use crate::vim::Region;
 use crate::vim::hints::{self, Hinted as _, Part};
 use coxd::chat::conversation::State;
 use coxd::daemon::wire::Background;
@@ -252,25 +253,28 @@ impl Workspace {
 
     /// The list of the chats of the project chosen, over the conversation
     /// while it is open, with the row that opens another chat in the
-    /// project, and "Archived" at its foot, if the human archived a chat.
+    /// project, then "Resolved", if a chat of it is marked done, and
+    /// "Archived" at its foot, if the human archived a chat.
     fn render_list(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let chosen = self.chosen;
         let folder = self.projects[chosen].folder.clone();
-        let chats = self
-            .chats
-            .iter()
-            .enumerate()
-            .filter(|(_, chat)| chat.project == chosen);
-        let picked = self.list.picked(chats.clone().count(), window);
-        let rows = chats
-            .enumerate()
-            .map(|(row, (index, chat))| {
-                self.render_row(index, chat, cx)
-                    .when(picked == Some(row), |row| {
-                        row.relative().child(crate::ui::picked(ROW_RADIUS))
-                    })
-            })
-            .collect::<Vec<_>>();
+        let listed = self.rows(Region::List);
+        let picked = self.list.picked(listed.len(), window);
+        let mut rows = Vec::new();
+        let mut done = Vec::new();
+        for (row, index) in listed.into_iter().enumerate() {
+            let chat = &self.chats[index];
+            let drawn = self
+                .render_row(index, chat, cx)
+                .when(picked == Some(row), |row| {
+                    row.relative().child(crate::ui::picked(ROW_RADIUS))
+                });
+            if chat.is_resolved() {
+                done.push(drawn.pl(px(24.)));
+            } else {
+                rows.push(drawn);
+            }
+        }
         div()
             .id("chats")
             .when(crate::vim::mode(cx).is_some(), |list| {
@@ -316,7 +320,60 @@ impl Workspace {
                         workspace.open(Some(folder.clone()), window, cx);
                     })),
             )
+            .children(self.render_resolved(done, cx))
             .children(self.render_archived(cx))
+    }
+
+    /// "Resolved", after the chats of the project chosen, if any of them
+    /// is marked done, and under it, while it is open, their `rows`.
+    fn render_resolved(
+        &self,
+        rows: Vec<Stateful<Div>>,
+        cx: &mut Context<Self>,
+    ) -> Option<impl IntoElement + use<>> {
+        let count = self
+            .chats
+            .iter()
+            .filter(|chat| chat.project == self.chosen && chat.is_resolved())
+            .count();
+        if count == 0 {
+            return None;
+        }
+        let open = self.resolved_open;
+        let button = div()
+            .id("resolved")
+            .debug_selector(|| "resolved".to_owned())
+            .flex_shrink_0()
+            .h(px(ROW_HEIGHT))
+            .px(px(12.))
+            .flex()
+            .items_center()
+            .gap_1()
+            .rounded(px(ROW_RADIUS))
+            .text_size(px(13.))
+            .text_color(rgb(FAINT))
+            .cursor_pointer()
+            .hover(|style| style.bg(rgb(HOVER)).text_color(rgb(FOREGROUND)))
+            .child(format!("Resolved ({count})"))
+            .child(if open { "▴" } else { "▾" })
+            .on_hint_click(cx.listener(|workspace, _, window, cx| {
+                workspace.resolved_open = !workspace.resolved_open;
+                window.focus(&workspace.focus_handle(cx));
+                cx.notify();
+            }));
+        Some(
+            div()
+                .flex_shrink_0()
+                .flex()
+                .flex_col()
+                .gap(px(2.))
+                .mt(px(4.))
+                .pt(px(4.))
+                .border_t_1()
+                .border_color(rgb(BORDER))
+                .child(button)
+                .children(rows),
+        )
     }
 
     /// The row of the chat at `index` in the list, which numbers its chats
@@ -615,6 +672,7 @@ impl Workspace {
         let starts_sketch = self.starts_sketch(index);
         let saves_to_wiki = self.saves_to_wiki(index);
         let merges = self.merges(index);
+        let resolved = self.chats.get(index).is_some_and(super::Chat::is_resolved);
         let item = |id: &'static str, label: &'static str| crate::ui::menu::item(id, label, "");
         let menu = crate::ui::menu::menu()
             .min_w(px(160.))
@@ -661,6 +719,16 @@ impl Workspace {
                     }),
                 )
             }))
+            .map(|menu| {
+                let (id, label) = if resolved {
+                    ("reopen-chat", "Reopen")
+                } else {
+                    ("resolve-chat", "Resolve")
+                };
+                menu.child(item(id, label).on_hint_click(
+                    cx.listener(move |workspace, _, _, cx| workspace.resolve(index, !resolved, cx)),
+                ))
+            })
             .child(item("archive-chat", "Archive").on_hint_click(
                 cx.listener(move |workspace, _, window, cx| workspace.archive(index, window, cx)),
             ));

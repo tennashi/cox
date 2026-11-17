@@ -68,6 +68,16 @@ impl Wait {
     }
 }
 
+impl Wait {
+    /// Whether a chat that waits as `wait`, `resolved` or not, `archived`
+    /// or not, rings the bell, and how: one marked done does not, and one
+    /// archived only while its agent asks.
+    fn rings(wait: Option<Self>, resolved: bool, archived: bool) -> Option<Self> {
+        let wait = wait.filter(|_| !resolved)?;
+        (!archived || wait == Self::Asks).then_some(wait)
+    }
+}
+
 /// Those of `chats` that wait, each with how, the more pressing first,
 /// and each kind in the order given.
 fn in_order<T>(chats: impl IntoIterator<Item = (T, Option<Wait>)>) -> Vec<(T, Wait)> {
@@ -132,18 +142,31 @@ impl Chat {
 }
 
 impl Workspace {
-    /// The chats that wait for the human, but the one shown, archived ones
-    /// among them, each with how, those that ask first, each kind in the
-    /// order of the list.
+    /// The chats that wait for the human, but the one shown, each with
+    /// how, those that ask first, each kind in the order of the list (see
+    /// [`Self::rings`]).
     #[must_use]
     pub fn waits(&self) -> Vec<(&Chat, Wait)> {
         let shown = self.shown().map(Chat::key);
         in_order(
-            self.chats
-                .iter()
-                .chain(&self.archived)
-                .map(|chat| (chat, chat.wait().filter(|_| Some(chat.key) != shown))),
+            self.rings()
+                .map(|(chat, wait)| (chat, (Some(chat.key) != shown).then_some(wait))),
         )
+    }
+
+    /// The chats that wait for the human, as the bell and the app's icon
+    /// count them, each with how, in the order of the list: an archived
+    /// one only while its agent asks them, which nothing else would show
+    /// them, and one marked done never.
+    pub(super) fn rings(&self) -> impl Iterator<Item = (&Chat, Wait)> {
+        let listed = self.chats.iter().map(|chat| (chat, false));
+        let archived = self.archived.iter().map(|chat| (chat, true));
+        listed.chain(archived).filter_map(|(chat, archived)| {
+            Some((
+                chat,
+                Wait::rings(chat.wait(), chat.is_resolved(), archived)?,
+            ))
+        })
     }
 
     /// Whether the list of what waits for the human is open.
@@ -440,6 +463,19 @@ mod tests {
         assert_eq!(Wait::of(State::Idle, false, true), Some(Wait::Checked));
         assert_eq!(Wait::of(State::Idle, false, false), None);
         assert_eq!(Wait::of(State::Busy, false, false), None);
+    }
+
+    #[test]
+    fn a_chat_marked_done_never_rings_and_one_archived_only_while_it_asks() {
+        for wait in [Wait::Asks, Wait::Unread, Wait::Checked] {
+            assert_eq!(Wait::rings(Some(wait), false, false), Some(wait));
+            assert_eq!(Wait::rings(Some(wait), true, false), None, "{wait:?}");
+            assert_eq!(Wait::rings(Some(wait), true, true), None, "{wait:?}");
+        }
+        assert_eq!(Wait::rings(Some(Wait::Asks), false, true), Some(Wait::Asks));
+        assert_eq!(Wait::rings(Some(Wait::Unread), false, true), None);
+        assert_eq!(Wait::rings(Some(Wait::Checked), false, true), None);
+        assert_eq!(Wait::rings(None, false, false), None);
     }
 
     #[test]

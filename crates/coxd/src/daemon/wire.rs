@@ -9,7 +9,7 @@ use std::time::SystemTime;
 
 use cox_core::entry::Attachment;
 use cox_core::goal::Goal;
-use cox_core::store::{ChatId, Named, ProjectId};
+use cox_core::store::{ChatId, Named, ProjectId, Resolved};
 use cox_core::tabs::{KeptTabs, Lines};
 use serde::{Deserialize, Serialize};
 
@@ -93,6 +93,10 @@ pub struct ChatRow {
     /// What its agent spent, once it told any of it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub spent: Option<Spent>,
+    /// When it was marked done, and by whom, while it is: the list folds
+    /// it away at its end.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolved: Option<Resolved>,
 }
 
 /// A pull request a chat's agent opened, as the window shows it.
@@ -497,6 +501,9 @@ pub enum ToDaemon {
     Rename { key: u64, name: String },
     /// The human put the chat `key` away, or brought it back.
     Archive { key: u64, archived: bool },
+    /// The human marked the chat `key` done, which closes its agent, or
+    /// reopened it.
+    Resolve { key: u64, resolved: bool },
     /// The human asked the agent of the chat `key` to keep what it
     /// learned in the wiki.
     SaveToWiki { key: u64 },
@@ -660,10 +667,12 @@ mod tests {
             background: Vec::new(),
             pulls: Vec::new(),
             spent: None,
+            resolved: None,
         };
         let line = serde_json::to_string(&row).unwrap();
         assert!(!line.contains("background"), "{line}");
         assert!(!line.contains("pulls"), "{line}");
+        assert!(!line.contains("resolved"), "{line}");
         assert_eq!(serde_json::from_str::<ChatRow>(&line).unwrap(), row);
     }
 

@@ -34,6 +34,7 @@ pub mod process;
 mod project;
 mod pulls;
 pub mod push;
+mod resolve;
 mod sketches;
 pub mod wire;
 
@@ -47,7 +48,7 @@ use std::time::Instant;
 
 use cox_core::entry::Attachment;
 use cox_core::goal::Goal;
-use cox_core::store::{ChatId, Named, ProjectId, Record, Store};
+use cox_core::store::{ChatId, Named, ProjectId, Record, Resolved, ResolvedBy, Store};
 use cox_core::tabs::{KeptTab, KeptTabs};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use tokio::sync::oneshot;
@@ -457,6 +458,9 @@ struct Slot {
     /// What its agent spent, as it was kept, until the chat is read: its
     /// conversation holds it from then.
     spent: Option<Spent>,
+    /// When it was marked done, and by whom, while it is (see
+    /// [`resolve`]).
+    resolved: Option<Resolved>,
     /// The chat, once it was read or opened in this run.
     chat: Option<Chat>,
 }
@@ -532,6 +536,7 @@ impl Slot {
                 Some(chat) => chat.conversation().spent().cloned(),
                 None => self.spent.clone(),
             },
+            resolved: self.resolved,
         }
     }
 }
@@ -838,6 +843,7 @@ impl Daemon {
                         })
                         .ok()
                 }),
+                resolved: chat.resolved,
                 chat: None,
             };
             if chat.archived {
@@ -1371,6 +1377,7 @@ impl Daemon {
             ending: None,
             pulls: pulls::Pulls::default(),
             spent: None,
+            resolved: None,
             chat: Some(chat),
         });
         // Its triggers run on its opening once its agent has started.
@@ -1606,6 +1613,13 @@ impl Daemon {
                 }
             }
             ToDaemon::Archive { key, archived } => self.archive(key, archived),
+            ToDaemon::Resolve { key, resolved } => {
+                if resolved {
+                    self.resolve(key, ResolvedBy::Human);
+                } else {
+                    self.reopen(key);
+                }
+            }
             ToDaemon::SaveToWiki { key } => {
                 if self.save_to_wiki(key) {
                     self.reveals.push(key);
@@ -1791,6 +1805,7 @@ impl Daemon {
         if text.trim().is_empty() {
             return;
         }
+        self.reopen(key);
         if let Some(slot) = self.slot_mut(key) {
             slot.whose = Whose::Human;
         }
@@ -1815,6 +1830,7 @@ impl Daemon {
     /// Sends `text` to the agent of the chat `key` in the human's place,
     /// starting it again first if it is closed and can be.
     fn go_on(&mut self, key: u64, text: &str) {
+        self.reopen(key);
         self.start_again(key);
         if let Some(chat) = self.chat(key) {
             chat.told(text);
@@ -2418,6 +2434,7 @@ impl Daemon {
             .is_some_and(|slot| !slot.at_work(Instant::now()) && merges(slot.setup.as_ref()));
         if merges {
             let line = workflow::CLOSE_MERGE.say(&[]);
+            self.reopen(key);
             self.start_again(key);
             if let Some(chat) = self.chat(key) {
                 chat.merge(&line);
@@ -2441,6 +2458,8 @@ impl Daemon {
             answer.send(Err(format!("no chat {key}"))).ok();
             return;
         }
+        // Asked again, it is not done.
+        self.reopen(key);
         let Some(chat) = self.chat(key) else {
             answer.send(Ok(Waited::default())).ok();
             return;
@@ -2508,10 +2527,15 @@ impl Daemon {
     }
 
     /// Marks the report of the chat `key` heard by the agent that opened
-    /// it, so that Cox does not tell it again.
+    /// it, so that Cox does not tell it again, and the chat done, once
+    /// its report reached that agent and nothing of it runs: a report of
+    /// CI that ended leaves it open, as CI ending reopened it.
     /// What it heard of what the chat runs in the background, it hears
     /// again once that ended (see [`Behind`]).
     fn heard(&mut self, key: u64) {
+        let ci = self
+            .slot(key)
+            .is_some_and(|slot| !slot.pulls.told.is_empty());
         let behind = if self
             .chat(key)
             .is_some_and(|chat| !chat.background().is_empty())
@@ -2520,6 +2544,7 @@ impl Daemon {
         } else {
             Behind::Untold
         };
+        let mut done = false;
         if let Some(Slot {
             whose: Whose::Agent { report, .. },
             behind: heard,
@@ -2528,8 +2553,16 @@ impl Daemon {
         {
             if *report == Report::Pending {
                 *report = Report::Heard;
+                done = behind == Behind::Untold && !ci;
             }
             *heard = behind;
+        }
+        if done
+            && self
+                .slot(key)
+                .is_some_and(|slot| !slot.at_work(Instant::now()))
+        {
+            self.resolve(key, ResolvedBy::Agent);
         }
         if let Some(
             slot @ Slot {
@@ -2619,7 +2652,7 @@ impl Daemon {
                 continue;
             }
             slot.whose = Whose::Human;
-            if report != Report::Pending {
+            if report != Report::Pending || slot.resolved.is_some() {
                 continue;
             }
             if shown != Some(slot.key) {
@@ -2918,7 +2951,7 @@ impl Daemon {
     fn review(&mut self) -> bool {
         let mut news = Vec::new();
         let mut stands = Vec::new();
-        let mut ends = Vec::new();
+        let (mut ends, mut turns) = (Vec::new(), Vec::new());
         let store = Rc::clone(&self.store);
         let shown = self.shown;
         for slot in self.chats.iter_mut().chain(&mut self.archived) {
@@ -2927,12 +2960,15 @@ impl Daemon {
             };
             let conversation = chat.conversation();
             let state = conversation.state();
+            let turned = resolve::Turned::of(slot, conversation);
+            let quiet = slot.resolved.is_some() || turned == Some(resolve::Turned::Merged);
+            turns.extend(turned.map(|turned| (slot.key, turned)));
             let ended = working(slot.state) && !working(state) && slot.whose == Whose::Human;
             if let Whose::Agent { report, .. } = &mut slot.whose {
                 let settled = chat.background_settled();
                 (*report, slot.behind) = report.as_it_goes(slot.state, state, slot.behind, settled);
             }
-            if ended && shown != Some(slot.key) {
+            if ended && !quiet && shown != Some(slot.key) {
                 slot.unread = true;
             }
             // A permission request is news once what its triggers gather
@@ -2983,7 +3019,7 @@ impl Daemon {
                     slot.name_as(&name, named, &store);
                 }
             }
-            if let Some(body) = told {
+            if let Some(body) = told.filter(|_| !quiet) {
                 news.push(FromDaemon::News {
                     key: slot.key,
                     name: slot.name.clone(),
@@ -2999,6 +3035,7 @@ impl Daemon {
         for message in news {
             self.tell_news(message);
         }
+        self.turned(turns);
         for (key, stands) in stands {
             let mut heard = false;
             for (_, answer) in self.waiting.extract_if(.., |(waited, _)| *waited == key) {
@@ -4478,6 +4515,300 @@ mod tests {
                 ["work"],
                 "heard already, so not told again"
             );
+        });
+    }
+
+    /// When the chat `key` was marked done, and by whom, while it is.
+    fn resolved(daemon: &Daemon, key: u64) -> Option<ResolvedBy> {
+        daemon
+            .slot(key)
+            .unwrap()
+            .resolved
+            .map(|resolved| resolved.by)
+    }
+
+    /// Whether the agent of the chat `key` runs.
+    fn runs(daemon: &mut Daemon, key: u64) -> bool {
+        daemon.chat(key).unwrap().is_open()
+    }
+
+    /// The lines the last agent started was sent.
+    fn last_prompts(agents: &PlayedAgents) -> Vec<String> {
+        let mut agents = agents.0.borrow_mut();
+        let last = agents.last_mut().unwrap();
+        let mut prompts = Vec::new();
+        while let Ok(command) = last.commands.try_recv() {
+            if let crate::agent::Command::Prompt(prompt) = command {
+                prompts.push(prompt.text);
+            }
+        }
+        prompts
+    }
+
+    #[test]
+    fn a_chat_marked_done_is_kept_so_once_and_reopened_once() {
+        let home = TempDir::new();
+        let (store, chat) = one_chat(&home);
+        let (mut daemon, _told) = daemon_of(&store, &home);
+        let key = key_of(&mut daemon, chat);
+        daemon.slot_mut(key).unwrap().unread = true;
+
+        daemon.act(ToDaemon::Resolve {
+            key,
+            resolved: true,
+        });
+        let first = kept_chat(&store, chat).resolved.unwrap();
+        daemon.act(ToDaemon::Resolve {
+            key,
+            resolved: true,
+        });
+
+        assert_eq!(first.by, ResolvedBy::Human);
+        assert_eq!(kept_chat(&store, chat).resolved, Some(first), "marked once");
+        assert!(!daemon.slot(key).unwrap().unread);
+        let (mut again, _told) = daemon_of(&store, &home);
+        let key_again = key_of(&mut again, chat);
+        assert_eq!(
+            again.slot(key_again).unwrap().resolved,
+            Some(first),
+            "done past coxd starting again"
+        );
+
+        for _ in 0..2 {
+            daemon.act(ToDaemon::Resolve {
+                key,
+                resolved: false,
+            });
+            assert_eq!(kept_chat(&store, chat).resolved, None);
+            assert_eq!(resolved(&daemon, key), None);
+        }
+    }
+
+    #[test]
+    fn a_chat_marked_done_at_work_stops_closes_and_goes_on_with_the_next_line() {
+        on_daemon(async {
+            let mut chat = Opener::new(&[]).await;
+            submit(&mut chat.daemon, chat.key);
+            chat.pump().await;
+            assert_eq!(chat.prompts(), ["work"]);
+
+            chat.daemon.act(ToDaemon::Resolve {
+                key: chat.key,
+                resolved: true,
+            });
+            chat.pump().await;
+            let cancel =
+                std::iter::from_fn(|| chat.agents.0.borrow_mut()[0].commands.try_recv().ok())
+                    .any(|command| matches!(command, crate::agent::Command::Cancel));
+            assert!(cancel, "asked to stop");
+            assert_eq!(
+                chat.daemon.chat(chat.key).unwrap().conversation().state(),
+                State::Stopping
+            );
+
+            tells(
+                &chat.agent(None),
+                [AgentEvent::TurnEnded(cox_acp::StopReason::Cancelled)],
+            );
+            chat.pump().await;
+            assert!(!runs(&mut chat.daemon, chat.key), "closed once stopped");
+            assert!(!chat.daemon.slot(chat.key).unwrap().unread);
+
+            submit(&mut chat.daemon, chat.key);
+            chat.pump().await;
+            assert_eq!(resolved(&chat.daemon, chat.key), None, "a line reopens it");
+            assert_eq!(chat.agents.0.borrow().len(), 2, "its agent started again");
+            assert_eq!(last_prompts(&chat.agents), ["work"]);
+        });
+    }
+
+    #[test]
+    fn ci_that_ends_in_a_chat_marked_done_reopens_it() {
+        use crate::github::CheckState;
+        on_daemon(async {
+            let mut chat = Opener::new(&[]).await;
+            submit(&mut chat.daemon, chat.key);
+            chat.pump().await;
+            tells(
+                &chat.agent(None),
+                [
+                    opens_423(),
+                    AgentEvent::TurnEnded(cox_acp::StopReason::EndTurn),
+                ],
+            );
+            chat.pump().await;
+            chat.daemon.act(ToDaemon::Resolve {
+                key: chat.key,
+                resolved: true,
+            });
+            chat.pump().await;
+            assert!(!runs(&mut chat.daemon, chat.key));
+
+            let (pull, status) = pull_423();
+            let now = Instant::now();
+            assert_eq!(chat.daemon.due_pulls(now), std::slice::from_ref(&pull));
+            for state in [CheckState::Pending, CheckState::Failed, CheckState::Failed] {
+                chat.daemon.pulled(&pull, Ok(status(state)), now);
+                chat.pump().await;
+            }
+
+            assert_eq!(resolved(&chat.daemon, chat.key), None);
+            assert_eq!(last_prompts(&chat.agents), [FAILED_ON_423]);
+        });
+    }
+
+    #[test]
+    fn a_subagent_is_done_once_its_report_reached_its_opener_and_reopens_asked_again() {
+        on_daemon(async {
+            let mut opener = Opener::new(&["Look"]).await;
+            opener.prompts();
+            let look = opener.subagents[0];
+
+            opener.ends(0, "Found it.");
+            opener.pump().await;
+
+            assert!(opener.prompts()[0].starts_with(FOUND_IT));
+            assert_eq!(resolved(&opener.daemon, look), Some(ResolvedBy::Agent));
+            assert!(!runs(&mut opener.daemon, look), "its agent closed");
+            assert_eq!(resolved(&opener.daemon, opener.key), None);
+
+            let again = opener.wait(0).await.unwrap().unwrap();
+            assert_eq!(again.said.as_deref(), Some("Found it."));
+            assert_eq!(resolved(&opener.daemon, look), None, "asked again");
+        });
+    }
+
+    #[test]
+    fn a_subagent_at_work_in_the_background_is_done_only_once_that_ended_was_told() {
+        on_daemon(async {
+            let mut opener = Opener::new(&["Look"]).await;
+            opener.prompts();
+            let look = opener.subagents[0];
+            let task = |running| {
+                AgentEvent::Task(cox_acp::Task {
+                    id: "serve".to_owned(),
+                    running,
+                    started: running,
+                    name: Some("npm run dev".to_owned()),
+                    description: None,
+                    kind: Some("shell".to_owned()),
+                })
+            };
+            tells(&opener.agent(Some(0)), [task(true)]);
+            opener.ends(0, "Serving.");
+            opener.pump().await;
+            assert!(opener.prompts()[0].contains("still works in the background"));
+            assert_eq!(resolved(&opener.daemon, look), None);
+            tells(
+                &opener.agent(None),
+                [AgentEvent::TurnEnded(cox_acp::StopReason::EndTurn)],
+            );
+
+            tells(&opener.agent(Some(0)), [task(false)]);
+            opener.pump().await;
+            opener.daemon.hear(Internal::Settled { key: look });
+            opener.pump().await;
+            assert_eq!(
+                resolved(&opener.daemon, look),
+                Some(ResolvedBy::Agent),
+                "once what it ran ended was told"
+            );
+        });
+    }
+
+    #[test]
+    fn a_chat_whose_merge_ended_is_done() {
+        on_daemon(async {
+            let mut chat = Opener::new(&[]).await;
+            submit(&mut chat.daemon, chat.key);
+            chat.pump().await;
+            tells(
+                &chat.agent(None),
+                [AgentEvent::TurnEnded(cox_acp::StopReason::EndTurn)],
+            );
+            chat.pump().await;
+            assert_eq!(
+                resolved(&chat.daemon, chat.key),
+                None,
+                "a turn alone is not"
+            );
+
+            chat.daemon.act(ToDaemon::Merge { key: chat.key });
+            chat.pump().await;
+            tells(
+                &chat.agent(None),
+                [
+                    AgentEvent::ReplyText("Merged.".to_owned()),
+                    AgentEvent::TurnEnded(cox_acp::StopReason::EndTurn),
+                ],
+            );
+            chat.pump().await;
+
+            assert_eq!(resolved(&chat.daemon, chat.key), Some(ResolvedBy::Agent));
+            assert!(!chat.daemon.slot(chat.key).unwrap().unread);
+        });
+    }
+
+    #[test]
+    fn a_parent_marked_done_marks_its_subagents_done_but_those_at_work_or_asking() {
+        on_daemon(async {
+            let mut opener = Opener::new(&["Look", "Fix", "Ask"]).await;
+            submit(&mut opener.daemon, opener.key);
+            opener.pump().await;
+            opener.ends(0, "Found it.");
+            tells(
+                &opener.agent(Some(2)),
+                [AgentEvent::PermissionRequest {
+                    id: "rm".to_owned(),
+                    title: Some("rm -rf build".to_owned()),
+                    content: None,
+                    options: vec!["Allow".to_owned(), "Reject".to_owned()],
+                }],
+            );
+            opener.pump().await;
+            assert_eq!(
+                resolved(&opener.daemon, opener.subagents[0]),
+                None,
+                "unheard"
+            );
+
+            opener.daemon.act(ToDaemon::Resolve {
+                key: opener.key,
+                resolved: true,
+            });
+            opener.pump().await;
+
+            let done: Vec<Option<ResolvedBy>> = opener
+                .subagents
+                .iter()
+                .map(|&key| resolved(&opener.daemon, key))
+                .collect();
+            assert_eq!(done, [Some(ResolvedBy::Human), None, None]);
+        });
+    }
+
+    #[test]
+    fn a_report_that_arrives_in_a_parent_marked_done_reopens_it() {
+        on_daemon(async {
+            let mut opener = Opener::new(&["Look"]).await;
+            opener.prompts();
+            opener.daemon.act(ToDaemon::Resolve {
+                key: opener.key,
+                resolved: true,
+            });
+            opener.pump().await;
+            assert!(!runs(&mut opener.daemon, opener.key));
+            assert_eq!(
+                resolved(&opener.daemon, opener.subagents[0]),
+                None,
+                "at work"
+            );
+
+            opener.ends(0, "Found it.");
+            opener.pump().await;
+
+            assert_eq!(resolved(&opener.daemon, opener.key), None);
+            assert!(last_prompts(&opener.agents)[0].starts_with(FOUND_IT));
         });
     }
 }
