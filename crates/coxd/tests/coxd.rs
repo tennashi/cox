@@ -85,6 +85,23 @@ fn run_keeping(
     })
 }
 
+/// A window that does not wait, for coxd is of its build.
+struct OfThisBuild;
+
+impl client::Waiting for OfThisBuild {
+    fn waits(&mut self, _chats: Option<&[coxd::daemon::wire::AtWork]>) {
+        panic!("coxd is of the window's build");
+    }
+
+    fn chosen(&mut self, _within: std::time::Duration) -> Option<client::Choice> {
+        None
+    }
+
+    fn stopping(&mut self) {
+        panic!("coxd is of the window's build");
+    }
+}
+
 /// Reaches coxd on `socket`, which runs already, as a window given
 /// `home`, marking `gone` once coxd goes.
 fn reach(socket: &Path, home: &Path, gone: &Arc<AtomicBool>) -> anyhow::Result<Connected> {
@@ -94,7 +111,7 @@ fn reach(socket: &Path, home: &Path, gone: &Arc<AtomicBool>) -> anyhow::Result<C
         socket,
         &hello,
         &|| Err(std::io::Error::other("coxd runs already")),
-        &|| panic!("coxd is of the window's build"),
+        &mut OfThisBuild,
         move || gone.store(true, Ordering::SeqCst),
     )
 }

@@ -49,4 +49,5 @@ pub mod settings;
 pub mod stage;
 pub mod ui;
 pub mod vim;
+pub mod waiting;
 pub mod workspace;

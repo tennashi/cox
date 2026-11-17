@@ -716,7 +716,8 @@ impl Workspace {
             | FromDaemon::Welcome
             | FromDaemon::Taken
             | FromDaemon::Outdated
-            | FromDaemon::Busy => {}
+            | FromDaemon::Busy
+            | FromDaemon::AtWork(_) => {}
         }
     }
 

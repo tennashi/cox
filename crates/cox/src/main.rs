@@ -109,6 +109,7 @@ fn main() -> ExitCode {
         // A page of anyone's, read in a process of its own (see
         // `coxd::raw::page`), which keeps no file.
         Mode::ReadPage(url) => coxd::raw::page::run(&url),
+        Mode::Waiting { behind } => cox::waiting::run(behind),
         Mode::Usage => {
             println!("{}", app::USAGE);
             ExitCode::SUCCESS

@@ -80,6 +80,10 @@ pub enum Mode {
     /// The reader of the web page at the URL given, for `raw_keep`, as
     /// `cox --read-page <url>` (see [`coxd::raw::page`]).
     ReadPage(String),
+    /// The window that shows a window waiting for coxd, as `cox
+    /// [--behind] --waiting-for-coxd`, which that window starts (see
+    /// [`crate::waiting`]).
+    Waiting { behind: bool },
     /// The usage, as `cox --help`.
     Usage,
     /// The version of the build, as `cox --build-version`, for a window
@@ -145,6 +149,11 @@ impl Mode {
         }
         match settings.command.first().map(String::as_str) {
             Some("--help" | "-h") => return Self::Usage,
+            Some(crate::waiting::OPTION) => {
+                return Self::Waiting {
+                    behind: settings.behind,
+                };
+            }
             Some(crate::restart::BUILD_VERSION) => return Self::BuildVersion,
             _ => {}
         }
@@ -241,6 +250,7 @@ pub fn run(settings: Settings) -> ExitCode {
     let hello = coxd::daemon::wire::Hello::new(settings.home, settings.command, settings.asks);
     let data = settings.data;
     let behind = settings.behind;
+    let mut waiting = crate::waiting::Shown::new(behind);
     let connected = coxd::storage::path(coxd::storage::Kept::Daemon)
         .ok_or_else(|| anyhow::anyhow!("there is no place for coxd's socket"))
         .and_then(|socket| {
@@ -248,7 +258,7 @@ pub fn run(settings: Settings) -> ExitCode {
                 &socket,
                 &hello,
                 &|| start_daemon(data.as_deref()),
-                &tell_waiting,
+                &mut waiting,
                 // The window shows nothing once coxd is gone.
                 cox_core::quit::ask,
             )
@@ -259,12 +269,19 @@ pub fn run(settings: Settings) -> ExitCode {
         coxd,
     } = match connected {
         Ok(connected) => connected,
+        Err(error) if error.is::<coxd::daemon::client::Quit>() => {
+            tracing::info!("{error}");
+            return ExitCode::SUCCESS;
+        }
         Err(error) => {
             tracing::error!("{error:#}");
             eprintln!("cox: {error:#}");
+            waiting.failed(&format!("{error:#}"));
             return ExitCode::from(1);
         }
     };
+    // The waiting window, if it opened, closes.
+    drop(waiting);
     // CEF after coxd is started, which would hold what CEF opens
     // otherwise.
     let cef = cox_browser::start(profile);
@@ -305,30 +322,6 @@ pub fn run(settings: Settings) -> ExitCode {
             crate::inspect::start(window, devtools, inspected, cx);
         });
     ExitCode::SUCCESS
-}
-
-/// Tells the human why the window does not open yet: the coxd that runs
-/// the chats is to stop for this window, as it speaks otherwise or the
-/// human restarts it, but does only once none of its chats is at work.
-fn tell_waiting() {
-    const WAITING: &str = "coxd restarts for this window once none of its chats is at \
-                           work: the window opens then.";
-    tracing::warn!("{WAITING}");
-    eprintln!("cox: {WAITING}");
-    #[cfg(target_os = "macos")]
-    {
-        let shown = std::process::Command::new("osascript")
-            .arg("-e")
-            .arg(format!(
-                "display notification \"{WAITING}\" with title \"Cox\""
-            ))
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status();
-        if let Err(error) = shown {
-            tracing::error!("the human is not told: {error}");
-        }
-    }
 }
 
 /// Starts coxd, as this program run as `cox [--data <dir>] --daemon`,
@@ -505,7 +498,7 @@ fn open_window(opened: Opened, cx: &mut App) -> WindowHandle<Workspace> {
 
 /// Keeps Cox out of the Dock and the app switcher, as an accessory app.
 #[cfg(target_os = "macos")]
-fn no_dock_icon() {
+pub(crate) fn no_dock_icon() {
     use objc2_app_kit::{NSApplication, NSApplicationActivationPolicy};
     if let Some(main_thread) = objc2::MainThreadMarker::new() {
         NSApplication::sharedApplication(main_thread)
