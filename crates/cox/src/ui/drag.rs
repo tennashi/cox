@@ -29,6 +29,9 @@ const FASTEST: f32 = 40.;
 pub struct Dragging {
     /// Where the pointer is, in the window, while the button is held.
     pointer: Option<Point<Pixels>>,
+    /// Whether the pointer moved since the press: until it does, what the
+    /// press selected, such as a word on a double click, stays.
+    moved: bool,
     /// Where what scrolls shows, as the last frame drew it.
     bounds: Bounds<Pixels>,
     /// Whether the part scrolls a frame at a time, while the pointer is
@@ -40,6 +43,7 @@ impl Dragging {
     /// A press at `position` starts selecting.
     pub fn start(&mut self, position: Point<Pixels>) {
         self.pointer = Some(position);
+        self.moved = false;
     }
 
     /// Whether the button is held, selecting.
@@ -105,8 +109,13 @@ pub fn follow<V: Drags>(
                 window.on_mouse_event(move |event: &MouseUpEvent, phase, _, cx| {
                     if phase == DispatchPhase::Bubble && event.button == MouseButton::Left {
                         released.update(cx, |view, cx| {
-                            if view.dragging().pointer.is_some() {
+                            if view
+                                .dragging()
+                                .pointer
+                                .is_some_and(|at| at != event.position)
+                            {
                                 view.dragging().pointer = Some(event.position);
+                                view.dragging().moved = true;
                                 select(view, cx);
                             }
                             view.dragging().pointer = None;
@@ -126,10 +135,11 @@ pub fn follow<V: Drags>(
 /// The pointer moved to `position`, holding the button.
 fn move_to<V: Drags>(view: &mut V, position: Point<Pixels>, cx: &mut Context<V>) {
     let dragging = view.dragging();
-    if dragging.pointer.is_none() {
+    if dragging.pointer.is_none_or(|at| at == position) {
         return;
     }
     dragging.pointer = Some(position);
+    dragging.moved = true;
     let scrolls = speed(dragging.bounds, position.y) != px(0.) && !dragging.scrolling;
     select(view, cx);
     if scrolls {
@@ -167,7 +177,7 @@ fn move_to<V: Drags>(view: &mut V, position: Point<Pixels>, cx: &mut Context<V>)
 /// scrolls while it is past it.
 fn select<V: Drags>(view: &mut V, cx: &mut Context<V>) {
     let dragging = view.dragging();
-    let Some(pointer) = dragging.pointer else {
+    let Some(pointer) = dragging.pointer.filter(|_| dragging.moved) else {
         return;
     };
     if dragging.bounds.is_empty() {
