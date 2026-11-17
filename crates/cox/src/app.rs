@@ -34,15 +34,18 @@ use crate::ui::icons::Icons;
 use crate::workspace::Workspace;
 use cox_browser::Cef;
 use coxd::agents::Agents;
+use coxd::daemon::wire::Asks;
 
 actions!(cox, [Quit]);
 
 pub const USAGE: &str = "\
-Usage: cox [--stage <url>] [--home <dir>] [--data <dir>] [--behind] [<agent command> [args...]]
+Usage: cox [--stage <url>] [--home <dir>] [--data <dir>] [--behind]
+           [--after <pid>] [--restart-coxd | --restart-coxd-now] [<agent command> [args...]]
        cox [--data <dir>] --daemon
        cox [--data <dir>] --inspect [<tool> [<arguments>...]]
        cox [--data <dir>] --phone-link
-       cox --read-page <url>";
+       cox --read-page <url>
+       cox --build-version";
 
 /// What the command line says to be coxd, after `--data <dir>`.
 pub const DAEMON: &str = "--daemon";
@@ -79,6 +82,9 @@ pub enum Mode {
     ReadPage(String),
     /// The usage, as `cox --help`.
     Usage,
+    /// The version of the build, as `cox --build-version`, for a window
+    /// of another build to read (see [`crate::restart`]).
+    BuildVersion,
 }
 
 /// What the command line gives the app.
@@ -101,6 +107,12 @@ pub struct Settings {
     /// taking the keyboard, and on macOS without a Dock icon: for an agent
     /// that drives it with `--inspect` while the human works.
     pub behind: bool,
+    /// The process of the window this one restarts, as `--after <pid>`
+    /// says, which this one waits to have quit before it reaches coxd.
+    pub after: Option<u32>,
+    /// What the window asks of the coxd it comes to: to stop for it, as
+    /// `--restart-coxd` or `--restart-coxd-now` says, or to join it.
+    pub asks: Asks,
 }
 
 impl Mode {
@@ -131,11 +143,10 @@ impl Mode {
                 data: settings.data,
             };
         }
-        if matches!(
-            settings.command.first().map(String::as_str),
-            Some("--help" | "-h")
-        ) {
-            return Self::Usage;
+        match settings.command.first().map(String::as_str) {
+            Some("--help" | "-h") => return Self::Usage,
+            Some(crate::restart::BUILD_VERSION) => return Self::BuildVersion,
+            _ => {}
         }
         Self::App(settings)
     }
@@ -148,6 +159,8 @@ impl Settings {
         let mut home = None;
         let mut data = None;
         let mut behind = false;
+        let mut after = None;
+        let mut asks = Asks::Join;
         loop {
             match args.peek().map(String::as_str) {
                 Some("--stage") => {
@@ -166,6 +179,18 @@ impl Settings {
                     args.next();
                     behind = true;
                 }
+                Some(crate::restart::AFTER) => {
+                    args.next();
+                    after = args.next().and_then(|pid| pid.parse().ok()).or(after);
+                }
+                Some(crate::restart::RESTART_COXD) => {
+                    args.next();
+                    asks = Asks::Restart;
+                }
+                Some(crate::restart::RESTART_COXD_NOW) => {
+                    args.next();
+                    asks = Asks::RestartNow;
+                }
                 _ => break,
             }
         }
@@ -175,6 +200,8 @@ impl Settings {
             data,
             command: args.collect(),
             behind,
+            after,
+            asks,
         }
     }
 }
@@ -208,11 +235,10 @@ pub fn run(settings: Settings) -> ExitCode {
     coxd::translate::start(agents.clone());
     coxd::trigger::discuss::start(agents.clone());
     // 3. coxd, which runs the chats, in a process of its own.
-    let hello = coxd::daemon::wire::Hello::new(
-        settings.home,
-        settings.command,
-        coxd::daemon::wire::Asks::Join,
-    );
+    if let Some(pid) = settings.after {
+        crate::restart::wait_for(pid);
+    }
+    let hello = coxd::daemon::wire::Hello::new(settings.home, settings.command, settings.asks);
     let data = settings.data;
     let behind = settings.behind;
     let connected = coxd::storage::path(coxd::storage::Kept::Daemon)
@@ -228,7 +254,9 @@ pub fn run(settings: Settings) -> ExitCode {
             )
         });
     let coxd::daemon::client::Connected {
-        link, from_daemon, ..
+        link,
+        from_daemon,
+        coxd,
     } = match connected {
         Ok(connected) => connected,
         Err(error) => {
@@ -259,6 +287,7 @@ pub fn run(settings: Settings) -> ExitCode {
             cx.set_global(crate::settings::window::AppAgents(agents.clone()));
             serve_browser(&cef, cx);
             crate::busy::watch(cx);
+            crate::restart::watch(coxd, cx);
             quit_when_asked(cx);
             let inspected = cef.clone();
             shut_down_on_quit(cef, cx);
@@ -279,11 +308,11 @@ pub fn run(settings: Settings) -> ExitCode {
 }
 
 /// Tells the human why the window does not open yet: the coxd that runs
-/// the chats is of another build, which this window may not understand,
-/// and stops for this one only once none of its chats is at work.
+/// the chats is to stop for this window, as it speaks otherwise or the
+/// human restarts it, but does only once none of its chats is at work.
 fn tell_waiting() {
-    const WAITING: &str = "Another build of Cox runs the chats, and one of them is at \
-                           work: this window opens once none is, with this build.";
+    const WAITING: &str = "coxd restarts for this window once none of its chats is at \
+                           work: the window opens then.";
     tracing::warn!("{WAITING}");
     eprintln!("cox: {WAITING}");
     #[cfg(target_os = "macos")]
@@ -512,6 +541,8 @@ fn tell_of_chats(_window: WindowHandle<Workspace>, _cx: &mut App) {}
 mod tests {
     use std::path::PathBuf;
 
+    use coxd::daemon::wire::Asks;
+
     use super::{Mode, Settings};
 
     fn parse(words: &[&str]) -> Mode {
@@ -537,6 +568,8 @@ mod tests {
                 data: Some(PathBuf::from("/tmp/cox-data")),
                 command: vec!["node".to_owned(), "agent.mjs".to_owned()],
                 behind: false,
+                after: None,
+                asks: Asks::Join,
             })
         );
     }
@@ -584,8 +617,33 @@ mod tests {
                 data: None,
                 command: Vec::new(),
                 behind: false,
+                after: None,
+                asks: Asks::Join,
             })
         );
+    }
+
+    #[test]
+    fn a_window_that_restarts_another_waits_for_it_and_asks_coxd_as_told() {
+        match parse(&[
+            "--after",
+            "42",
+            "--restart-coxd-now",
+            "--data",
+            "/tmp/d",
+            "node",
+        ]) {
+            Mode::App(settings) => {
+                assert_eq!(settings.after, Some(42));
+                assert_eq!(settings.asks, Asks::RestartNow);
+                assert_eq!(settings.data, Some(PathBuf::from("/tmp/d")));
+                assert_eq!(settings.command, ["node"]);
+            }
+            mode => panic!("the app is not started: {mode:?}"),
+        }
+        assert_eq!(not_asked().after, None);
+        assert_eq!(not_asked().asks, Asks::Join);
+        assert_eq!(parse(&["--build-version"]), Mode::BuildVersion);
     }
 
     #[test]

@@ -24,7 +24,9 @@
 //! --phone-link` prints the link that pairs a phone with the page coxd
 //! serves it (see `coxd::daemon::phone`). Cox reads a web page
 //! for `raw_keep` as `cox --read-page <url>`, apart from itself (see
-//! `coxd::raw::page`). And on Linux, CEF runs
+//! `coxd::raw::page`). `cox --build-version` prints what a build is, for
+//! a window of another build to tell which restart runs it (see
+//! `cox::restart`). And on Linux, CEF runs
 //! `cox` for its helper processes, which `cox_browser` tells apart.
 
 use std::process::ExitCode;
@@ -109,6 +111,10 @@ fn main() -> ExitCode {
         Mode::ReadPage(url) => coxd::raw::page::run(&url),
         Mode::Usage => {
             println!("{}", app::USAGE);
+            ExitCode::SUCCESS
+        }
+        Mode::BuildVersion => {
+            cox::restart::print_version();
             ExitCode::SUCCESS
         }
     }

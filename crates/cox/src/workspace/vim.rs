@@ -256,6 +256,7 @@ impl Workspace {
                 Some(index) => self.choose(index, window, cx),
                 None => self.say(format!("No project fits {args}"), cx),
             },
+            Does::Restart(how) => self.restart(how, window, cx),
             Does::Help => {}
         }
     }

@@ -26,8 +26,9 @@ impl Workspace {
     /// which chooses it, marked when it is the one chosen, counting its
     /// chats that wait for the human, and with an arc running around it
     /// while one of them is at work (see [`super::at_work`]), and at its
-    /// foot the button that opens a folder, and the gear that opens the
-    /// settings.
+    /// foot the button that restarts Cox, while something waits for a
+    /// restart (see [`super::restarting`]), the button that opens a
+    /// folder, and the gear that opens the settings.
     pub(super) fn render_rail(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
         // Cox's own, a place of its own rather than a project, stands apart
         // from the projects under it, past a line.
@@ -75,6 +76,8 @@ impl Workspace {
             .child(self.render_waits_button(cx))
             .children(projects)
             .child(div().flex_1())
+            .children(self.render_restart_button(cx))
+            .children(self.render_restart_menu(cx))
             .children(self.render_archived_projects_button(cx))
             .child(
                 div()
