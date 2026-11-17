@@ -70,7 +70,7 @@ use crate::terminal::run_unseen;
 use crate::trigger::By;
 use crate::workflow;
 use chat::{Again, Chat, Task, spawn};
-use wire::{ChatRow, FromDaemon, Hello, Listing, ProjectRow, StageAsk, ToDaemon};
+use wire::{AtWork, ChatRow, FromDaemon, Hello, Listing, ProjectRow, StageAsk, ToDaemon};
 
 /// What the project of chats with no folder is called.
 const COX: &str = "Cox";
@@ -2129,6 +2129,9 @@ impl Daemon {
             FromDaemon::Joined(_) => {}
             FromDaemon::Busy => {
                 tracing::warn!("a window that coxd is to stop for waits, since a chat is at work");
+                if hello.reads_at_work {
+                    return FromDaemon::AtWork(self.chats_at_work(now));
+                }
                 return answer;
             }
             _ => return answer,
@@ -2153,6 +2156,24 @@ impl Daemon {
         self.listed = None;
         self.shown = None;
         answer
+    }
+
+    /// The chats at work at `now`, as a window waiting for coxd to stop
+    /// tells the human.
+    fn chats_at_work(&self, now: Instant) -> Vec<AtWork> {
+        self.chats
+            .iter()
+            .chain(&self.archived)
+            .filter(|slot| slot.at_work(now))
+            .map(|slot| AtWork {
+                project: self
+                    .projects
+                    .get(slot.project)
+                    .filter(|project| project.id.is_some())
+                    .map(|project| project.name.clone()),
+                chat: slot.name.clone(),
+            })
+            .collect()
     }
 
     /// Lets the window go: what it was asked to run it does not, and the
@@ -3780,6 +3801,44 @@ mod tests {
             answers,
             [FromDaemon::Busy, FromDaemon::Joined(wire::VERSION)]
         );
+    }
+
+    #[test]
+    fn a_window_that_reads_it_hears_which_chats_keep_coxd_at_work() {
+        on_daemon(async {
+            let home = TempDir::new();
+            storage::keep_on_this_thread(Some(home.join("data")));
+            let agents = Rc::new(PlayedAgents::default());
+            let (mut daemon, mut heard) = played_daemon(&home, &agents);
+            daemon.act(ToDaemon::NewChat { folder: None });
+            daemon.act(ToDaemon::NewChat { folder: None });
+            pump(&mut daemon, &mut heard).await;
+            let key = daemon.chats.last().unwrap().key;
+            submit(&mut daemon, key);
+            pump(&mut daemon, &mut heard).await;
+            let name = daemon.slot(key).unwrap().name.clone();
+
+            let unlike = Version {
+                protocol: wire::VERSION.protocol + 1,
+                ..wire::VERSION
+            };
+            let hello = Hello {
+                version: Some(unlike),
+                reads_at_work: true,
+                ..Hello::default()
+            };
+            let (window, _told) = unbounded_channel();
+            let answer = daemon.attach(1, hello, window, Instant::now());
+
+            assert_eq!(
+                answer,
+                FromDaemon::AtWork(vec![AtWork {
+                    project: None,
+                    chat: name,
+                }]),
+                "the chat at work, of Cox's own, and not the one idle"
+            );
+        });
     }
 
     #[test]

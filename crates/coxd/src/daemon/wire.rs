@@ -390,6 +390,12 @@ pub struct Hello {
     pub version: Option<Version>,
     #[serde(default)]
     pub asks: Asks,
+    /// Whether the window reads which chats are at work, should coxd not
+    /// take it while they are: [`FromDaemon::AtWork`] in place of
+    /// [`FromDaemon::Busy`]. A coxd of a build that did not know to tell
+    /// it answers `Busy` all the same, which a window of any build reads.
+    #[serde(default)]
+    pub reads_at_work: bool,
 }
 
 impl Hello {
@@ -402,6 +408,7 @@ impl Hello {
             command,
             version: Some(VERSION),
             asks,
+            reads_at_work: true,
         }
     }
 
@@ -421,6 +428,16 @@ impl Hello {
             Asks::Join | Asks::Restart | Asks::RestartNow => FromDaemon::Outdated,
         }
     }
+}
+
+/// A chat at work, which keeps coxd from stopping for a window of
+/// another build, as the window waiting tells the human.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AtWork {
+    /// Its project's name, or none for Cox's own.
+    pub project: Option<String>,
+    /// The chat's name.
+    pub chat: String,
 }
 
 /// What the daemon tells a window.
@@ -444,6 +461,9 @@ pub enum FromDaemon {
     /// and the daemon goes on as it is, since a chat is at work: it does
     /// not take the window, which comes again later.
     Busy,
+    /// [`FromDaemon::Busy`], to a window that reads it, with the chats
+    /// at work that keep coxd from stopping for it.
+    AtWork(Vec<AtWork>),
     /// The projects and chats, as they are now.
     Listing(Listing),
     /// How the conversation of the chat `key` changed, for a window that
@@ -759,6 +779,10 @@ mod tests {
         let hello: Hello = serde_json::from_str(r#"{"home":null,"command":[]}"#).unwrap();
         assert_eq!(hello.version, None);
         assert_eq!(hello.asks, Asks::Join);
+        assert!(
+            !hello.reads_at_work,
+            "a window of a build that does not read which chats are at work hears Busy"
+        );
         let older: Hello = serde_json::from_str(
             r#"{"home":null,"command":[],"build":{"size":1,"modified":{"secs_since_epoch":0,"nanos_since_epoch":0}},"speaks":7}"#,
         )
@@ -779,6 +803,7 @@ mod tests {
         let line = serde_json::to_string(&told).unwrap();
         assert_eq!(serde_json::from_str::<Hello>(&line).unwrap(), told);
         assert_eq!(told.version, Some(VERSION), "{line}");
+        assert!(told.reads_at_work, "{line}");
         assert!(
             line.contains(&format!("{:016x}", VERSION.protocol)),
             "{line}"
