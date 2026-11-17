@@ -222,6 +222,7 @@ fn all_tools() -> Value {
     subagent::agent_tool(),
     subagent::agent_report_tool(),
     subagent::agent_continue_tool(),
+    subagent::agent_stop_tool(),
     read_chat_tool(),
     show_media_tool(),
     propose_goal_tool(),
@@ -845,6 +846,7 @@ pub(super) async fn call(
             subagent::agent_report(arguments, most, chats).await
         }
         subagent::AGENT_CONTINUE => subagent::agent_continue(arguments, hands_off, chats).await,
+        subagent::AGENT_STOP => subagent::agent_stop(arguments, chats).await,
         READ_CHAT => read_chat(arguments, chats).await,
         PROPOSE_GOAL => propose_goal(arguments, chats).await,
         PROPOSE_NAME => propose_name(arguments, chats).await,
@@ -2109,6 +2111,7 @@ mod tests {
             "agent",
             "agent_report",
             "agent_continue",
+            "agent_stop",
             "read_chat",
             "show_media",
             "propose_goal",

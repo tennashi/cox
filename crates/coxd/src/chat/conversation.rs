@@ -1481,6 +1481,21 @@ impl Conversation {
         })
     }
 
+    /// What the agent replied last in the last turn, whole, if it replied:
+    /// for one stopped, what it said before it stopped, ahead of Cox's
+    /// note that it did.
+    #[must_use]
+    pub fn turn_reply(&self) -> Option<&str> {
+        self.entries
+            .iter()
+            .rev()
+            .take_while(|entry| !is_turn_start(entry))
+            .find_map(|entry| match entry {
+                Entry::Reply(text) => Some(text.as_str()),
+                _ => None,
+            })
+    }
+
     /// What came last in the last turn, whole: the agent's reply or Cox's
     /// note of how the turn ended, if anything did.
     #[must_use]

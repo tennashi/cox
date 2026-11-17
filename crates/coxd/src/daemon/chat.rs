@@ -1786,6 +1786,21 @@ impl Chat {
         self.hear(self.generation, closed, false);
     }
 
+    /// The agent that opened the chat stopped what its agent runs in the
+    /// background, apart from a turn: Cox ends the agent, with every
+    /// process it started, as when it does not stop its turn in time, and
+    /// the chat closes, to start it again, going on with its session, with
+    /// the next line.
+    pub fn end_background(&mut self) {
+        self.stop_agent();
+        let closed = AgentEvent::Closed(Some(
+            "the agent that opened this chat stopped what it ran in the background, so Cox \
+             ended it. The next line starts it again."
+                .to_owned(),
+        ));
+        self.hear(self.generation, closed, false);
+    }
+
     fn send(&mut self, command: Command) {
         match &self.running {
             // The agent side is gone once the connection closes, which the
@@ -1878,6 +1893,7 @@ impl Chat {
         crate::agent::mcp::Waited {
             asking: self.conversation.asking_for().map(str::to_owned),
             said: self.conversation.last_told().map(str::to_owned),
+            reply: self.conversation.turn_reply().map(str::to_owned),
             unoffered: self.conversation.unoffered().map(str::to_owned),
             background: self.background(),
             ci: Vec::new(),

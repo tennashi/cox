@@ -2,9 +2,10 @@
 //! agent's own tool for subagents (Claude Code's `Agent`, or `Task`), with
 //! its arguments, so that a skill that hands work to subagents hands it to
 //! chats the human sees under this one, and can step into,
-//! `agent_report`, which waits for a subagent's report, and
+//! `agent_report`, which waits for a subagent's report,
 //! `agent_continue`, which has a subagent go on in its own chat, with the
-//! context it has, rather than another start the work anew.
+//! context it has, rather than another start the work anew, and
+//! `agent_stop`, which stops one, its chat staying open to go on.
 
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
@@ -15,13 +16,27 @@ use serde_json::{Value, json};
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::oneshot;
 
-use crate::agent::mcp::{ChatRequest, OpenedChat, Subagent, Waited};
+use crate::agent::mcp::{ChatRequest, OpenedChat, Stopped, Subagent, Waited};
 use crate::agent::setup::{Policy, Setup, StageUse, Withheld};
 use crate::chat::sketch::Sketch;
 
 pub(super) const AGENT: &str = crate::agent::mcp::AGENT_TOOL;
 pub(super) const AGENT_REPORT: &str = "agent_report";
 pub(super) const AGENT_CONTINUE: &str = "agent_continue";
+pub(super) const AGENT_STOP: &str = "agent_stop";
+
+/// How long `agent_stop` waits for a subagent it stopped to end its turn:
+/// past [`crate::daemon::chat::STOP_WAIT`], when Cox ends an agent that
+/// did not stop, and short enough not to hold a chat that hands its work
+/// off (see [`HANDS_OFF_WAIT`]).
+const STOP_REPORT_WAIT: Duration = Duration::from_secs(20);
+
+/// What every tool for subagents says of the agent's own tools, which
+/// do not reach a subagent Cox runs: an agent that cannot tell its
+/// subagent from the sessions those list messages them all.
+const NOT_CLAUDES_OWN: &str = "Cox subagents are not Claude Code tasks or sessions: \
+    TaskStop, SendMessage and ListAgents do not reach them, so never use those, or message other \
+    sessions, about one.";
 
 /// How long `agent_report` waits for a subagent in a chat that hands its
 /// work off (see [`crate::daemon::hands_off`]): long enough for a quick
@@ -71,7 +86,8 @@ pub(super) fn agent_tool() -> Value {
             chat, which starts from nothing: to go on with work you handed a subagent \
             before, as to follow up on its report, or to resume it once it was stopped or cut \
             off, use agent_continue, which has that subagent go on in its own chat, with what \
-            it did so far; run a new one only for new work. The chat works in the \
+            it did so far; run a new one only for new work. To stop one, call agent_stop, \
+            giving its title. {NOT_CLAUDES_OWN} The chat works in the \
             same folder as this one, so two that change files at once may collide, unless \
             `sketch` gives it a folder of its own. Beside the Agent tool's arguments, \
             Cox's own say how the subagent is set up: `context` is told to it after the \
@@ -91,7 +107,8 @@ pub(super) fn agent_tool() -> Value {
             apart from the project, and change and test its files there without asking the \
             human: \"project\", a Git worktree of the project's last commit, to try a \
             change to the project, or \"empty\", an empty Git repository, to try something \
-            from nothing.",
+            from nothing."
+            .replace("{NOT_CLAUDES_OWN}", NOT_CLAUDES_OWN),
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -186,7 +203,7 @@ pub(super) fn agent_report_tool() -> Value {
             report, or what it asks. One that is not at work answers at once. Cox tells you \
             the report of a subagent you ran in the background unasked, once your turn is not \
             running: use this to wait for one before you go on, or to read a report Cox cut \
-            short in full.",
+            short in full. Stop one with agent_stop, and have it go on with agent_continue.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -219,7 +236,7 @@ pub(super) fn agent_continue_tool() -> Value {
             list. One at work still, or waiting for the human, is sent nothing: wait for its \
             report, then continue it. Without `run_in_background`, it waits for the subagent \
             to end its turn and answers its report; with it, it answers at once, and Cox \
-            tells you the report unasked, as for agent.",
+            tells you the report unasked, as for agent. To stop one at work, call agent_stop.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -245,6 +262,40 @@ pub(super) fn agent_continue_tool() -> Value {
                 },
             },
             "required": ["prompt"],
+        },
+    })
+}
+
+/// The tool that stops a subagent, as the agent learns of it.
+pub(super) fn agent_stop_tool() -> Value {
+    json!({
+        "name": AGENT_STOP,
+        "description": format!("Stops a subagent you ran with agent, as the human's stop \
+            button does: its turn, even one waiting for the human, whose question goes, or, \
+            once its turn ended, what it still runs in the background. Its chat stays open in \
+            the human's list, with what it did so far: have it go on later with \
+            agent_continue, and read it with agent_report. It waits for the subagent to stop, \
+            and answers what it said before it stopped. One not at work is left as it is. \
+            {NOT_CLAUDES_OWN}"),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "title": {
+                    "type": "string",
+                    "description": "The subagent's chat, by its title as the human sees it \
+                        in the list now.",
+                },
+                "chat": {
+                    "type": "integer",
+                    "description": "The number agent answered for the subagent's chat, in \
+                        place of `title` when two of your subagents share a title.",
+                },
+                "reason": {
+                    "type": "string",
+                    "description": "Why you stop it, in a few words, which its chat shows \
+                        the human.",
+                },
+            },
         },
     })
 }
@@ -468,8 +519,9 @@ pub(super) async fn agent(
             "The subagent works in the chat \"{name}\", under this one: tell the human of it \
              by that title, as they see it in the list. Cox tells you its report once it \
              ends its turn and your turn is not running; to wait for it sooner, call \
-             agent_report, giving that title. Its number, {number}, is for agent_report \
-             only, should another of your subagents share its title."
+             agent_report, giving that title; to stop it, agent_stop. Its number, {number}, \
+             is for those only, should another of your subagents share its title. \
+             {NOT_CLAUDES_OWN}"
         );
         if let Some(model) = &model {
             let _ = write!(
@@ -564,6 +616,64 @@ pub(super) async fn agent_continue(
     }
     let waited = wait(number, chats).await?;
     Ok(reported(&name, &waited, Vec::new()))
+}
+
+/// Stops the subagent `arguments` name, one this chat ran with `agent`,
+/// and waits for it to stop, a while at most, to answer what it said
+/// before it did, and that its chat stays open to go on.
+pub(super) async fn agent_stop(
+    arguments: &Value,
+    chats: &UnboundedSender<ChatRequest>,
+) -> Result<String, String> {
+    let subagent = named(arguments)?;
+    let reason = string(arguments, "reason")?;
+    let (answer, stopping) = oneshot::channel();
+    chats
+        .send(ChatRequest::StopChat {
+            subagent,
+            reason,
+            answer,
+        })
+        .map_err(|_| "the chat has closed".to_owned())?;
+    let (number, name, stopped) = stopping
+        .await
+        .map_err(|_| "the chat closed while the subagent stopped".to_owned())??;
+    let mut told = match stopped {
+        Stopped::Nothing => {
+            return Ok(format!(
+                "The subagent \"{name}\" is not at work, so nothing was stopped. Read what it \
+                 last said with agent_report, or have it go on with agent_continue, giving its \
+                 title."
+            ));
+        }
+        Stopped::Turn => format!("The subagent \"{name}\" stopped."),
+        Stopped::Background => format!(
+            "Cox ended what the subagent \"{name}\" ran in the background, and its agent with \
+             it."
+        ),
+    };
+    let waited = match tokio::time::timeout(STOP_REPORT_WAIT, wait(number, chats)).await {
+        Ok(waited) => Some(waited?),
+        Err(_) => None,
+    };
+    told.push_str(
+        " Its chat stays open, with what it did so far: to have it go on, call \
+         agent_continue, giving its title.",
+    );
+    match waited {
+        None => told.push_str(
+            " It is stopping still: Cox tells you how it stands once it has, and your turn is \
+             not running.",
+        ),
+        Some(Waited {
+            reply: Some(reply), ..
+        }) => {
+            told.push_str(" It last said:\n\n");
+            told.push_str(&reply);
+        }
+        Some(_) => told.push_str(" It said nothing in its last turn."),
+    }
+    Ok(told)
 }
 
 /// What the agent is told of the subagent's chat beside its report: the
@@ -772,6 +882,24 @@ mod tests {
                             answer,
                         }
                     }
+                    ChatRequest::StopChat {
+                        subagent,
+                        reason,
+                        answer,
+                    } => {
+                        let stopped = if reason.as_deref() == Some("idle") {
+                            Stopped::Nothing
+                        } else {
+                            Stopped::Turn
+                        };
+                        let _ = answer.send(Ok((opened.number, opened.name.clone(), stopped)));
+                        let (answer, _) = oneshot::channel();
+                        ChatRequest::StopChat {
+                            subagent,
+                            reason,
+                            answer,
+                        }
+                    }
                     other => other,
                 };
                 heard.push(request);
@@ -929,8 +1057,10 @@ mod tests {
             "The subagent works in the chat \"Review the parser\", under this one: tell the \
              human of it by that title, as they see it in the list. Cox tells you its report \
              once it ends its turn and your turn is not running; to wait for it sooner, call \
-             agent_report, giving that title. Its number, 4, is for agent_report only, should \
-             another of your subagents share its title. It runs with the model `haiku` when \
+             agent_report, giving that title; to stop it, agent_stop. Its number, 4, is for \
+             those only, should another of your subagents share its title. Cox subagents are \
+             not Claude Code tasks or sessions: TaskStop, SendMessage and ListAgents do not \
+             reach them, so never use those, or message other sessions, about one. It runs with the model `haiku` when \
              its agent offers it, and agent_report says when it does not."
         );
         drop(chats);
@@ -1052,8 +1182,10 @@ mod tests {
             "The subagent works in the chat \"Review the parser\", under this one: tell the \
              human of it by that title, as they see it in the list. Cox tells you its report \
              once it ends its turn and your turn is not running; to wait for it sooner, call \
-             agent_report, giving that title. Its number, 4, is for agent_report only, should \
-             another of your subagents share its title. This chat talks with the human and \
+             agent_report, giving that title; to stop it, agent_stop. Its number, 4, is for \
+             those only, should another of your subagents share its title. Cox subagents are \
+             not Claude Code tasks or sessions: TaskStop, SendMessage and ListAgents do not \
+             reach them, so never use those, or message other sessions, about one. This chat talks with the human and \
              hands the work off, so its subagents run in the background: go on with the human, \
              or end your turn, rather than wait for the report."
         );
@@ -1240,6 +1372,129 @@ mod tests {
         assert!(asked.try_recv().is_err());
     }
 
+    async fn stops(arguments: Value, chats: &UnboundedSender<ChatRequest>) -> (bool, String) {
+        let params = json!({ "name": AGENT_STOP, "arguments": arguments });
+        let answered = super::super::call(
+            &params,
+            Path::new("/work"),
+            None,
+            false,
+            &unbounded_channel().0,
+            chats,
+        )
+        .await
+        .unwrap();
+        (
+            answered["isError"].as_bool().unwrap(),
+            answered["content"][0]["text"].as_str().unwrap().to_owned(),
+        )
+    }
+
+    #[tokio::test]
+    async fn stops_a_subagent_and_answers_what_it_said_before_it_stopped() {
+        let (chats, asked) = unbounded_channel();
+        let window = window(
+            asked,
+            opened(7),
+            vec![Waited {
+                said: Some("Stopped.".to_owned()),
+                reply: Some("Half of it.".to_owned()),
+                ..Waited::default()
+            }],
+        );
+
+        let told = stops(
+            json!({ "title": "Review the parser", "reason": "Wrong folder." }),
+            &chats,
+        )
+        .await;
+
+        assert_eq!(
+            told,
+            (
+                false,
+                "The subagent \"Review the parser\" stopped. Its chat stays open, with what it \
+                 did so far: to have it go on, call agent_continue, giving its title. It last \
+                 said:\n\nHalf of it."
+                    .to_owned()
+            )
+        );
+        drop(chats);
+        let heard = window.await.unwrap();
+        let [
+            ChatRequest::StopChat {
+                subagent, reason, ..
+            },
+            ChatRequest::WaitChat { chat: 7, .. },
+        ] = &heard[..]
+        else {
+            panic!("the window was asked {} times", heard.len());
+        };
+        assert_eq!(subagent, &Subagent::Title("Review the parser".to_owned()));
+        assert_eq!(reason.as_deref(), Some("Wrong folder."));
+    }
+
+    #[tokio::test]
+    async fn a_subagent_not_at_work_is_left_as_it_is() {
+        let (chats, asked) = unbounded_channel();
+        let window = window(asked, opened(7), Vec::new());
+
+        let told = stops(json!({ "chat": 7, "reason": "idle" }), &chats).await;
+
+        assert_eq!(
+            told,
+            (
+                false,
+                "The subagent \"Review the parser\" is not at work, so nothing was stopped. \
+                 Read what it last said with agent_report, or have it go on with \
+                 agent_continue, giving its title."
+                    .to_owned()
+            )
+        );
+        drop(chats);
+        let heard = window.await.unwrap();
+        assert!(
+            matches!(&heard[..], [ChatRequest::StopChat { .. }]),
+            "it waits for nothing"
+        );
+    }
+
+    #[tokio::test]
+    async fn asks_which_subagent_to_stop() {
+        let (chats, mut asked) = unbounded_channel();
+        for arguments in [
+            json!({}),
+            json!({ "reason": "Enough." }),
+            json!({ "title": "Review the parser", "reason": 1 }),
+        ] {
+            let (error, _) = stops(arguments.clone(), &chats).await;
+            assert!(error, "{arguments}");
+        }
+        assert!(asked.try_recv().is_err());
+    }
+
+    #[test]
+    fn the_tools_for_subagents_say_claude_codes_own_do_not_reach_them() {
+        for tool in [agent_tool(), agent_stop_tool()] {
+            let description = tool["description"].as_str().unwrap();
+            assert!(
+                description.contains(
+                    "TaskStop, SendMessage and ListAgents do not reach them, so never use \
+                         those, or message other sessions, about one."
+                ),
+                "{description}"
+            );
+        }
+        let agent = agent_tool();
+        assert!(
+            agent["description"]
+                .as_str()
+                .unwrap()
+                .contains("To stop one, call agent_stop, giving its title."),
+            "{agent}"
+        );
+    }
+
     #[tokio::test]
     async fn reports_how_a_subagent_stands_once_it_waits() {
         let (chats, asked) = unbounded_channel();
@@ -1313,7 +1568,8 @@ mod tests {
                 false,
                 "The subagent \"Review the parser\" ended its turn, but still works in the \
                  background: the background command \"cargo bench\". Cox tells you once that ends \
-                 and your turn is not running. It last said:\n\nThe benchmark runs."
+                 and your turn is not running; to stop it, call agent_stop, giving its title. It \
+                 last said:\n\nThe benchmark runs."
                     .to_owned()
             )
         );
