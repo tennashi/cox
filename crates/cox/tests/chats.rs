@@ -2758,10 +2758,21 @@ fn open_window_with_subagents(
     (agents, workspace, cx)
 }
 
+/// The `_meta` Cox asks Claude Code's agent for every session with: its
+/// plan tools turned on.
+fn plan_tools() -> serde_json::Value {
+    serde_json::json!({ "claudeCode": { "options": {
+        "env": { "CLAUDE_CODE_ENABLE_TODO_TOOLS": "1" },
+    } } })
+}
+
 /// The `_meta` Cox asks Claude Code's agent for a session with when the
 /// chat runs its subagents as chats: its own tools for them turned off.
 fn subagents_as_chats() -> serde_json::Value {
-    serde_json::json!({ "claudeCode": { "options": { "disallowedTools": ["Agent", "Task"] } } })
+    serde_json::json!({ "claudeCode": { "options": {
+        "env": { "CLAUDE_CODE_ENABLE_TODO_TOOLS": "1" },
+        "disallowedTools": ["Agent", "Task"],
+    } } })
 }
 
 /// The `_meta` of the session a new chat opened while the settings said
@@ -2807,12 +2818,8 @@ async fn a_chat_started_with_the_agents_subagents_keeps_them_once_the_settings_s
         Subagents::Chats,
     )
     .await;
-    assert_eq!(opened, [serde_json::Value::Null]);
-    assert_eq!(
-        resumed,
-        [serde_json::Value::Null],
-        "Agent stays the agent's"
-    );
+    assert_eq!(opened, [plan_tools()]);
+    assert_eq!(resumed, [plan_tools()], "Agent stays the agent's");
 }
 
 #[gpui::test]
@@ -2850,7 +2857,7 @@ async fn a_chat_kept_before_cox_kept_its_subagents_goes_on_with_the_agents_own(
 
     let agent = Arc::clone(&agents.borrow()[0]);
     assert_eq!(agent.resumed(), ["session-1"]);
-    assert_eq!(agent.metas(), [serde_json::Value::Null]);
+    assert_eq!(agent.metas(), [plan_tools()]);
 }
 
 /// The fake agent's settings, set as `model` and `mode` say.
