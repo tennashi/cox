@@ -317,7 +317,8 @@ mod tests {
 
     #[test]
     fn writes_a_script_to_a_file_its_interpreter_runs() {
-        let dir = std::env::temp_dir().join(format!("cox-snippet-test-{}", std::process::id()));
+        let folder = coxd::testing::TempDir::new();
+        let dir = folder.path().join("snippets");
         let snippet = Snippet::of("python", "print(6 * 7)\n").unwrap();
 
         let command = snippet.command(&dir).unwrap();
@@ -334,7 +335,6 @@ mod tests {
             .output()
             .unwrap();
         assert_eq!(String::from_utf8_lossy(&output.stdout), "42\n");
-        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
