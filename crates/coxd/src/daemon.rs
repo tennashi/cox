@@ -536,6 +536,11 @@ impl Slot {
                 None => self.spent.clone(),
             },
             resolved: self.resolved,
+            steers: self
+                .chat
+                .as_ref()
+                .is_some_and(|chat| chat.conversation().steers()),
+            on_steps: self.chat.as_ref().map_or_default(Chat::waiting_on_steps),
         }
     }
 }
@@ -3009,6 +3014,12 @@ impl Daemon {
     /// Keeps and tells what changed: each chat's conversation, how each
     /// chat stands, and the list.
     fn settle(&mut self) {
+        // A line written on a step while a turn ran goes once it ended.
+        for slot in self.chats.iter_mut().chain(&mut self.archived) {
+            if let Some(chat) = &mut slot.chat {
+                chat.send_on_steps();
+            }
+        }
         // What one chat's change does can change another, as a sketch that
         // ends; each pass looks again, until nothing does.
         for _ in 0..4 {

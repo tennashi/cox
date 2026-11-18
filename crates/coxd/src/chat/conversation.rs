@@ -2308,6 +2308,41 @@ mod tests {
     }
 
     #[test]
+    fn steers_a_line_on_a_step_into_the_turn_with_the_step_after_it() {
+        let mut conversation = steering();
+        conversation.submit("rename it");
+        conversation.apply(AgentEvent::ReplyText("Renaming".to_owned()));
+        let on = OnStep {
+            id: 1,
+            text: "Rename the setting".to_owned(),
+        };
+
+        assert_eq!(
+            conversation.submit_on("keep the old name", Vec::new(), Some(on.clone())),
+            Some(Command::Steer(
+                "[The human writes this on the step of your plan: Rename the setting]\n\n\
+                 keep the old name"
+                    .to_owned()
+                    .into()
+            ))
+        );
+        conversation.apply(AgentEvent::Steered);
+        conversation.apply(AgentEvent::ReplyText("Kept it.".to_owned()));
+        conversation.apply(AgentEvent::TurnEnded(StopReason::EndTurn));
+
+        assert_eq!(
+            conversation.entries(),
+            [
+                Entry::Human("rename it".to_owned()),
+                Entry::Reply("Renaming".to_owned()),
+                Entry::Human("keep the old name".to_owned()),
+                Entry::OnStep(on),
+                Entry::Reply("Kept it.".to_owned()),
+            ]
+        );
+    }
+
+    #[test]
     fn holds_a_line_while_an_agent_that_does_not_steer_takes_a_turn() {
         let mut conversation = Conversation::new();
         conversation.submit("hello");

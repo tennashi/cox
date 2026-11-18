@@ -11,8 +11,10 @@
 // subagents' chats that work on it, and the subagents no step has under
 // it. A click on a step opens its thread under it: what the human wrote
 // on the step and what the agent replied, with a line to write another,
-// which goes to the chat as the human's next line, on the step, while
-// the agent neither works nor asks. A plan of a chat not at work the
+// which goes to the chat as the human's next line, on the step, as one
+// typed in the chat goes: into the turn the agent takes, if it takes
+// lines so, or else once the turn ends, but not while the agent asks
+// something, unless it takes the line into the turn. A plan of a chat not at work the
 // human may dismiss, one by one or all at once, until its agent sends
 // another. Above the plans, what moved
 // over the last 15 minutes, hour, or four hours, as the human picks: the
@@ -190,9 +192,21 @@ function thread(chat) {
         `<span class="says">${esc(said.text)}</span></div>`,
     )
     .join("");
-  const why = chat.takes ? "" : chat.waits === "asks you" ? "answer what it asks first" : "it is at work: write once its turn ends";
+  const waiting = (shown === null ? [] : told.thread.waiting ?? [])
+    .map(
+      (text) =>
+        `<div class="said human waiting"><span class="by">you · goes once the turn ends</span><span class="says">${esc(text)}</span></div>`,
+    )
+    .join("");
+  const why = !chat.takes
+    ? "answer what it asks first"
+    : chat.working
+      ? chat.steers
+        ? "it is at work: a line goes into its turn"
+        : "it is at work: a line goes once its turn ends"
+      : "";
   return (
-    `<div class="thread">${shown === null ? "" : said || `<div class="none">Nothing written on this step yet.</div>`}` +
+    `<div class="thread">${shown === null ? "" : said + waiting || `<div class="none">Nothing written on this step yet.</div>`}` +
     `<form class="write" data-key="${chat.key}"><textarea name="text" rows="2" placeholder="Write on this step, for ${esc(chat.name)}"${chat.takes ? "" : " disabled"}></textarea>` +
     `<button type="submit"${chat.takes ? "" : " disabled"}>Send</button></form>` +
     (why ? `<div class="line">${esc(why)}</div>` : "") +

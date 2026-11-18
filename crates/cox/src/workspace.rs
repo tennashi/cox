@@ -68,7 +68,9 @@ use coxd::chat::conversation::State;
 use coxd::chat::sketch::{self, Sketch};
 use coxd::chat::spent::Spent;
 use coxd::daemon::Link;
-use coxd::daemon::wire::{Background, ChatRow, FromDaemon, Listing, ProjectRow, PullRow, ToDaemon};
+use coxd::daemon::wire::{
+    Background, ChatRow, FromDaemon, Listing, OnStepLine, ProjectRow, PullRow, ToDaemon,
+};
 
 mod at_work;
 pub(crate) mod project_card;
@@ -275,6 +277,11 @@ pub struct Chat {
     /// When it was marked done, and by whom, while it is: the list folds
     /// it away under "Resolved" at its end.
     resolved: Option<Resolved>,
+    /// Whether a line sent now goes into the turn its agent takes.
+    steers: bool,
+    /// The lines written on steps of its plan that wait for its turn to
+    /// end.
+    on_steps: Vec<OnStepLine>,
     /// Its view, once the window showed it, or something asked of its
     /// stage.
     view: Option<Entity<ChatView>>,
@@ -303,6 +310,8 @@ impl Chat {
             pulls,
             spent,
             resolved,
+            steers,
+            on_steps,
         } = row;
         Self {
             key,
@@ -324,6 +333,8 @@ impl Chat {
             pulls,
             spent,
             resolved,
+            steers,
+            on_steps,
             view,
         }
     }
@@ -1512,6 +1523,8 @@ impl Workspace {
                     spent: chat.spent.clone(),
                     resolved: chat.is_resolved(),
                     archived,
+                    steers: chat.steers,
+                    on_steps: chat.on_steps.clone(),
                 })
                 .collect(),
             projects: self

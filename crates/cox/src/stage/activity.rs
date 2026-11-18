@@ -42,7 +42,7 @@ use serde_json::{Value, json};
 use crate::stage::commands;
 use cox_acp::Microdollars;
 use coxd::chat::spent::Spent;
-use coxd::daemon::wire::PullRow;
+use coxd::daemon::wire::{OnStepLine, PullRow};
 use coxd::github::CheckState;
 
 /// How many of what happened the page is told of, the last first.
@@ -106,6 +106,12 @@ pub struct Chat {
     /// Whether the human archived it: it waits for them only while it
     /// asks.
     pub archived: bool,
+    /// Whether a line sent now goes into the turn its agent takes, as it
+    /// asks the human something too, if it does.
+    pub steers: bool,
+    /// The lines written on steps of its plan that wait for its turn to
+    /// end, the first first.
+    pub on_steps: Vec<OnStepLine>,
 }
 
 impl Chat {
@@ -471,7 +477,21 @@ pub fn thread(open: &Open) -> Value {
         tracing::warn!("the thread of a step is not read: {error:#}");
         Vec::new()
     });
-    thread_of(open, &said, &TimeZone::system())
+    let mut thread = thread_of(open, &said, &TimeZone::system());
+    thread["waiting"] = json!(waiting_on(&now(), open));
+    thread
+}
+
+/// The lines written on the step `open` names that wait for the turn of
+/// its chat, of `told`, to end.
+fn waiting_on(told: &Told, open: &Open) -> Vec<String> {
+    told.chats
+        .iter()
+        .filter(|chat| chat.kept == Some(open.chat))
+        .flat_map(|chat| &chat.on_steps)
+        .filter(|line| line.step.id == open.step)
+        .map(|line| line.text.clone())
+        .collect()
 }
 
 /// The thread of the step `open` names, of the lines `said`, as JSON,
@@ -546,8 +566,8 @@ pub fn say(asked: &str) -> Option<Open> {
 }
 
 /// The line `asked` to send, on the step of the chat's plan of `kept` it
-/// names, as it reads there, when the chat of `told` takes a line now:
-/// it neither works nor asks the human something else.
+/// names, as it reads there, when the chat of `told` takes a line on a
+/// step (see [`takes_a_line`]).
 fn says_on(told: &Told, kept: &[KeptPlan], asked: &Asked) -> Option<Say> {
     let text = asked.text.trim();
     let chat = told
@@ -707,10 +727,12 @@ impl Plans<'_> {
     }
 }
 
-/// Whether a line the human writes on a step of `chat`'s plan goes now:
-/// not while its agent works, or asks them something else.
+/// Whether a line the human writes on a step of `chat`'s plan goes, as
+/// one typed in the chat goes: into the turn its agent takes, if it takes
+/// lines so, or else once the turn ends; but not while the agent asks the
+/// human something, unless it takes the line into the turn.
 fn takes_a_line(chat: &Chat) -> bool {
-    !chat.working && !chat.asking
+    !chat.asking || chat.steers
 }
 
 /// Where what happened in a folder is read from: the human's wiki, their
@@ -825,7 +847,7 @@ fn planned(
         let links = linked(steps, &subagents);
         listed.push(json!({
             "key": chat.key,
-            "chat": chat.kept, "takes": takes_a_line(chat),
+            "chat": chat.kept, "takes": takes_a_line(chat), "steers": chat.steers,
             "name": chat.name,
             "goal": chat.goal,
             "depth": depth,
@@ -1493,6 +1515,8 @@ mod tests {
             spent: None,
             resolved: false,
             archived: false,
+            steers: false,
+            on_steps: Vec::new(),
         }
     }
 
@@ -1807,15 +1831,23 @@ mod tests {
     }
 
     #[test]
-    fn a_step_takes_a_line_on_it_while_its_chat_waits() {
+    fn a_step_takes_a_line_on_it_as_the_chat_takes_one() {
         let root = TempDir::new();
-        let mut waits = chat(1, &root, &root, false, true);
-        waits.kept = Some(kept(1));
-        let mut busy = chat(2, &root, &root, false, false);
-        busy.kept = Some(kept(2));
-        busy.working = true;
+        let of = |key: u64, asking: bool, working: bool, steers: bool| {
+            let mut of = chat(key, &root, &root, asking, !asking && !working);
+            of.kept = Some(kept(key));
+            of.working = working;
+            of.steers = steers;
+            of
+        };
         let told = Told {
-            chats: vec![waits, busy],
+            // Waiting, asking, at work and asking with a turn it steers.
+            chats: vec![
+                of(1, false, false, false),
+                of(2, true, false, false),
+                of(3, false, true, false),
+                of(4, true, true, true),
+            ],
             home: root.join("home"),
             ..Told::default()
         };
@@ -1823,7 +1855,7 @@ mod tests {
             id: Some(id),
             ..step(text, StepState::Pending)
         };
-        let kept_plans = [1, 2].map(|chat| KeptPlan {
+        let kept_plans = [1, 2, 3, 4].map(|chat| KeptPlan {
             chat: kept(chat),
             number: 1,
             steps: vec![
@@ -1848,7 +1880,18 @@ mod tests {
 
         let shown = &json["plans"][0];
         assert_eq!((&shown["chat"], &shown["takes"]), (&json!(1), &json!(true)));
-        assert_eq!(json["plans"][1]["takes"], false);
+        let takes: Vec<(u64, bool)> = json["plans"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|chat| {
+                (
+                    chat["key"].as_u64().unwrap(),
+                    chat["takes"].as_bool().unwrap(),
+                )
+            })
+            .collect();
+        assert_eq!(takes, [(1, true), (2, false), (3, true), (4, true)]);
         let steps = &shown["plan"];
         assert_eq!((&steps[0]["id"], &steps[0]["on"]), (&json!(1), &json!(2)));
         assert_eq!(
@@ -1878,7 +1921,7 @@ mod tests {
             })
         );
         for (key, chat, step, text) in [
-            (2, 2, 1, "busy"),
+            (2, 2, 1, "asking"),
             (1, 1, 9, "no such step"),
             (1, 2, 1, "another chat's key"),
             (1, 1, 1, "  "),
@@ -1889,6 +1932,34 @@ mod tests {
                 "{text}"
             );
         }
+        // At work, it takes the line, into the turn or once it ends.
+        assert!(says_on(&told, &kept_plans, &asked(3, 3, 1, "busy")).is_some());
+        assert!(says_on(&told, &kept_plans, &asked(4, 4, 1, "steered")).is_some());
+    }
+
+    #[test]
+    fn a_thread_tells_the_lines_on_its_step_that_wait_for_the_turn_to_end() {
+        let root = TempDir::new();
+        let mut waits = chat(1, &root, &root, false, false);
+        waits.kept = Some(kept(1));
+        let waiting = |text: &str, id| OnStepLine {
+            text: text.to_owned(),
+            step: OnStep {
+                id,
+                text: String::new(),
+            },
+        };
+        waits.on_steps = vec![waiting("later", 1), waiting("elsewhere", 9)];
+        let told = Told {
+            chats: vec![waits],
+            ..Told::default()
+        };
+        let open = Open {
+            chat: kept(1),
+            step: 1,
+        };
+
+        assert_eq!(waiting_on(&told, &open), ["later"]);
     }
 
     #[test]
