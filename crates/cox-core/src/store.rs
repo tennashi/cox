@@ -305,8 +305,9 @@ pub struct Progress {
     /// Each chat that wrote an entry since, with when it wrote its last,
     /// in milliseconds since the epoch.
     pub active: Vec<(ChatId, i64)>,
-    /// The steps of their agents' plans done since, each once: its chat,
-    /// its text, and when it was done.
+    /// The steps of their agents' plans done since, each once, as the
+    /// chat knows it, by its id, however the agent reworded it: its chat,
+    /// its text, as it reads last, and when it was done.
     pub done: Vec<(ChatId, String, i64)>,
     /// The chats marked done since.
     pub resolved: Vec<(ChatId, Resolved)>,
@@ -1189,6 +1190,9 @@ impl Store {
         )?;
         for &(chat, _) in &moved.active {
             let rows = statement.query_map([chat.0], |row| row.get::<_, String>(0))?;
+            // Where in `done` each step the chat knows by an id is, which
+            // the agent may have reworded since, as it reads last.
+            let mut known: Vec<(u64, usize)> = Vec::new();
             for entry in rows {
                 let Ok(Entry::Plan(steps)) = serde_json::from_str(&entry?) else {
                     continue;
@@ -1197,12 +1201,22 @@ impl Store {
                     let Some(at) = step.since.filter(|at| *at >= since) else {
                         continue;
                     };
-                    if step.state == crate::entry::StepState::Completed
-                        && !moved
-                            .done
-                            .iter()
-                            .any(|done| done.0 == chat && done.1 == step.text && done.2 == at)
+                    if step.state != crate::entry::StepState::Completed {
+                        continue;
+                    }
+                    if let Some(&(_, place)) = step
+                        .id
+                        .and_then(|id| known.iter().find(|(known, _)| *known == id))
                     {
+                        moved.done[place].1 = step.text;
+                    } else if !moved
+                        .done
+                        .iter()
+                        .any(|done| done.0 == chat && done.1 == step.text && done.2 == at)
+                    {
+                        if let Some(id) = step.id {
+                            known.push((id, moved.done.len()));
+                        }
                         moved.done.push((chat, step.text, at));
                     }
                 }
@@ -1738,11 +1752,13 @@ mod tests {
                     text: "Read the code".to_owned(),
                     state: StepState::Completed,
                     since: None,
+                    id: None,
                 },
                 Step {
                     text: "Fix it".to_owned(),
                     state: StepState::InProgress,
                     since: None,
+                    id: None,
                 },
             ]),
         ];
@@ -1957,6 +1973,7 @@ mod tests {
             text: text.to_owned(),
             state,
             since: None,
+            id: None,
         };
         let first = vec![step("Read", StepState::Completed)];
         let last = vec![
@@ -2006,6 +2023,11 @@ mod tests {
             text: text.to_owned(),
             state,
             since,
+            id: None,
+        };
+        let known = |text: &str, state, since, id| Step {
+            id: Some(id),
+            ..step(text, state, since)
         };
         let since = now();
         // Done before, in a turn before, and kept so in the next.
@@ -2020,8 +2042,23 @@ mod tests {
                 read,
                 step("Fix", StepState::Completed, Some(since + 1)),
                 step("Old", StepState::Completed, None),
-                step("Test", StepState::InProgress, Some(since + 2)),
+                known("Test", StepState::InProgress, Some(since + 2), 4),
             ]),
+            Entry::Human("go on".to_owned()),
+            Entry::Plan(vec![known(
+                "Test",
+                StepState::Completed,
+                Some(since + 3),
+                4,
+            )]),
+            Entry::Human("reword it".to_owned()),
+            // Reworded, done as it was: done once, as it reads now.
+            Entry::Plan(vec![known(
+                "Test the parser",
+                StepState::Completed,
+                Some(since + 3),
+                4,
+            )]),
             Entry::Reply("testing".to_owned()),
         ];
         for (number, entry) in entries.iter().enumerate() {
@@ -2051,7 +2088,13 @@ mod tests {
                 .collect::<Vec<_>>(),
             [busy, reported]
         );
-        assert_eq!(moved.done, [(busy, "Fix".to_owned(), since + 1)]);
+        assert_eq!(
+            moved.done,
+            [
+                (busy, "Fix".to_owned(), since + 1),
+                (busy, "Test the parser".to_owned(), since + 3)
+            ]
+        );
         assert_eq!(
             moved
                 .resolved

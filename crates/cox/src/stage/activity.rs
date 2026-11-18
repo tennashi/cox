@@ -34,7 +34,7 @@ use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-use cox_core::entry::{Entry, QuestionAnswer, Step, StepState};
+use cox_core::entry::{Entry, QuestionAnswer, Step, StepState, alike};
 use cox_core::store::{ChatId, KeptAnswer, KeptPlan, Progress, ResolvedBy, Store};
 use jiff::tz::TimeZone;
 use serde_json::{Value, json};
@@ -506,43 +506,6 @@ pub fn dismiss(asked: &str) {
 /// How alike a step of a plan must be to a subagent's chat, by its name,
 /// as [`alike`] measures it, for the chat to show under the step.
 const LINKED: f64 = 0.3;
-
-/// How alike `one` and `other` read, from 0 to 1: the Dice coefficient of
-/// the pairs of letters in each of their words, which holds for words
-/// written without spaces between them, as Japanese is, too.
-fn alike(one: &str, other: &str) -> f64 {
-    let pairs = |text: &str| -> Vec<(char, char)> {
-        let mut pairs: Vec<(char, char)> = text
-            .split(|c: char| !c.is_alphanumeric())
-            .flat_map(|word| {
-                let letters: Vec<char> = word.chars().flat_map(char::to_lowercase).collect();
-                match letters.as_slice() {
-                    [] => Vec::new(),
-                    [only] => vec![(*only, ' ')],
-                    _ => letters.windows(2).map(|pair| (pair[0], pair[1])).collect(),
-                }
-            })
-            .collect();
-        pairs.sort_unstable();
-        pairs
-    };
-    let (one, other) = (pairs(one), pairs(other));
-    if one.is_empty() || other.is_empty() {
-        return 0.0;
-    }
-    let (mut both, mut at) = (0_u32, 0);
-    for pair in &one {
-        while at < other.len() && other[at] < *pair {
-            at += 1;
-        }
-        if at < other.len() && other[at] == *pair {
-            both += 1;
-            at += 1;
-        }
-    }
-    let all = u32::try_from(one.len() + other.len()).unwrap_or(u32::MAX);
-    f64::from(2 * both) / f64::from(all)
-}
 
 /// The step of `plan` each of `subagents` works on, by its place in the
 /// plan: the step its chat's name reads most alike, once alike enough.
@@ -1220,6 +1183,7 @@ mod tests {
             text: text.to_owned(),
             state,
             since: None,
+            id: None,
         }
     }
 
@@ -1938,6 +1902,7 @@ mod tests {
             text: text.to_owned(),
             state: StepState::Pending,
             since: None,
+            id: None,
         };
         let plan = [
             step("--shout フラグを追加しテストを書く"),
