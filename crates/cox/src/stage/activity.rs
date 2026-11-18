@@ -768,9 +768,15 @@ fn top_of<'a>(told: &'a Told, chat: &'a Chat) -> &'a Chat {
 /// that stopped with their plan not done, with when they last moved.
 fn summaries(told: &Told, root: &Path, plans: &Plans<'_>, decided: &[Decided]) -> Vec<Value> {
     let zone = TimeZone::system();
+    // The time of day, and the day too once it is not today's hour.
     let clock = |at: i64| {
+        let format = if plans.at - at < 20 * 60 * 60 * 1000 {
+            "%H:%M"
+        } else {
+            "%b %-d %H:%M"
+        };
         jiff::Timestamp::from_millisecond(at)
-            .map_or_default(|at| at.to_zoned(zone.clone()).strftime("%H:%M").to_string())
+            .map_or_default(|at| at.to_zoned(zone.clone()).strftime(format).to_string())
     };
     let chats: Vec<&Chat> = told
         .chats
@@ -843,7 +849,8 @@ struct Line<'a> {
 }
 
 /// What moved among `chats` of `told` since `start`, as `moved` read it,
-/// as JSON: how many steps were done, how many subagents reported, and
+/// as JSON: how many steps the plans of the chats at the top were done,
+/// which the lines name, how many subagents reported, and
 /// each chat at the top of those that moved, as a [`Line`].
 fn summed(told: &Told, chats: &[&Chat], moved: &Progress, start: i64) -> Value {
     let mut lines: Vec<Line<'_>> = Vec::new();
@@ -868,7 +875,6 @@ fn summed(told: &Told, chats: &[&Chat], moved: &Progress, start: i64) -> Value {
         if done.is_empty() && resolved.is_none() && !active {
             continue;
         }
-        steps += done.len();
         let top = top_of(told, chat);
         let at = lines
             .iter()
@@ -884,6 +890,7 @@ fn summed(told: &Told, chats: &[&Chat], moved: &Progress, start: i64) -> Value {
             });
         let line = &mut lines[at];
         if top.key == chat.key {
+            steps += done.len();
             line.done.extend(done);
         } else if let Some(resolved) = resolved {
             if resolved.by == ResolvedBy::Agent {
@@ -897,7 +904,7 @@ fn summed(told: &Told, chats: &[&Chat], moved: &Progress, start: i64) -> Value {
     let named = |chats: &[&Chat]| -> Vec<Value> {
         chats
             .iter()
-            .map(|chat| json!({ "key": chat.key, "name": chat.name }))
+            .map(|chat| json!({ "key": chat.key, "name": chat.name, "working": chat.working }))
             .collect()
     };
     json!({
@@ -1831,15 +1838,12 @@ mod tests {
                 chat
             })
             .collect();
-        chats[0].working = true;
-        for sub in &mut chats[1..3] {
-            sub.parent = Some(1);
-        }
-        chats[1].resolved = true;
+        (chats[0].working, chats[1].resolved) = (true, true);
+        (chats[1].parent, chats[2].parent) = (Some(1), Some(1));
         chats[4].asking = true;
         // Not of the folder: it moves, but elsewhere.
-        chats[5].cwd = folder.path().join("other");
-        chats[5].project = folder.path().join("other");
+        let elsewhere = &mut chats[5];
+        (elsewhere.cwd, elsewhere.project) = (folder.path().join("x"), folder.path().join("x"));
         let told = Told {
             chats,
             projects: vec![(root.clone(), "app".to_owned())],
@@ -1857,6 +1861,8 @@ mod tests {
                 (kept(1), "Fix".to_owned(), at - 30 * minute),
                 (kept(1), "Read".to_owned(), at - 5 * minute),
                 (kept(6), "Elsewhere".to_owned(), at - minute),
+                // A subagent's own: its chat stands for it.
+                (kept(3), "Its own".to_owned(), at - 3 * 60 * minute),
             ],
             resolved: vec![(
                 kept(2),
@@ -1905,9 +1911,13 @@ mod tests {
         );
         assert_eq!(line(0)["done"], json!(["Read"]));
         assert_eq!(line(1)["done"], json!(["Read", "Fix"]));
-        assert_eq!(line(1)["ended"], json!([{ "key": 2, "name": "chat 2" }]));
-        assert_eq!(line(1)["worked"], json!([]));
-        assert_eq!(line(2)["worked"], json!([{ "key": 3, "name": "chat 3" }]));
+        let keys = |chats: &Value| -> Vec<u64> {
+            let chats = chats.as_array().unwrap().iter();
+            chats.map(|chat| chat["key"].as_u64().unwrap()).collect()
+        };
+        assert_eq!(keys(&line(1)["ended"]), [2]);
+        assert_eq!(keys(&line(1)["worked"]), [0; 0]);
+        assert_eq!(keys(&line(2)["worked"]), [3]);
         for summary in summaries {
             assert_eq!(
                 summary["waits"],

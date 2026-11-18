@@ -186,7 +186,10 @@ function summary(summaries) {
           ? `done ${chat.done.map((text) => `<span class="text">${esc(text)}</span>`).join(", ")}${chat.more ? ` and ${chat.more} more` : ""}`
           : "",
         chat.ended.length ? `${chat.ended.map(named).join(", ")} reported` : "",
-        chat.worked.length ? `${chat.worked.map(named).join(", ")} worked` : "",
+        ...[true, false].map((working) => {
+          const subs = chat.worked.filter((sub) => sub.working === working);
+          return subs.length ? `${subs.map(named).join(", ")} ${working ? "at work" : "worked"}` : "";
+        }),
       ].filter(Boolean);
       return `<div class="said"><span class="mark moved">▸</span><span>${named(chat)}${parts.length ? ` — ${parts.join(" · ")}` : " worked"}</span></div>`;
     })
