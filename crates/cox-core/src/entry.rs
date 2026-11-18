@@ -17,6 +17,10 @@ pub enum Entry {
     /// What the human handed the chat with the line before it, from
     /// elsewhere on the screen, as text selected in a tab.
     Attached(Vec<Attachment>),
+    /// The human wrote the line before it, and what they handed with it,
+    /// on a step of the agent's plan, from the Activity page: the step's
+    /// thread there is of the line, and of what the agent replied to it.
+    OnStep(OnStep),
     /// A line Cox sent the agent in the human's place, as the agent's
     /// next turn: what the chat's goal asks while it is not met.
     Cox(String),
@@ -611,6 +615,14 @@ pub struct Step {
     /// for a step an older Cox kept.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub id: Option<u64>,
+}
+
+/// A step of the agent's plan a line of the human's is on: the step the
+/// chat knows by `id` (see [`Step::id`]), as it read as they wrote.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OnStep {
+    pub id: u64,
+    pub text: String,
 }
 
 /// How alike `one` and `other` read, from 0 to 1: the Dice coefficient of

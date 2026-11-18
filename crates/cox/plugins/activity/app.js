@@ -9,8 +9,12 @@
 // did not look yet, each with what it does now, or runs in the background,
 // its open pull requests, and the steps of its plan, each with the
 // subagents' chats that work on it, and the subagents no step has under
-// it. A plan of a chat not at work the human may dismiss, one by one or
-// all at once, until its agent sends another. Above the plans, what moved
+// it. A click on a step opens its thread under it: what the human wrote
+// on the step and what the agent replied, with a line to write another,
+// which goes to the chat as the human's next line, on the step, while
+// the agent neither works nor asks. A plan of a chat not at work the
+// human may dismiss, one by one or all at once, until its agent sends
+// another. Above the plans, what moved
 // over the last 15 minutes, hour, or four hours, as the human picks: the
 // chats that moved, each with the steps its plan got done and its
 // subagents that reported or worked, and, as things stand, the chats that
@@ -42,7 +46,15 @@ let windowed = (() => {
 const esc = (s) =>
   String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 
-async function load(url = API) {
+/// The step whose thread shows, by its chat, as coxd keeps it, and its
+/// id, or null.
+let opened = null;
+
+/// The address that tells what goes on, with the thread that shows.
+const address = () =>
+  opened ? `${API}/thread/${encodeURIComponent(JSON.stringify({ chat: opened.chat, step: opened.step }))}` : API;
+
+async function load(url = address()) {
   let text = null;
   try {
     const answer = await fetch(url, { cache: "no-store" });
@@ -144,15 +156,43 @@ function plan(chat) {
             pulls(sub),
         )
         .join("");
+      const open = step.id != null && chat.chat != null;
+      const shows = open && opened?.chat === chat.chat && opened?.step === step.id;
+      const text = open
+        ? `<span class="text opens${shows ? " opened" : ""}" data-step="${esc(JSON.stringify({ chat: chat.chat, step: step.id }))}" title="${shows ? "closes" : "opens"} the thread of this step">${esc(step.text)}</span>` +
+          (step.on ? ` <span class="on" title="${many(step.on, "line", "lines")} you wrote on this step">✎ ${step.on}</span>` : "")
+        : `<span class="text">${esc(step.text)}</span>`;
       return (
         `<div class="step ${step.state}"><span class="mark" title="${named}">${mark}</span>` +
-        `<span class="what"><span class="text">${esc(step.text)}</span>${chats}</span></div>`
+        `<span class="what">${text}${shows ? thread(chat) : ""}${chats}</span></div>`
       );
     })
     .join("");
   return (
     `<div class="plan" style="margin-left: ${chat.depth * 18 + 28}px">` +
     `<div class="count">plan · ${done}/${chat.plan.length} done${chat.dismiss ? dismiss([chat.dismiss], "dismiss", "hides this plan until the agent sends another") : ""}</div>${steps}</div>`
+  );
+}
+
+/// The thread of the step that shows, of `chat`'s plan: each line the
+/// human wrote on it and what the agent replied, and a line to write
+/// another, which goes while the chat takes one.
+function thread(chat) {
+  const shown = told.thread && told.thread.chat === opened.chat && told.thread.step === opened.step ? told.thread.said : null;
+  const said = (shown ?? [])
+    .map(
+      (said) =>
+        `<div class="said ${said.by}"><span class="by">${said.by === "human" ? "you" : "agent"} ${esc(said.at)}</span>` +
+        `<span class="says">${esc(said.text)}</span></div>`,
+    )
+    .join("");
+  const why = chat.takes ? "" : chat.waits === "asks you" ? "answer what it asks first" : "it is at work: write once its turn ends";
+  return (
+    `<div class="thread">${shown === null ? "" : said || `<div class="none">Nothing written on this step yet.</div>`}` +
+    `<form class="write" data-key="${chat.key}"><textarea name="text" rows="2" placeholder="Write on this step, for ${esc(chat.name)}"${chat.takes ? "" : " disabled"}></textarea>` +
+    `<button type="submit"${chat.takes ? "" : " disabled"}>Send</button></form>` +
+    (why ? `<div class="line">${esc(why)}</div>` : "") +
+    `</div>`
   );
 }
 
@@ -241,7 +281,23 @@ function happened(event) {
   );
 }
 
+/// Draws the page, keeping what the human was writing on a step, and
+/// where, as it was.
 function draw() {
+  const writing = app.querySelector(".write textarea");
+  const kept = writing && { value: writing.value, focused: document.activeElement === writing, start: writing.selectionStart, end: writing.selectionEnd };
+  drawn();
+  const now = app.querySelector(".write textarea");
+  if (kept && now) {
+    now.value = kept.value;
+    if (kept.focused && !now.disabled) {
+      now.focus();
+      now.setSelectionRange(kept.start, kept.end);
+    }
+  }
+}
+
+function drawn() {
   if (!told) {
     app.innerHTML = `<div class="none">Cox did not answer with what goes on here.</div>`;
     return;
@@ -289,10 +345,39 @@ app.addEventListener("click", (event) => {
     draw();
     return;
   }
+  const step = event.target.closest("[data-step]");
+  if (step) {
+    const asked = JSON.parse(step.dataset.step);
+    opened = opened && opened.chat === asked.chat && opened.step === asked.step ? null : asked;
+    draw();
+    load();
+    return;
+  }
   const button = event.target.closest("[data-dismiss]");
   if (!button) return;
   button.disabled = true;
   load(`${API}/dismiss/${encodeURIComponent(button.dataset.dismiss)}`);
+});
+
+/// Sends what the human wrote on the step whose thread shows.
+function send(form) {
+  const text = form.elements.text.value;
+  if (!opened || !text.trim()) return;
+  const asked = { key: Number(form.dataset.key), chat: opened.chat, step: opened.step, text };
+  form.elements.text.value = "";
+  load(`${API}/say/${encodeURIComponent(JSON.stringify(asked))}`);
+}
+
+app.addEventListener("submit", (event) => {
+  event.preventDefault();
+  send(event.target);
+});
+
+app.addEventListener("keydown", (event) => {
+  // Enter sends; Shift-Enter starts a new line.
+  if (event.key !== "Enter" || event.shiftKey || event.isComposing || !event.target.matches(".write textarea")) return;
+  event.preventDefault();
+  send(event.target.form);
 });
 
 load();

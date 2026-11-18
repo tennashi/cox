@@ -964,7 +964,7 @@ const WORK = new Set(["tool_call", "thought", "plan"]);
 // Who says an entry, as the window has it: none for Cox's notes, which go
 // with whoever spoke last.
 function speakerOf(kind) {
-  if (kind === "human" || kind === "attached") return "you";
+  if (kind === "human" || kind === "attached" || kind === "on_step") return "you";
   if (kind === "cox" || kind === "keep" || kind === "checks" || kind === "event") return "cox";
   if (kind === "note" || kind === "switched" || kind === "merge") return null;
   return "agent";
@@ -1056,6 +1056,8 @@ function entryNode(at, kind, value, asks) {
       return el("div", { class: "cox-line" }, value);
     case "attached":
       return el("div", { class: "chips" }, value.map((one) => el("span", { class: "chip" }, el("span", {}, one.label))));
+    case "on_step":
+      return el("p", { class: "note" }, `on the plan's step: ${value.text}`);
     case "reply":
       return markdown(value);
     case "thought":

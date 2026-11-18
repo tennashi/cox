@@ -384,18 +384,32 @@ impl Plugins {
     }
 
     /// What goes on in the folder, as `cox://api/activity` tells it, once
-    /// the plans `cox://api/activity/<rest>` dismisses are, if it does.
+    /// what `cox://api/activity/<rest>` asks is done, if it asks: to
+    /// dismiss plans, to say a line on a step of a plan, or to show the
+    /// thread of a step, which it tells too.
     fn activity(&self, rest: &str) -> Option<serde_json::Value> {
+        use crate::stage::activity;
+        let mut open = None;
         if !rest.is_empty() {
-            let asked = rest.strip_prefix("dismiss/")?;
-            crate::stage::activity::dismiss(&percent_decoded(asked));
+            let (what, asked) = rest.split_once('/')?;
+            let asked = percent_decoded(asked);
+            match what {
+                "dismiss" => activity::dismiss(&asked),
+                "say" => open = Some(activity::say(&asked)?),
+                "thread" => open = Some(serde_json::from_str::<activity::Open>(&asked).ok()?),
+                _ => return None,
+            }
         }
-        Some(crate::stage::activity::told(
+        let mut told = activity::told(
             &self.root,
             &coxd::settings::wiki(),
             &coxd::settings::raw(),
             &self.triggers(),
-        ))
+        );
+        if let Some(open) = open {
+            told["thread"] = activity::thread(&open);
+        }
+        Some(told)
     }
 
     /// What the card of a trigger asks of `cox://api/triggers/<rest>`, if

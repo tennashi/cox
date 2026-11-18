@@ -1050,6 +1050,7 @@ impl ChatView {
             key: self.key,
             text,
             attached,
+            step: None,
         });
         input.update(cx, LineInput::clear);
         cx.notify();

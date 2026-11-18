@@ -11,12 +11,12 @@ use std::path::{Path, PathBuf};
 
 use cox_acp::{Compaction, CompactionTrigger, PermissionAnswer, SlashCommand, StopReason};
 use cox_core::diff::Line;
-use cox_core::entry::alike;
 pub use cox_core::entry::{
     Answer, Attachment, Check, CheckState, Committed, Content, Entry, LoginOption, Picked,
     Proposal, Proposed, Question, QuestionAnswer, QuestionOption, Step, StepState, TerminalLogin,
     ToolCallResult,
 };
+use cox_core::entry::{OnStep, alike};
 use cox_core::goal;
 use cox_core::settings::Setting;
 use cox_core::store::ChatId;
@@ -722,6 +722,19 @@ impl Conversation {
     /// one, or, for an agent that [`Conversation::steers`], into the turn
     /// it takes.
     pub fn submit_with(&mut self, input: &str, attached: Vec<Attachment>) -> Option<Command> {
+        self.submit_on(input, attached, None)
+    }
+
+    /// Takes what the human entered, with what they handed the chat with
+    /// it, on the step of the agent's plan `step` names, if it does, and
+    /// returns the prompt to send the agent, as [`Self::submit_with`]
+    /// does: which tells the agent the step, before the line.
+    pub fn submit_on(
+        &mut self,
+        input: &str,
+        attached: Vec<Attachment>,
+        step: Option<OnStep>,
+    ) -> Option<Command> {
         let command = match self.steer(input) {
             Some(command) => command,
             None => self.start_turn(input, Entry::Human)?,
@@ -732,11 +745,28 @@ impl Conversation {
         if !attached.is_empty() {
             self.push(Entry::Attached(attached.clone()));
         }
-        Some(match command {
-            Command::Prompt(prompt) => Command::Prompt(Prompt { attached, ..prompt }),
-            Command::Steer(prompt) => Command::Steer(Prompt { attached, ..prompt }),
+        let told = |text: String| match &step {
+            Some(on) => format!(
+                "[The human writes this on the step of your plan: {}]\n\n{text}",
+                on.text
+            ),
+            None => text,
+        };
+        let command = match command {
+            Command::Prompt(prompt) => Command::Prompt(Prompt {
+                text: told(prompt.text),
+                attached,
+            }),
+            Command::Steer(prompt) => Command::Steer(Prompt {
+                text: told(prompt.text),
+                attached,
+            }),
             command => command,
-        })
+        };
+        if let Some(on) = step {
+            self.push(Entry::OnStep(on));
+        }
+        Some(command)
     }
 
     /// Whether a line the human sends now goes into the turn the agent
@@ -2109,6 +2139,35 @@ mod tests {
             conversation.submit("hello"),
             Some(Command::Prompt("hello".to_owned().into()))
         );
+    }
+
+    #[test]
+    fn a_line_on_a_step_tells_the_agent_the_step_and_shows_after_the_line() {
+        let mut conversation = Conversation::new();
+        let on = OnStep {
+            id: 2,
+            text: "Rename the setting".to_owned(),
+        };
+
+        assert_eq!(
+            conversation.submit_on("keep the old name too", Vec::new(), Some(on.clone())),
+            Some(Command::Prompt(
+                "[The human writes this on the step of your plan: Rename the setting]\n\n\
+                 keep the old name too"
+                    .to_owned()
+                    .into()
+            ))
+        );
+        assert_eq!(
+            conversation.entries(),
+            [
+                Entry::Human("keep the old name too".to_owned()),
+                Entry::OnStep(on.clone()),
+            ]
+        );
+        // Not while a turn runs that the line does not go into.
+        assert_eq!(conversation.submit_on("and?", Vec::new(), Some(on)), None);
+        assert_eq!(conversation.entries().len(), 2);
     }
 
     #[test]

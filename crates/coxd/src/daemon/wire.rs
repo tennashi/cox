@@ -6,7 +6,7 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-use cox_core::entry::Attachment;
+use cox_core::entry::{Attachment, OnStep};
 use cox_core::goal::Goal;
 use cox_core::store::{ChatId, Named, ProjectId, Resolved};
 use cox_core::tabs::{KeptTabs, Lines};
@@ -535,12 +535,15 @@ pub enum ToDaemon {
     /// tell it how it changes.
     Watch { key: u64 },
     /// The human sent `text` in the chat `key`, with what they handed it
-    /// from elsewhere on the screen.
+    /// from elsewhere on the screen, and on the step of its agent's plan
+    /// they wrote it on, from the Activity page, if they did.
     Submit {
         key: u64,
         text: String,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         attached: Vec<Attachment>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        step: Option<OnStep>,
     },
     /// The human chose the option at `index` of what the agent of the
     /// chat `key` asks: of a permission request, or of the ways to log in.

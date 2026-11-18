@@ -22,7 +22,7 @@ use crate::settings::Setting;
 use crate::tabs::KeptTabs;
 
 /// The version of the tables below, as `SQLite`'s `user_version` holds it.
-const VERSION: i64 = 20;
+const VERSION: i64 = 21;
 
 const TABLES: &str = "
 CREATE TABLE projects (
@@ -100,6 +100,9 @@ CREATE TABLE entries (
 -- The plans the agents sent, which the Activity page reads the last of
 -- each chat's of every two seconds.
 CREATE INDEX plans ON entries (chat, number) WHERE entry LIKE '{\"plan\":%';
+-- The lines the human wrote on a step of a plan, which the Activity page
+-- reads the threads of the steps by.
+CREATE INDEX on_steps ON entries (chat, number) WHERE entry LIKE '{\"on_step\":%';
 CREATE TABLE choices (
     -- The id of the agent whose session has the setting.
     agent TEXT NOT NULL,
@@ -162,6 +165,7 @@ const UPGRADES: &[&str] = &[
     "ALTER TABLE chats ADD COLUMN spent TEXT;",
     "ALTER TABLE chats ADD COLUMN resolved_at INTEGER;
      ALTER TABLE chats ADD COLUMN resolved_by TEXT;",
+    "CREATE INDEX on_steps ON entries (chat, number) WHERE entry LIKE '{\"on_step\":%';",
 ];
 
 /// How long a write waits for another Cox writing the same database.
@@ -311,6 +315,26 @@ pub struct Progress {
     pub done: Vec<(ChatId, String, i64)>,
     /// The chats marked done since.
     pub resolved: Vec<(ChatId, Resolved)>,
+}
+
+/// Who said a line of the thread of a step, as [`Store::thread`] reads it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Sayer {
+    Human,
+    Agent,
+}
+
+/// A line of the thread of a step of a plan, as [`Store::thread`] reads
+/// it: what the human wrote on the step, or what the agent replied to it.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct Said {
+    pub by: Sayer,
+    pub text: String,
+    /// When it was first written, in milliseconds since the epoch.
+    pub at: i64,
+    /// The number of its entry in the chat.
+    pub number: usize,
 }
 
 /// A question an agent asked in a chat, which the human answered by
@@ -1239,6 +1263,114 @@ impl Store {
         Ok(moved)
     }
 
+    /// How many lines the human wrote on each step of the plans of
+    /// `chat`'s agent, by the step's id, for the steps they wrote on.
+    ///
+    /// # Errors
+    ///
+    /// When the database cannot be read.
+    pub fn on_steps(&self, chat: ChatId) -> anyhow::Result<Vec<(u64, usize)>> {
+        // The WHERE is the on_steps index's, word for word, for SQLite to
+        // read that index rather than every entry of the chat.
+        let mut statement = self.connection.prepare_cached(
+            r#"SELECT entry FROM entries INDEXED BY on_steps
+             WHERE chat = ?1 AND entry LIKE '{"on_step":%' ORDER BY number"#,
+        )?;
+        let rows = statement.query_map([chat.0], |row| row.get::<_, String>(0))?;
+        let mut counts: Vec<(u64, usize)> = Vec::new();
+        for entry in rows {
+            let Ok(Entry::OnStep(on)) = serde_json::from_str(&entry?) else {
+                continue;
+            };
+            match counts.iter_mut().find(|(id, _)| *id == on.id) {
+                Some((_, count)) => *count += 1,
+                None => counts.push((on.id, 1)),
+            }
+        }
+        Ok(counts)
+    }
+
+    /// The thread of the step of the plans of `chat`'s agent it knows by
+    /// `step`: each line the human wrote on it, and what the agent
+    /// replied to it in the turn it went into, in order.
+    ///
+    /// # Errors
+    ///
+    /// When the database cannot be read.
+    pub fn thread(&self, chat: ChatId, step: u64) -> anyhow::Result<Vec<Said>> {
+        let mut statement = self.connection.prepare_cached(
+            r#"SELECT number, entry FROM entries INDEXED BY on_steps
+             WHERE chat = ?1 AND entry LIKE '{"on_step":%' ORDER BY number"#,
+        )?;
+        let on: Vec<i64> = statement
+            .query_map([chat.0], |row| {
+                Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+            })?
+            .filter_map(|row| {
+                let (number, entry) = row.ok()?;
+                match serde_json::from_str(&entry) {
+                    Ok(Entry::OnStep(on)) if on.id == step => Some(number),
+                    _ => None,
+                }
+            })
+            .collect();
+        let mut line = self.connection.prepare_cached(
+            r#"SELECT number, at, entry FROM entries
+             WHERE chat = ?1 AND number < ?2 AND entry LIKE '{"human":%'
+             ORDER BY number DESC LIMIT 1"#,
+        )?;
+        let mut after = self.connection.prepare_cached(
+            "SELECT number, at, entry FROM entries WHERE chat = ?1 AND number > ?2 ORDER BY number",
+        )?;
+        let mut thread = Vec::new();
+        for number in on {
+            let wrote = line
+                .query_row(params![chat.0, number], |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, String>(2)?,
+                    ))
+                })
+                .optional()?;
+            if let Some((number, at, entry)) = wrote
+                && let Ok(Entry::Human(text)) = serde_json::from_str(&entry)
+            {
+                thread.push(Said {
+                    by: Sayer::Human,
+                    text,
+                    at,
+                    number: usize::try_from(number)?,
+                });
+            }
+            let mut replied: Option<Said> = None;
+            let mut rows = after.query(params![chat.0, number])?;
+            while let Some(row) = rows.next()? {
+                let entry: String = row.get(2)?;
+                match serde_json::from_str(&entry) {
+                    Ok(Entry::Human(_) | Entry::Cox(_)) => break,
+                    Ok(Entry::Reply(text)) => match &mut replied {
+                        Some(said) => {
+                            said.text.push_str("\n\n");
+                            said.text.push_str(&text);
+                        }
+                        None => {
+                            replied = Some(Said {
+                                by: Sayer::Agent,
+                                text,
+                                at: row.get(1)?,
+                                number: usize::try_from(row.get::<_, i64>(0)?)?,
+                            });
+                        }
+                    },
+                    _ => {}
+                }
+            }
+            thread.extend(replied);
+        }
+        Ok(thread)
+    }
+
     /// The steps of the plan `chat`'s agent first sent after the human's
     /// last line, once it sent one.
     ///
@@ -2113,6 +2245,65 @@ mod tests {
             )
             .unwrap();
         assert!(plan.contains("plans"), "read by the index: {plan}");
+    }
+
+    #[test]
+    fn reads_the_thread_of_a_step_the_human_wrote_on() {
+        use crate::entry::OnStep;
+        let store = Store::in_memory().unwrap();
+        let chat = store.add_chat(None, "Chat 1").unwrap();
+        let on = |id: u64, text: &str| {
+            Entry::OnStep(OnStep {
+                id,
+                text: text.to_owned(),
+            })
+        };
+        let entries = [
+            Entry::Human("plan it".to_owned()),
+            Entry::Reply("planned".to_owned()),
+            Entry::Human("keep the old flag?".to_owned()),
+            on(1, "Rename the setting"),
+            Entry::Reply("Yes, kept.".to_owned()),
+            Entry::Note("a note".to_owned()),
+            Entry::Reply("Done.".to_owned()),
+            Entry::Human("something else".to_owned()),
+            Entry::Reply("other".to_owned()),
+            Entry::Human("skip it".to_owned()),
+            on(2, "Test"),
+            Entry::Reply("Skipped.".to_owned()),
+            Entry::Human("and say so".to_owned()),
+            on(1, "Rename the setting, keeping the old"),
+        ];
+        for (number, entry) in entries.iter().enumerate() {
+            store.keep_entry(chat, number, entry).unwrap();
+        }
+
+        assert_eq!(store.on_steps(chat).unwrap(), [(1, 2), (2, 1)]);
+        let thread: Vec<(Sayer, String, usize)> = store
+            .thread(chat, 1)
+            .unwrap()
+            .into_iter()
+            .map(|said| (said.by, said.text, said.number))
+            .collect();
+        assert_eq!(
+            thread,
+            [
+                (Sayer::Human, "keep the old flag?".to_owned(), 2),
+                (Sayer::Agent, "Yes, kept.\n\nDone.".to_owned(), 4),
+                (Sayer::Human, "and say so".to_owned(), 12),
+            ]
+        );
+        assert_eq!(store.thread(chat, 3).unwrap(), []);
+        let plan: String = store
+            .connection
+            .query_row(
+                r#"EXPLAIN QUERY PLAN SELECT entry FROM entries INDEXED BY on_steps
+                 WHERE chat = 1 AND entry LIKE '{"on_step":%' ORDER BY number"#,
+                [],
+                |row| row.get(3),
+            )
+            .unwrap();
+        assert!(plan.contains("on_steps"), "read by the index: {plan}");
     }
 
     #[test]

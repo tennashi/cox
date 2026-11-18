@@ -2298,6 +2298,7 @@ mod tests {
             key: 1,
             text: "go on".to_owned(),
             attached,
+            step: None,
         };
         assert_eq!(done(line(Vec::new())), May::InChat(1));
         assert_eq!(done(ToDaemon::Choose { key: 1, index: 0 }), May::InChat(1));

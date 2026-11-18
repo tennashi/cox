@@ -13,7 +13,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use cox_core::entry::{Attachment, Committed};
+use cox_core::entry::{Attachment, Committed, OnStep};
 use cox_core::goal;
 use cox_core::store::{ChatId, Record};
 use cox_git::commits::{self, Turn};
@@ -787,10 +787,11 @@ impl Chat {
         }
     }
 
-    /// The human sent `text`. Answers whether it went: not while a turn
-    /// runs, unless the agent takes it into the turn.
-    pub fn submit(&mut self, text: &str, attached: Vec<Attachment>) -> bool {
-        match self.conversation.submit_with(text, attached) {
+    /// The human sent `text`, on the step of the plan `step` names, if it
+    /// does. Answers whether it went: not while a turn runs, unless the
+    /// agent takes it into the turn.
+    pub fn submit(&mut self, text: &str, attached: Vec<Attachment>, step: Option<OnStep>) -> bool {
+        match self.conversation.submit_on(text, attached, step) {
             Some(command) => {
                 self.send(command);
                 true
@@ -2170,7 +2171,7 @@ mod tests {
 
         /// The human sends `line`, and the agent ends its turn.
         fn take_a_turn(&mut self, line: &str) {
-            assert!(self.chat.submit(line, Vec::new()), "the line goes");
+            assert!(self.chat.submit(line, Vec::new(), None), "the line goes");
             self.hear(AgentEvent::TurnEnded(StopReason::EndTurn));
         }
 
@@ -2198,7 +2199,7 @@ mod tests {
         on_daemon(async {
             let mut talk = Talk::new(None);
 
-            assert!(talk.chat.submit("hello", Vec::new()));
+            assert!(talk.chat.submit("hello", Vec::new(), None));
 
             assert_eq!(talk.agent.prompts(), ["hello"]);
             assert_eq!(talk.state(), State::Busy);
@@ -2209,9 +2210,9 @@ mod tests {
     fn a_line_sent_while_a_turn_runs_does_not_go() {
         on_daemon(async {
             let mut talk = Talk::new(None);
-            talk.chat.submit("hello", Vec::new());
+            talk.chat.submit("hello", Vec::new(), None);
 
-            assert!(!talk.chat.submit("again", Vec::new()));
+            assert!(!talk.chat.submit("again", Vec::new(), None));
 
             assert_eq!(talk.agent.prompts(), ["hello"]);
         });
@@ -2221,7 +2222,7 @@ mod tests {
     fn a_line_sent_while_the_agent_starts_goes_once_it_has() {
         on_daemon(async {
             let mut talk = Talk::starting(None);
-            assert!(talk.chat.submit("hello", Vec::new()));
+            assert!(talk.chat.submit("hello", Vec::new(), None));
             let (agent, mut played) = played(&talk.cwd);
 
             talk.chat.attach(agent, talk.generation, Vec::new());
@@ -2239,7 +2240,7 @@ mod tests {
             let (agent, mut played) = played(&talk.cwd);
 
             talk.chat.attach(agent, stale, Vec::new());
-            talk.chat.submit("hello", Vec::new());
+            talk.chat.submit("hello", Vec::new(), None);
 
             assert_eq!(played.prompts(), Vec::<String>::new());
             assert!(talk.chat.is_open(), "the chat waits on its new agent");
@@ -2254,7 +2255,7 @@ mod tests {
             talk.take_a_turn("hello");
 
             assert_eq!(talk.state(), State::Idle);
-            assert!(talk.chat.submit("and then", Vec::new()));
+            assert!(talk.chat.submit("and then", Vec::new(), None));
         });
     }
 
@@ -2262,7 +2263,7 @@ mod tests {
     fn what_an_agent_stopped_since_tells_is_let_be() {
         on_daemon(async {
             let mut talk = Talk::new(None);
-            talk.chat.submit("hello", Vec::new());
+            talk.chat.submit("hello", Vec::new(), None);
 
             talk.chat.hear(
                 talk.generation - 1,
@@ -2307,7 +2308,7 @@ mod tests {
                 how: crate::agent::Opened::New,
                 steers: false,
             });
-            talk.chat.submit("hello", Vec::new());
+            talk.chat.submit("hello", Vec::new(), None);
             let asked = tokio::time::Instant::now();
 
             talk.chat.stop();
@@ -2335,7 +2336,7 @@ mod tests {
         on_daemon(async {
             tokio::time::pause();
             let mut talk = Talk::new(None);
-            talk.chat.submit("hello", Vec::new());
+            talk.chat.submit("hello", Vec::new(), None);
 
             talk.chat.stop();
             talk.hear(AgentEvent::TurnEnded(StopReason::Cancelled));
@@ -2773,7 +2774,7 @@ mod tests {
         on_daemon(async {
             let mut talk = Talk::new(None);
             talk.trigger("status", GATHERS);
-            talk.chat.submit("clean up", Vec::new());
+            talk.chat.submit("clean up", Vec::new(), None);
 
             talk.hear(asks_permission());
 
@@ -2788,7 +2789,7 @@ mod tests {
         on_daemon(async {
             let mut talk = Talk::new(None);
             talk.trigger("status", GATHERS);
-            talk.chat.submit("clean up", Vec::new());
+            talk.chat.submit("clean up", Vec::new(), None);
             talk.hear(asks_permission());
             let (_, answer) = talk.agent.ran().unwrap();
 
@@ -2822,7 +2823,7 @@ mod tests {
         on_daemon(async {
             let mut talk = Talk::new(None);
             talk.trigger("status", GATHERS);
-            talk.chat.submit("clean up", Vec::new());
+            talk.chat.submit("clean up", Vec::new(), None);
             talk.hear(asks_permission());
 
             talk.chat.gathered_enough(talk.generation);
@@ -2837,7 +2838,7 @@ mod tests {
         on_daemon(async {
             let mut talk = Talk::new(None);
             talk.trigger("status", GATHERS);
-            talk.chat.submit("clean up", Vec::new());
+            talk.chat.submit("clean up", Vec::new(), None);
             talk.hear(asks_permission());
 
             talk.chat.gathered_enough(talk.generation - 1);

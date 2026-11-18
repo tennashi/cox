@@ -1402,6 +1402,7 @@ fn said(entries: &[Entry]) -> Option<(String, bool)> {
         !matches!(
             entry,
             Entry::Note(_)
+                | Entry::OnStep(_)
                 | Entry::Thought(_)
                 | Entry::Plan(_)
                 | Entry::PlanChanged { .. }
@@ -1432,6 +1433,10 @@ fn said(entries: &[Entry]) -> Option<(String, bool)> {
                     .collect::<Vec<_>>()
                     .join("\n\n"),
             ),
+            Entry::OnStep(on) => Some(format!(
+                "[the human wrote that on the step of your plan: {}]",
+                on.text
+            )),
             Entry::Cox(text) => Some(format!("[cox]\n{text}")),
             Entry::Merge => Some("[the human asked you to merge what you made]".to_owned()),
             Entry::Media { from, caption, .. } => Some(match caption {

@@ -559,6 +559,9 @@ pub struct Workspace {
     /// workspace, which may be updating as it asks them something.
     chat_names: Rc<RefCell<HashMap<u64, SharedString>>>,
     _from_daemon: Task<()>,
+    /// What sends the chats the lines the human writes on the steps of
+    /// their plans on the Activity page.
+    _said_on_steps: Task<()>,
 }
 
 impl Workspace {
@@ -594,6 +597,22 @@ impl Workspace {
                     workspace.hear(message, window, cx);
                 });
                 if heard.is_err() {
+                    break;
+                }
+            }
+        });
+        let mut says = crate::stage::activity::listen();
+        let said_on_steps = cx.spawn(async move |this, cx| {
+            while let Some(say) = says.recv().await {
+                let said = this.update(cx, |workspace, _| {
+                    workspace.tell(ToDaemon::Submit {
+                        key: say.key,
+                        text: say.text,
+                        attached: Vec::new(),
+                        step: Some(say.step),
+                    });
+                });
+                if said.is_err() {
                     break;
                 }
             }
@@ -653,6 +672,7 @@ impl Workspace {
             shows_chats: Vec::new(),
             chat_names: Rc::default(),
             _from_daemon: heard,
+            _said_on_steps: said_on_steps,
         }
     }
 
