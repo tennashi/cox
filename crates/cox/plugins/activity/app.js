@@ -68,6 +68,10 @@ async function load(url = address()) {
   draw();
 }
 
+/// What tells `chat` apart from others of its name, when another has it:
+/// where it works, the chat that opened it, or when it was opened.
+const hint = (chat) => (chat.hint ? ` <span class="hint">${esc(chat.hint)}</span>` : "");
+
 /// Where `chat` is, in the home, which tells of every folder.
 const where = (chat) => (told.home && chat.where ? ` <span class="in">in ${esc(chat.where)}</span>` : "");
 
@@ -77,7 +81,7 @@ function waiting(chat) {
   return (
     `<a class="row" href="cox://chat/${chat.key}" title="shows the chat">` +
     `<span class="dot ${chat.why === "asks you" ? "asks" : "unread"}"></span>` +
-    `<span class="what"><span class="name">${chat.sketch ? "↳ " : ""}${esc(chat.name)}</span> <span class="why">${esc(chat.why)}</span>` +
+    `<span class="what"><span class="name">${chat.sketch ? "↳ " : ""}${esc(chat.name)}</span>${hint(chat)} <span class="why">${esc(chat.why)}</span>` +
     `${where(chat)}${asks}${goal}</span></a>`
   );
 }
@@ -126,7 +130,7 @@ function working(chat) {
   return (
     `<a class="row" href="cox://chat/${chat.key}" title="shows the chat" style="margin-left: ${chat.depth * 18}px">` +
     `<span class="dot ${dot}"></span>` +
-    `<span class="what"><span class="name">${chat.depth || chat.sketch ? "↳ " : ""}${esc(chat.name)}</span>${why}` +
+    `<span class="what"><span class="name">${chat.depth || chat.sketch ? "↳ " : ""}${esc(chat.name)}</span>${hint(chat)}${why}` +
     `${where(chat)}${spent(chat)}${goal}${said || running || background || chat.waits ? "" : `<div class="line">at work</div>`}${said}${running}${background}${pull}</span></a>` +
     plan(chat)
   );
@@ -151,7 +155,7 @@ function plan(chat) {
         .map(
           (sub) =>
             `<a class="sub" href="cox://chat/${sub.key}" title="shows the chat">` +
-            `<span class="dot ${sub.working ? "busy" : "idle"}"></span>↳ ${esc(sub.name)}${spent(sub)}</a>` +
+            `<span class="dot ${sub.working ? "busy" : "idle"}"></span>↳ ${esc(sub.name)}${hint(sub)}${spent(sub)}</a>` +
             (sub.said ? `<div class="line">${esc(sub.said)}</div>` : "") +
             pulls(sub),
         )
@@ -197,7 +201,7 @@ function thread(chat) {
 }
 
 /// A link to the chat `chat` names, by its key and name.
-const named = (chat) => `<a href="cox://chat/${chat.key}" title="shows the chat">${esc(chat.name)}</a>`;
+const named = (chat) => `<a href="cox://chat/${chat.key}" title="shows the chat">${esc(chat.name)}</a>${hint(chat)}`;
 
 /// How many of `count` there are, as "1 step" or "2 steps".
 const many = (count, one, more) => `${count} ${count === 1 ? one : more}`;
@@ -256,7 +260,7 @@ const dismiss = (plans, label, title) =>
 
 function decided(decision) {
   const chat = decision.key != null
-    ? `<a href="cox://chat/${decision.key}" title="shows the chat">${esc(decision.chat)}</a>`
+    ? `<a href="cox://chat/${decision.key}" title="shows the chat">${esc(decision.chat)}</a>${hint(decision)}`
     : esc(decision.chat);
   const header = decision.header && decision.header !== decision.question ? `<span class="header">${esc(decision.header)}</span> ` : "";
   const other = decision.other ? ` <span class="other">“${esc(decision.other)}”</span>` : "";

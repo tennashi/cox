@@ -1263,6 +1263,19 @@ impl Store {
         Ok(moved)
     }
 
+    /// When each chat was opened, in milliseconds since the epoch.
+    ///
+    /// # Errors
+    ///
+    /// When the database cannot be read.
+    pub fn opened(&self) -> anyhow::Result<Vec<(ChatId, i64)>> {
+        let mut statement = self
+            .connection
+            .prepare_cached("SELECT id, created FROM chats ORDER BY id")?;
+        let rows = statement.query_map([], |row| Ok((ChatId(row.get(0)?), row.get(1)?)))?;
+        Ok(rows.collect::<Result<_, _>>()?)
+    }
+
     /// How many lines the human wrote on each step of the plans of
     /// `chat`'s agent, by the step's id, for the steps they wrote on.
     ///

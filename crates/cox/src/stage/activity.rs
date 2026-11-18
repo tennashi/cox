@@ -390,12 +390,14 @@ pub fn waiting(root: &Path) -> usize {
 pub fn told(root: &Path, wiki: &Path, raw: &Path, triggers: &Value) -> Value {
     let at = jiff::Timestamp::now().as_millisecond();
     let kept = plans();
+    let opened = opened();
     told_of(
         &now(),
         root,
         &decided(),
         &Plans {
             on: &on_steps(&kept),
+            opened: &opened,
             kept: &kept,
             dismissed: &Dismissed::read(),
             moved: &progress(at - WINDOWS[WINDOWS.len() - 1].1),
@@ -417,6 +419,17 @@ fn plans() -> Vec<KeptPlan> {
         .and_then(|path| Store::read(&path)?.plans());
     plans.unwrap_or_else(|error| {
         tracing::warn!("the plans of the chats are not read: {error:#}");
+        Vec::new()
+    })
+}
+
+/// When each chat coxd keeps was opened, in milliseconds since the epoch.
+fn opened() -> Vec<(ChatId, i64)> {
+    let opened = coxd::storage::path(coxd::storage::Kept::Chats)
+        .ok_or_else(|| anyhow::anyhow!("no place keeps the chats"))
+        .and_then(|path| Store::read(&path)?.opened());
+    opened.unwrap_or_else(|error| {
+        tracing::warn!("when the chats were opened is not read: {error:#}");
         Vec::new()
     })
 }
@@ -671,6 +684,8 @@ struct Plans<'a> {
     kept: &'a [KeptPlan],
     /// How many lines the human wrote on each step of each chat's plans.
     on: &'a [(ChatId, Vec<(u64, usize)>)],
+    /// When each chat was opened, which tells apart chats of one name.
+    opened: &'a [(ChatId, i64)],
     dismissed: &'a [Dismissed],
     moved: &'a Progress,
     at: i64,
@@ -1264,7 +1279,7 @@ fn told_of(
         when(b).cmp(&when(a))
     });
     happened.truncate(HAPPENED);
-    json!({
+    let mut told_json = json!({
         "folder": root,
         "home": home,
         "github": told.github,
@@ -1274,7 +1289,109 @@ fn told_of(
         "busy": busy,
         "decided": decided,
         "happened": happened,
-    })
+    });
+    hint(&mut told_json, &hints(told, root, plans));
+    told_json
+}
+
+/// A way to tell a chat apart from others of its name, if it tells.
+type Hinting<'a> = dyn Fn(&Chat) -> Option<String> + 'a;
+
+/// What tells each chat of the folder `root`, or of every folder in the
+/// home, apart from the others of its name, for those whose name another
+/// has, by its key: the first of where it works, the chat that opened
+/// it, and when it was opened, of `plans`, to the minute or else to the
+/// second, that no other of its name shares.
+fn hints(told: &Told, root: &Path, plans: &Plans<'_>) -> Vec<(u64, String)> {
+    let chats: Vec<&Chat> = told
+        .chats
+        .iter()
+        .filter(|chat| of_folder(told, chat, root))
+        .collect();
+    let zone = TimeZone::system();
+    let folder = |chat: &Chat| {
+        if chat.cwd == chat.project {
+            where_of(told, &chat.project)
+        } else {
+            chat.cwd
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+        }
+        .map(|folder| format!("in {folder}"))
+    };
+    let parent = |chat: &Chat| {
+        let parent = chat.parent?;
+        let parent = told.chats.iter().find(|other| other.key == parent)?;
+        Some(format!("under {}", parent.name))
+    };
+    let opened = |chat: &Chat, seconds: bool| {
+        let at = plans
+            .opened
+            .iter()
+            .find(|(id, _)| Some(*id) == chat.kept)?
+            .1;
+        let day = if plans.at - at < 20 * 60 * 60 * 1000 {
+            ""
+        } else {
+            "%b %-d "
+        };
+        let format = format!("opened {day}%H:%M{}", if seconds { ":%S" } else { "" });
+        let at = jiff::Timestamp::from_millisecond(at).ok()?;
+        Some(at.to_zoned(zone.clone()).strftime(&format).to_string())
+    };
+    let (by_minute, by_second) = (
+        |chat: &Chat| opened(chat, false),
+        |chat: &Chat| opened(chat, true),
+    );
+    // To the second, for chats opened in the same minute.
+    let ways: [&Hinting<'_>; 4] = [&folder, &parent, &by_minute, &by_second];
+    let mut hints = Vec::new();
+    for chat in &chats {
+        let alike: Vec<&&Chat> = chats
+            .iter()
+            .filter(|other| other.key != chat.key && other.name == chat.name)
+            .collect();
+        if alike.is_empty() {
+            continue;
+        }
+        let told_apart = ways.iter().find_map(|way| {
+            let hint = way(chat)?;
+            alike
+                .iter()
+                .all(|other| way(other).as_ref() != Some(&hint))
+                .then_some(hint)
+        });
+        if let Some(hint) = told_apart {
+            hints.push((chat.key, hint));
+        }
+    }
+    hints
+}
+
+/// Puts each of `hints` on each chat `told` tells of, by its key and its
+/// name, as `hint`, in every part of it.
+fn hint(told: &mut Value, hints: &[(u64, String)]) {
+    match told {
+        Value::Object(object) => {
+            let named =
+                object.contains_key("name") || object.get("chat").is_some_and(Value::is_string);
+            if named
+                && let Some(key) = object.get("key").and_then(Value::as_u64)
+                && let Some((_, hint)) = hints.iter().find(|(hinted, _)| *hinted == key)
+            {
+                object.insert("hint".to_owned(), json!(hint));
+            }
+            for value in object.values_mut() {
+                hint(value, hints);
+            }
+        }
+        Value::Array(values) => {
+            for value in values {
+                hint(value, hints);
+            }
+        }
+        _ => {}
+    }
 }
 
 /// Pushes onto `happened` the sources kept of the folder `root`, the
@@ -1339,6 +1456,7 @@ mod tests {
     const NO_PLANS: Plans<'static> = Plans {
         kept: &[],
         on: &[],
+        opened: &[],
         dismissed: &[],
         moved: &NO_MOVED,
         at: 0,
@@ -1811,6 +1929,83 @@ mod tests {
     }
 
     #[test]
+    fn chats_of_one_name_are_told_apart_by_folder_then_parent_then_when_opened() {
+        let root = TempDir::new();
+        let named = |key: u64, name: &str, cwd: &Path, parent: Option<u64>| {
+            let mut named = chat(key, cwd, &root, false, true);
+            named.name = name.to_owned();
+            named.parent = parent;
+            named.kept = Some(kept(key));
+            named
+        };
+        let told = Told {
+            chats: vec![
+                named(1, "Fix CI", &root.join("sketch-a"), None),
+                named(2, "Fix CI", &root.join("sketch-b"), None),
+                named(3, "Lead", &root, None),
+                named(4, "Lead", &root, None),
+                named(5, "Review", &root, Some(3)),
+                named(6, "Review", &root, Some(1)),
+                named(7, "Only one", &root, None),
+                named(8, "Look", &root, None),
+                named(9, "Look", &root, None),
+            ],
+            home: root.join("home"),
+            ..Told::default()
+        };
+        let hour = 60 * 60 * 1000;
+        let opened = [
+            (kept(3), 9 * hour),
+            (kept(4), 9 * hour + 60_000),
+            (kept(8), 9 * hour + 1_000),
+            (kept(9), 9 * hour + 2_000),
+        ];
+        let plans = Plans {
+            opened: &opened,
+            at: 10 * hour,
+            ..NO_PLANS
+        };
+
+        let mut hints = hints(&told, &root, &plans);
+        hints.sort();
+        let at = |at: i64, format: &str| {
+            jiff::Timestamp::from_millisecond(9 * hour + at)
+                .unwrap()
+                .to_zoned(TimeZone::system())
+                .strftime(format)
+                .to_string()
+        };
+        assert_eq!(
+            hints,
+            [
+                (1, "in sketch-a".to_owned()),
+                (2, "in sketch-b".to_owned()),
+                (3, at(0, "opened %H:%M")),
+                (4, at(60_000, "opened %H:%M")),
+                (5, "under Lead".to_owned()),
+                (6, "under Fix CI".to_owned()),
+                (8, at(1_000, "opened %H:%M:%S")),
+                (9, at(2_000, "opened %H:%M:%S")),
+            ]
+        );
+
+        let places = Places {
+            wiki: &root.join("wiki"),
+            raw: &root.join("raw"),
+            triggers: &json!({}),
+        };
+        let json = told_of(&told, &root, &[], &plans, &|_| None, &places);
+        let waiting: Vec<(&str, &Value)> = json["waiting"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|chat| (chat["name"].as_str().unwrap(), &chat["hint"]))
+            .collect();
+        assert_eq!(waiting[0], ("Fix CI", &json!("in sketch-a")));
+        assert_eq!(waiting[6], ("Only one", &Value::Null));
+    }
+
+    #[test]
     fn a_chat_shows_its_plan_while_at_work_not_done_or_done_lately() {
         let root = TempDir::new();
         let listed = |key: u64, name: &str, working: bool, parent: Option<u64>| {
@@ -2032,6 +2227,7 @@ mod tests {
                 &Plans {
                     kept: &plans(),
                     on: &[],
+                    opened: &[],
                     dismissed: &Dismissed::read(),
                     moved: &NO_MOVED,
                     at: 0,
