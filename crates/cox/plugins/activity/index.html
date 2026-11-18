@@ -188,6 +188,62 @@
         margin-left: 14px;
         overflow-wrap: anywhere;
       }
+      /* What moved over the window the human picked, above the plans:
+         a line of what it adds up to, then a line a chat. */
+      .summed {
+        margin: 0 0 10px;
+        padding: 6px 10px 8px;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        font-size: 12px;
+      }
+      .summed .picks {
+        display: flex;
+        align-items: baseline;
+        gap: 8px;
+        margin-bottom: 2px;
+      }
+      .summed .pick {
+        font: 600 10.5px var(--sans);
+        color: var(--faint);
+        background: none;
+        border: 0;
+        padding: 0;
+        cursor: pointer;
+      }
+      .summed .pick:hover {
+        color: var(--link);
+      }
+      .summed .pick.picked {
+        color: var(--foreground);
+        text-decoration: underline;
+        text-underline-offset: 3px;
+      }
+      .summed .told {
+        margin-left: 4px;
+        color: var(--dim);
+      }
+      .summed .said {
+        display: flex;
+        align-items: baseline;
+        gap: 8px;
+        padding: 1px 0;
+        overflow-wrap: anywhere;
+      }
+      .summed .text {
+        color: var(--dim);
+      }
+      .summed .mark {
+        flex: none;
+        width: 12px;
+        color: var(--faint);
+      }
+      .summed .mark.moved {
+        color: var(--accent);
+      }
+      .summed .mark.waits {
+        color: var(--asking);
+      }
       @keyframes turn {
         to {
           transform: rotate(360deg);

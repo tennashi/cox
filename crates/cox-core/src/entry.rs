@@ -601,6 +601,11 @@ pub struct Step {
     /// What the step is to do.
     pub text: String,
     pub state: StepState,
+    /// When coxd first saw it in its state, in milliseconds since the
+    /// epoch: when it was done, once it is. None for a step an older Cox
+    /// kept, and one that was so in a plan an older Cox kept before.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub since: Option<i64>,
 }
 
 /// How far a step of the plan has gone.
