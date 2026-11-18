@@ -2457,25 +2457,30 @@ mod tests {
         let first = since(&conversation);
         assert!(first.iter().all(|at| at.is_some_and(|at| at >= before)));
 
-        std::thread::sleep(std::time::Duration::from_millis(5));
-        conversation.apply(AgentEvent::Plan(vec![
-            step("Read", StepState::Completed),
-            step("Fix", StepState::Pending),
-        ]));
-        let then = since(&conversation);
-        assert!(then[0] > first[0], "done after it started: {then:?}");
-        assert_eq!(then[1], first[1], "kept as it was");
+        // A step that went further is stamped anew; one as it was keeps
+        // its stamp.
+        let later = Some(i64::MAX);
+        let then: Vec<Option<i64>> = conversation
+            .stamped(
+                vec![
+                    step("Read", StepState::Completed),
+                    step("Fix", StepState::Pending),
+                ],
+                later,
+            )
+            .iter()
+            .map(|step| step.since)
+            .collect();
+        assert_eq!(then, [later, first[1]]);
 
-        // The next turn's plan keeps when a step it carries was done.
+        // The next turn's plan keeps the stamps of the steps it carries.
         conversation.apply(AgentEvent::TurnEnded(StopReason::EndTurn));
         conversation.submit("again");
         conversation.apply(AgentEvent::Plan(vec![
-            step("Read", StepState::Completed),
-            step("Fix", StepState::InProgress),
+            step("Read", StepState::InProgress),
+            step("Fix", StepState::Pending),
         ]));
-        let next = since(&conversation);
-        assert_eq!(next[0], then[0]);
-        assert!(next[1] > then[1]);
+        assert_eq!(since(&conversation), first);
     }
 
     #[test]
