@@ -1461,8 +1461,15 @@ impl Conversation {
 
     /// Shows the plan the agent works to: in place of the plan it sent
     /// before in the turn, if it did, so that the turn shows one plan, as
-    /// it stands.
+    /// it stands. Each step keeps when it came to its state from the
+    /// plan the agent sent last, in this turn or one before, if it was
+    /// so there, and is stamped now otherwise.
     fn plan(&mut self, steps: Vec<Step>) {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .ok()
+            .and_then(|since| i64::try_from(since.as_millis()).ok());
+        let steps = self.stamped(steps, now);
         let texts = texts(&steps);
         let turn = self
             .entries
@@ -1480,6 +1487,31 @@ impl Conversation {
             None => self.push(Entry::Plan(steps)),
         }
         self.follow_plan(texts);
+    }
+
+    /// `steps`, each with when it came to its state: as the plan the
+    /// agent sent last has it, for a step there by the same text in the
+    /// same state, or `now`.
+    fn stamped(&self, steps: Vec<Step>, now: Option<i64>) -> Vec<Step> {
+        let was = self
+            .entries
+            .iter()
+            .rev()
+            .find_map(|entry| match entry {
+                Entry::Plan(steps) => Some(steps.as_slice()),
+                _ => None,
+            })
+            .unwrap_or_default();
+        steps
+            .into_iter()
+            .map(|step| {
+                let since = was
+                    .iter()
+                    .find(|before| before.text == step.text && before.state == step.state)
+                    .map_or(now, |before| before.since);
+                Step { since, ..step }
+            })
+            .collect()
     }
 
     /// The title the agent gave its session, if it gave one.
@@ -2256,10 +2288,30 @@ mod tests {
         );
     }
 
+    /// `entry`, with no step of a plan told when it came to its state.
+    pub(super) fn unstamped(entry: &Entry) -> Entry {
+        match entry {
+            Entry::Plan(steps) => Entry::Plan(unstamped_steps(steps)),
+            entry => entry.clone(),
+        }
+    }
+
+    /// `steps`, none told when it came to its state.
+    pub(super) fn unstamped_steps(steps: &[Step]) -> Vec<Step> {
+        steps
+            .iter()
+            .map(|step| Step {
+                since: None,
+                ..step.clone()
+            })
+            .collect()
+    }
+
     pub(super) fn step(text: &str, state: StepState) -> Step {
         Step {
             text: text.to_owned(),
             state,
+            since: None,
         }
     }
 
@@ -2382,6 +2434,56 @@ mod tests {
     }
 
     #[test]
+    fn stamps_each_step_with_when_it_came_to_its_state() {
+        let mut conversation = Conversation::new();
+        conversation.submit("plan");
+        let since = |conversation: &Conversation| -> Vec<Option<i64>> {
+            conversation
+                .last_plan()
+                .unwrap()
+                .iter()
+                .map(|step| step.since)
+                .collect()
+        };
+        let before = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis();
+        let before = i64::try_from(before).unwrap();
+        conversation.apply(AgentEvent::Plan(vec![
+            step("Read", StepState::InProgress),
+            step("Fix", StepState::Pending),
+        ]));
+        let first = since(&conversation);
+        assert!(first.iter().all(|at| at.is_some_and(|at| at >= before)));
+
+        // A step that went further is stamped anew; one as it was keeps
+        // its stamp.
+        let later = Some(i64::MAX);
+        let then: Vec<Option<i64>> = conversation
+            .stamped(
+                vec![
+                    step("Read", StepState::Completed),
+                    step("Fix", StepState::Pending),
+                ],
+                later,
+            )
+            .iter()
+            .map(|step| step.since)
+            .collect();
+        assert_eq!(then, [later, first[1]]);
+
+        // The next turn's plan keeps the stamps of the steps it carries.
+        conversation.apply(AgentEvent::TurnEnded(StopReason::EndTurn));
+        conversation.submit("again");
+        conversation.apply(AgentEvent::Plan(vec![
+            step("Read", StepState::InProgress),
+            step("Fix", StepState::Pending),
+        ]));
+        assert_eq!(since(&conversation), first);
+    }
+
+    #[test]
     fn shows_one_plan_a_turn_as_it_stands() {
         let mut conversation = Conversation::new();
         conversation.submit("plan");
@@ -2395,29 +2497,41 @@ mod tests {
         ];
 
         conversation.apply(AgentEvent::Plan(first.clone()));
-        assert_eq!(conversation.last_plan(), Some(&first[..]));
+        assert_eq!(
+            conversation.last_plan().map(unstamped_steps),
+            Some(first.clone())
+        );
         conversation.apply(AgentEvent::ReplyText("reading".to_owned()));
         conversation.take_changed();
         conversation.apply(AgentEvent::Plan(then.clone()));
         assert_eq!(conversation.take_changed(), [1]);
         assert_eq!(
-            conversation.entries()[1..],
+            conversation.entries()[1..]
+                .iter()
+                .map(unstamped)
+                .collect::<Vec<_>>(),
             [
                 Entry::Plan(then.clone()),
                 Entry::Reply("reading".to_owned())
             ]
         );
-        assert_eq!(conversation.last_plan(), Some(&then[..]));
+        assert_eq!(
+            conversation.last_plan().map(unstamped_steps),
+            Some(then.clone())
+        );
 
         // What the turn did stays in sight once it ends.
         conversation.apply(AgentEvent::TurnEnded(StopReason::EndTurn));
-        assert_eq!(conversation.last_plan(), Some(&then[..]));
+        assert_eq!(
+            conversation.last_plan().map(unstamped_steps),
+            Some(then.clone())
+        );
         // The next turn plans anew.
         conversation.submit("again");
         assert_eq!(conversation.last_plan(), None);
         conversation.apply(AgentEvent::Plan(first.clone()));
         assert_eq!(conversation.entries().len(), 5);
-        assert_eq!(conversation.entries()[1], Entry::Plan(then));
+        assert_eq!(unstamped(&conversation.entries()[1]), Entry::Plan(then));
     }
 
     #[test]

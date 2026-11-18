@@ -299,6 +299,19 @@ pub struct KeptPlan {
     pub at: i64,
 }
 
+/// What moved in the chats since a time, as [`Store::progress`] reads it.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Progress {
+    /// Each chat that wrote an entry since, with when it wrote its last,
+    /// in milliseconds since the epoch.
+    pub active: Vec<(ChatId, i64)>,
+    /// The steps of their agents' plans done since, each once: its chat,
+    /// its text, and when it was done.
+    pub done: Vec<(ChatId, String, i64)>,
+    /// The chats marked done since.
+    pub resolved: Vec<(ChatId, Resolved)>,
+}
+
 /// A question an agent asked in a chat, which the human answered by
 /// choosing or in their own words, as [`Store::answered`] reads it.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1151,6 +1164,67 @@ impl Store {
         Ok(plans)
     }
 
+    /// What moved in the chats since `since`, in milliseconds since the
+    /// epoch: the chats that wrote an entry, the steps of their plans
+    /// done, as coxd stamped them, and the chats marked done.
+    ///
+    /// # Errors
+    ///
+    /// When the database cannot be read.
+    pub fn progress(&self, since: i64) -> anyhow::Result<Progress> {
+        let mut moved = Progress::default();
+        let mut statement = self.connection.prepare(
+            "SELECT id, (SELECT at FROM entries WHERE entries.chat = chats.id
+              ORDER BY number DESC LIMIT 1) AS last
+             FROM chats WHERE last >= ?1 ORDER BY id",
+        )?;
+        let rows = statement.query_map([since], |row| Ok((ChatId(row.get(0)?), row.get(1)?)))?;
+        moved.active = rows.collect::<Result<_, _>>()?;
+        // The WHERE is the plans index's, word for word, for SQLite to
+        // read that index rather than every entry of the chat, which it
+        // would by the chat's key otherwise.
+        let mut statement = self.connection.prepare(
+            r#"SELECT entry FROM entries INDEXED BY plans
+             WHERE chat = ?1 AND entry LIKE '{"plan":%' ORDER BY number"#,
+        )?;
+        for &(chat, _) in &moved.active {
+            let rows = statement.query_map([chat.0], |row| row.get::<_, String>(0))?;
+            for entry in rows {
+                let Ok(Entry::Plan(steps)) = serde_json::from_str(&entry?) else {
+                    continue;
+                };
+                for step in steps {
+                    let Some(at) = step.since.filter(|at| *at >= since) else {
+                        continue;
+                    };
+                    if step.state == crate::entry::StepState::Completed
+                        && !moved
+                            .done
+                            .iter()
+                            .any(|done| done.0 == chat && done.1 == step.text && done.2 == at)
+                    {
+                        moved.done.push((chat, step.text, at));
+                    }
+                }
+            }
+        }
+        let mut statement = self.connection.prepare(
+            "SELECT id, resolved_at, resolved_by FROM chats WHERE resolved_at >= ?1 ORDER BY id",
+        )?;
+        let rows = statement.query_map([since], |row| {
+            let by: Option<String> = row.get(2)?;
+            Ok((
+                ChatId(row.get(0)?),
+                Resolved {
+                    at: row.get(1)?,
+                    by: ResolvedBy::from_word(by.as_deref().unwrap_or("")),
+                },
+            ))
+        })?;
+        moved.resolved = rows.collect::<Result<_, _>>()?;
+        Ok(moved)
+    }
+
     /// The steps of the plan `chat`'s agent first sent after the human's
     /// last line, once it sent one.
     ///
@@ -1663,10 +1737,12 @@ mod tests {
                 Step {
                     text: "Read the code".to_owned(),
                     state: StepState::Completed,
+                    since: None,
                 },
                 Step {
                     text: "Fix it".to_owned(),
                     state: StepState::InProgress,
+                    since: None,
                 },
             ]),
         ];
@@ -1880,6 +1956,7 @@ mod tests {
         let step = |text: &str, state| Step {
             text: text.to_owned(),
             state,
+            since: None,
         };
         let first = vec![step("Read", StepState::Completed)];
         let last = vec![
@@ -1912,6 +1989,82 @@ mod tests {
             .query_row(
                 r#"EXPLAIN QUERY PLAN SELECT chat, max(number) FROM entries
                  WHERE entry LIKE '{"plan":%' GROUP BY chat"#,
+                [],
+                |row| row.get(3),
+            )
+            .unwrap();
+        assert!(plan.contains("plans"), "read by the index: {plan}");
+    }
+
+    #[test]
+    fn reads_what_moved_since_a_time() {
+        let store = Store::in_memory().unwrap();
+        let busy = store.add_chat(None, "Chat 1").unwrap();
+        let quiet = store.add_chat(None, "Chat 2").unwrap();
+        let reported = store.add_chat(None, "Chat 3").unwrap();
+        let step = |text: &str, state, since| Step {
+            text: text.to_owned(),
+            state,
+            since,
+        };
+        let since = now();
+        // Done before, in a turn before, and kept so in the next.
+        let read = step("Read", StepState::Completed, Some(since - 60_000));
+        let entries = [
+            Entry::Plan(vec![
+                read.clone(),
+                step("Fix", StepState::InProgress, Some(since)),
+            ]),
+            Entry::Human("again".to_owned()),
+            Entry::Plan(vec![
+                read,
+                step("Fix", StepState::Completed, Some(since + 1)),
+                step("Old", StepState::Completed, None),
+                step("Test", StepState::InProgress, Some(since + 2)),
+            ]),
+            Entry::Reply("testing".to_owned()),
+        ];
+        for (number, entry) in entries.iter().enumerate() {
+            store.keep_entry(busy, number, entry).unwrap();
+        }
+        store
+            .connection
+            .execute(
+                "INSERT INTO entries (chat, number, at, entry) VALUES (?1, 0, ?2, '\"merge\"')",
+                params![quiet.0, since - 60_000],
+            )
+            .unwrap();
+        store
+            .keep_entry(reported, 0, &Entry::Reply("done".to_owned()))
+            .unwrap();
+        store
+            .resolve_chat(reported, Some(Resolved::now(ResolvedBy::Agent)))
+            .unwrap();
+
+        let moved = store.progress(since).unwrap();
+
+        assert_eq!(
+            moved
+                .active
+                .iter()
+                .map(|(chat, _)| *chat)
+                .collect::<Vec<_>>(),
+            [busy, reported]
+        );
+        assert_eq!(moved.done, [(busy, "Fix".to_owned(), since + 1)]);
+        assert_eq!(
+            moved
+                .resolved
+                .iter()
+                .map(|(chat, resolved)| (*chat, resolved.by))
+                .collect::<Vec<_>>(),
+            [(reported, ResolvedBy::Agent)]
+        );
+        let plan: String = store
+            .connection
+            .query_row(
+                r#"EXPLAIN QUERY PLAN SELECT entry FROM entries INDEXED BY plans
+                 WHERE chat = 1 AND entry LIKE '{"plan":%' ORDER BY number"#,
                 [],
                 |row| row.get(3),
             )

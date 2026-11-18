@@ -10,7 +10,11 @@
 // its open pull requests, and the steps of its plan, each with the
 // subagents' chats that work on it, and the subagents no step has under
 // it. A plan of a chat not at work the human may dismiss, one by one or
-// all at once, until its agent sends another.
+// all at once, until its agent sends another. Above the plans, what moved
+// over the last 15 minutes, hour, or four hours, as the human picks: the
+// chats that moved, each with the steps its plan got done and its
+// subagents that reported or worked, and, as things stand, the chats that
+// wait on the human and those that stopped with their plan not done.
 // On the right, what was decided, the questions agents asked that the
 // human answered, each with what they chose and why, the last first. A
 // click on a chat shows it, by going to `cox://chat/<key>`. Below, what
@@ -25,6 +29,15 @@ const EVERY = 2000;
 const app = document.getElementById("app");
 let told = null;
 let toldText = null;
+/// The window the summary above the plans tells of, by its name, as the
+/// human last picked it, kept across the page's loads.
+let windowed = (() => {
+  try {
+    return localStorage.getItem("activity.window") ?? "1 h";
+  } catch {
+    return "1 h";
+  }
+})();
 
 const esc = (s) =>
   String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
@@ -143,6 +156,59 @@ function plan(chat) {
   );
 }
 
+/// A link to the chat `chat` names, by its key and name.
+const named = (chat) => `<a href="cox://chat/${chat.key}" title="shows the chat">${esc(chat.name)}</a>`;
+
+/// How many of `count` there are, as "1 step" or "2 steps".
+const many = (count, one, more) => `${count} ${count === 1 ? one : more}`;
+
+/// What moved over the window the human picked, of those `summaries`
+/// tells, with buttons to pick another, and what stands still now.
+function summary(summaries) {
+  if (!(summaries ?? []).length) return "";
+  const shown = summaries.find((summary) => summary.window === windowed) ?? summaries[0];
+  const picks = summaries
+    .map(
+      (summary) =>
+        `<button class="pick${summary === shown ? " picked" : ""}" data-window="${esc(summary.window)}">${esc(summary.window)}</button>`,
+    )
+    .join("");
+  const adds = [
+    shown.moved.length ? many(shown.moved.length, "chat moved", "chats moved") : "",
+    shown.steps ? many(shown.steps, "step done", "steps done") : "",
+    shown.reports ? many(shown.reports, "subagent reported", "subagents reported") : "",
+    shown.answered ? many(shown.answered, "question you answered", "questions you answered") : "",
+  ].filter(Boolean);
+  const moved = shown.moved
+    .map((chat) => {
+      const parts = [
+        chat.done.length
+          ? `done ${chat.done.map((text) => `<span class="text">${esc(text)}</span>`).join(", ")}${chat.more ? ` and ${chat.more} more` : ""}`
+          : "",
+        chat.ended.length ? `${chat.ended.map(named).join(", ")} reported` : "",
+        ...[true, false].map((working) => {
+          const subs = chat.worked.filter((sub) => sub.working === working);
+          return subs.length ? `${subs.map(named).join(", ")} ${working ? "at work" : "worked"}` : "";
+        }),
+      ].filter(Boolean);
+      return `<div class="said"><span class="mark moved">▸</span><span>${named(chat)}${parts.length ? ` — ${parts.join(" · ")}` : " worked"}</span></div>`;
+    })
+    .join("");
+  const waits = shown.waits
+    .map((chat) => `<div class="said"><span class="mark waits">●</span><span>${named(chat)} ${esc(chat.why)}</span></div>`)
+    .join("");
+  const stopped = shown.stopped
+    .map(
+      (chat) =>
+        `<div class="said"><span class="mark stopped">■</span><span>${named(chat)} stopped at ${chat.done}/${chat.of}, last moved ${esc(chat.since)}</span></div>`,
+    )
+    .join("");
+  return (
+    `<div class="summed"><div class="picks">${picks}<span class="told">${adds.length ? esc(adds.join(" · ")) : `nothing moved in the last ${esc(shown.window)}`}</span></div>` +
+    `${moved}${waits}${stopped}</div>`
+  );
+}
+
 /// A button that hides the plans `plans` name, as the page was told of
 /// them, until their agents send others.
 const dismiss = (plans, label, title) =>
@@ -197,6 +263,7 @@ function draw() {
     `<div class="waiting">${count ? told.waiting.map(waiting).join("") : `<div class="none">Nothing ${here}is asked of you.</div>`}</div>` +
     `<div class="tier">Plans${busy ? `<i title="chats at work">${busy}</i>` : ""}` +
     `${dismissable.length > 1 ? dismiss(dismissable, `dismiss ${dismissable.length} not at work`, "hides each plan of a chat not at work until its agent sends another") : ""}</div>` +
+    summary(told.summaries) +
     `<div class="waiting">${plans ? told.plans.map(working).join("") : `<div class="none">No chat ${here}is at work or has a plan to finish.</div>`}</div>` +
     `</div><div>` +
     `<div class="tier">Decided</div>` +
@@ -211,6 +278,17 @@ function draw() {
 }
 
 app.addEventListener("click", (event) => {
+  const pick = event.target.closest("[data-window]");
+  if (pick) {
+    windowed = pick.dataset.window;
+    try {
+      localStorage.setItem("activity.window", windowed);
+    } catch {
+      // The pick holds while the page is open.
+    }
+    draw();
+    return;
+  }
   const button = event.target.closest("[data-dismiss]");
   if (!button) return;
   button.disabled = true;

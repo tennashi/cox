@@ -675,7 +675,7 @@ impl Conversation {
 mod tests {
     use cox_acp::{PermissionAnswer, StopReason};
 
-    use super::super::tests::step;
+    use super::super::tests::{step, unstamped, unstamped_steps};
     use super::super::{Answer, Goal, StepState, ToolCallResult};
     use super::*;
     use crate::agent::{AgentEvent, Prompt};
@@ -1129,15 +1129,16 @@ mod tests {
         let then = vec![step("Fix more", StepState::InProgress)];
         conversation.checked(ran(1, ""));
         conversation.apply(AgentEvent::Plan(then.clone()));
-        assert_eq!(conversation.last_plan(), Some(&then[..]));
+        assert_eq!(conversation.last_plan().map(unstamped_steps), Some(then));
 
         conversation.apply(AgentEvent::Plan(first.clone()));
         let plans: Vec<_> = conversation
             .entries()
             .iter()
             .filter(|entry| matches!(entry, Entry::Plan(_)))
+            .map(unstamped)
             .collect();
-        assert_eq!(plans, [&Entry::Plan(first)]);
+        assert_eq!(plans, [Entry::Plan(first)]);
     }
 
     #[test]

@@ -35,7 +35,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use cox_core::entry::{Entry, QuestionAnswer, Step, StepState};
-use cox_core::store::{ChatId, KeptAnswer, KeptPlan, Store};
+use cox_core::store::{ChatId, KeptAnswer, KeptPlan, Progress, ResolvedBy, Store};
 use jiff::tz::TimeZone;
 use serde_json::{Value, json};
 
@@ -52,6 +52,16 @@ const DECIDED: usize = 20;
 /// How long, in milliseconds, a chat whose plan is done shows it after
 /// its agent last did anything, for the human to see what came of it.
 const DONE_SHOWS: i64 = 30 * 60 * 1000;
+/// The windows the Plans tier sums up what moved in, each by its name
+/// and its length in milliseconds, the shortest first.
+const WINDOWS: [(&str, i64); 3] = [
+    ("15 min", 15 * 60 * 1000),
+    ("1 h", 60 * 60 * 1000),
+    ("4 h", 4 * 60 * 60 * 1000),
+];
+/// How many steps done a chat's line in a summary names, the last done
+/// first, before it says how many more.
+const NAMED: usize = 3;
 /// How many times what was decided is read again after a chat stopped
 /// asking: coxd may tell the window so before it keeps the answer.
 const READ_AGAIN: u8 = 2;
@@ -164,6 +174,9 @@ pub struct Decided {
     pub folder: Option<PathBuf>,
     /// When it was asked, as `2026-11-16 09:30`.
     pub when: String,
+    /// When it was answered, or asked where an older Cox kept no time of
+    /// the answer, in milliseconds since the epoch.
+    pub at: i64,
     /// The question's short label, as "Approach", if the agent gave one.
     pub header: Option<String>,
     pub question: String,
@@ -236,6 +249,7 @@ impl Decided {
                     project: kept.project.clone(),
                     folder: kept.folder.clone(),
                     when: when.clone(),
+                    at: kept.at,
                     header: question.header.clone(),
                     question: asked,
                     choice,
@@ -374,6 +388,7 @@ pub fn waiting(root: &Path) -> usize {
 /// schedules ran.
 #[must_use]
 pub fn told(root: &Path, wiki: &Path, raw: &Path, triggers: &Value) -> Value {
+    let at = jiff::Timestamp::now().as_millisecond();
     told_of(
         &now(),
         root,
@@ -381,7 +396,8 @@ pub fn told(root: &Path, wiki: &Path, raw: &Path, triggers: &Value) -> Value {
         &Plans {
             kept: &plans(),
             dismissed: &Dismissed::read(),
-            at: jiff::Timestamp::now().as_millisecond(),
+            moved: &progress(at - WINDOWS[WINDOWS.len() - 1].1),
+            at,
         },
         &commands::now,
         &Places {
@@ -400,6 +416,18 @@ fn plans() -> Vec<KeptPlan> {
     plans.unwrap_or_else(|error| {
         tracing::warn!("the plans of the chats are not read: {error:#}");
         Vec::new()
+    })
+}
+
+/// What moved in the chats coxd keeps since `since`, in milliseconds
+/// since the epoch, as it keeps it.
+fn progress(since: i64) -> Progress {
+    let moved = coxd::storage::path(coxd::storage::Kept::Chats)
+        .ok_or_else(|| anyhow::anyhow!("no place keeps the chats"))
+        .and_then(|path| Store::read(&path)?.progress(since));
+    moved.unwrap_or_else(|error| {
+        tracing::warn!("what moved in the chats is not read: {error:#}");
+        Progress::default()
     })
 }
 
@@ -533,10 +561,12 @@ fn linked(plan: &[Step], subagents: &[&Chat]) -> Vec<Option<usize>> {
 }
 
 /// The plans each chat's agent sent last, those the human dismissed,
-/// and when, in milliseconds since the epoch, they are told.
+/// what moved in the chats over the longest of [`WINDOWS`], and when, in
+/// milliseconds since the epoch, they are told.
 struct Plans<'a> {
     kept: &'a [KeptPlan],
     dismissed: &'a [Dismissed],
+    moved: &'a Progress,
     at: i64,
 }
 
@@ -716,6 +746,187 @@ fn planned(
     listed
 }
 
+/// The chat of `told` at the top of `chat`'s: the one whose agent opened
+/// the one that opened it, and so on, as far as the window lists them.
+fn top_of<'a>(told: &'a Told, chat: &'a Chat) -> &'a Chat {
+    let mut top = chat;
+    while let Some(parent) = top
+        .parent
+        .and_then(|parent| told.chats.iter().find(|other| other.key == parent))
+    {
+        top = parent;
+    }
+    top
+}
+
+/// What moved in the folder `root`, or in every folder in the home, over
+/// each of [`WINDOWS`], as JSON, from what `plans` read moved and the
+/// questions answered of `decided`: each chat at the top of those that
+/// moved, by what its own agent's plan got done, the subagents' chats
+/// under it that reported or were marked done, and those that worked;
+/// and, as things stand, the chats that wait on the human, and those
+/// that stopped with their plan not done, with when they last moved.
+fn summaries(told: &Told, root: &Path, plans: &Plans<'_>, decided: &[Decided]) -> Vec<Value> {
+    let zone = TimeZone::system();
+    // The time of day, and the day too once it is not today's hour.
+    let clock = |at: i64| {
+        let format = if plans.at - at < 20 * 60 * 60 * 1000 {
+            "%H:%M"
+        } else {
+            "%b %-d %H:%M"
+        };
+        jiff::Timestamp::from_millisecond(at)
+            .map_or_default(|at| at.to_zoned(zone.clone()).strftime(format).to_string())
+    };
+    let chats: Vec<&Chat> = told
+        .chats
+        .iter()
+        .filter(|chat| of_folder(told, chat, root))
+        .collect();
+    let kept = |chat: &Chat, id: ChatId| chat.kept == Some(id);
+    let waits: Vec<Value> = chats
+        .iter()
+        .filter(|chat| !chat.resolved && (chat.asking || (chat.unread && !chat.archived)))
+        .map(|chat| {
+            json!({
+                "key": chat.key,
+                "name": chat.name,
+                "why": if chat.asking { "asks you" } else { "finished a turn" },
+            })
+        })
+        .collect();
+    let stopped: Vec<Value> = chats
+        .iter()
+        .filter(|chat| !chat.resolved && !chat.working && !chat.asking && !chat.unread)
+        .filter_map(|chat| {
+            let plan = plans.of(chat)?;
+            let done = plan
+                .steps
+                .iter()
+                .filter(|step| step.state == StepState::Completed)
+                .count();
+            (done < plan.steps.len()).then(|| {
+                json!({
+                    "key": chat.key,
+                    "name": chat.name,
+                    "done": done,
+                    "of": plan.steps.len(),
+                    "since": clock(plan.at),
+                })
+            })
+        })
+        .collect();
+    WINDOWS
+        .iter()
+        .map(|&(name, long)| {
+            let mut summed = summed(told, &chats, plans.moved, plans.at - long);
+            summed["window"] = json!(name);
+            summed["answered"] = json!(
+                decided
+                    .iter()
+                    .filter(|decided| {
+                        decided.at >= plans.at - long
+                            && chats.iter().any(|chat| kept(chat, decided.chat))
+                    })
+                    .count()
+            );
+            summed["waits"] = json!(waits);
+            summed["stopped"] = json!(stopped);
+            summed
+        })
+        .collect()
+}
+
+/// A chat at the top of those that moved in a window, as [`summed`] sums
+/// it up: the steps its agent's plan got done, the last first, and the
+/// subagents' chats under it that `ended`, as they reported or were
+/// marked done, and that `worked`.
+struct Line<'a> {
+    chat: &'a Chat,
+    done: Vec<(&'a str, i64)>,
+    ended: Vec<&'a Chat>,
+    worked: Vec<&'a Chat>,
+}
+
+/// What moved among `chats` of `told` since `start`, as `moved` read it,
+/// as JSON: how many steps the plans of the chats at the top were done,
+/// which the lines name, how many subagents reported, and
+/// each chat at the top of those that moved, as a [`Line`].
+fn summed(told: &Told, chats: &[&Chat], moved: &Progress, start: i64) -> Value {
+    let mut lines: Vec<Line<'_>> = Vec::new();
+    let (mut steps, mut reports) = (0, 0);
+    for chat in chats {
+        let kept = |id: ChatId| chat.kept == Some(id);
+        let done: Vec<(&str, i64)> = moved
+            .done
+            .iter()
+            .filter(|(id, _, at)| kept(*id) && *at >= start)
+            .map(|(_, text, at)| (text.as_str(), *at))
+            .collect();
+        let resolved = moved
+            .resolved
+            .iter()
+            .find(|(id, resolved)| kept(*id) && resolved.at >= start)
+            .map(|(_, resolved)| resolved);
+        let active = moved
+            .active
+            .iter()
+            .any(|(id, at)| kept(*id) && *at >= start);
+        if done.is_empty() && resolved.is_none() && !active {
+            continue;
+        }
+        let top = top_of(told, chat);
+        let at = lines
+            .iter()
+            .position(|line| line.chat.key == top.key)
+            .unwrap_or_else(|| {
+                lines.push(Line {
+                    chat: top,
+                    done: Vec::new(),
+                    ended: Vec::new(),
+                    worked: Vec::new(),
+                });
+                lines.len() - 1
+            });
+        let line = &mut lines[at];
+        if top.key == chat.key {
+            steps += done.len();
+            line.done.extend(done);
+        } else if let Some(resolved) = resolved {
+            if resolved.by == ResolvedBy::Agent {
+                reports += 1;
+            }
+            line.ended.push(chat);
+        } else {
+            line.worked.push(chat);
+        }
+    }
+    let named = |chats: &[&Chat]| -> Vec<Value> {
+        chats
+            .iter()
+            .map(|chat| json!({ "key": chat.key, "name": chat.name, "working": chat.working }))
+            .collect()
+    };
+    json!({
+        "steps": steps,
+        "reports": reports,
+        "moved": lines
+            .iter_mut()
+            .map(|line| {
+                line.done.sort_by_key(|(_, at)| std::cmp::Reverse(*at));
+                json!({
+                    "key": line.chat.key,
+                    "name": line.chat.name,
+                    "done": line.done.iter().take(NAMED).map(|(text, _)| text).collect::<Vec<_>>(),
+                    "more": line.done.len().saturating_sub(NAMED),
+                    "ended": named(&line.ended),
+                    "worked": named(&line.worked),
+                })
+            })
+            .collect::<Vec<_>>(),
+    })
+}
+
 /// What `chat`'s agent spent, with what the agents of the subagents'
 /// chats under it spent added, as JSON: the cost, as the human reads it,
 /// once one of the agents told one, how full the chat's context is, in
@@ -846,6 +1057,7 @@ fn told_of(
     let home = root == told.home;
     let waiting = waiting_in(told, root, now);
     let planned = planned(told, root, plans, now);
+    let summaries = summaries(told, root, plans, decided);
     let busy = told
         .chats
         .iter()
@@ -925,6 +1137,7 @@ fn told_of(
         "github": told.github,
         "waiting": waiting,
         "plans": planned,
+        "summaries": summaries,
         "busy": busy,
         "decided": decided,
         "happened": happened,
@@ -984,9 +1197,16 @@ mod tests {
     use super::*;
     use coxd::testing::TempDir;
 
+    const NO_MOVED: Progress = Progress {
+        active: Vec::new(),
+        done: Vec::new(),
+        resolved: Vec::new(),
+    };
+
     const NO_PLANS: Plans<'static> = Plans {
         kept: &[],
         dismissed: &[],
+        moved: &NO_MOVED,
         at: 0,
     };
 
@@ -999,6 +1219,7 @@ mod tests {
         Step {
             text: text.to_owned(),
             state,
+            since: None,
         }
     }
 
@@ -1258,6 +1479,7 @@ mod tests {
             project: Some(project.to_owned()),
             folder: None,
             when: "2026-11-16 09:00".to_owned(),
+            at: 0,
             header: None,
             question: question.to_owned(),
             choice: "Derive".to_owned(),
@@ -1553,6 +1775,7 @@ mod tests {
                 &Plans {
                     kept: &plans(),
                     dismissed: &Dismissed::read(),
+                    moved: &NO_MOVED,
                     at: 0,
                 },
                 &|_| None,
@@ -1602,10 +1825,119 @@ mod tests {
     }
 
     #[test]
+    fn sums_up_what_moved_in_each_window_and_what_stands_still() {
+        use cox_core::store::Resolved;
+        let folder = TempDir::new();
+        let root = folder.path().join("app");
+        let minute = 60 * 1000;
+        let at = 100 * 24 * 60 * minute;
+        let mut chats: Vec<Chat> = (1..=6)
+            .map(|key| {
+                let mut chat = chat(key, &root, &root, false, false);
+                chat.kept = Some(kept(key));
+                chat
+            })
+            .collect();
+        (chats[0].working, chats[1].resolved) = (true, true);
+        (chats[1].parent, chats[2].parent) = (Some(1), Some(1));
+        chats[4].asking = true;
+        // Not of the folder: it moves, but elsewhere.
+        let elsewhere = &mut chats[5];
+        (elsewhere.cwd, elsewhere.project) = (folder.path().join("x"), folder.path().join("x"));
+        let told = Told {
+            chats,
+            projects: vec![(root.clone(), "app".to_owned())],
+            home: folder.path().to_owned(),
+            github: None,
+        };
+        let moved = Progress {
+            active: vec![
+                (kept(1), at - minute),
+                (kept(2), at - 20 * minute),
+                (kept(3), at - 2 * 60 * minute),
+                (kept(6), at - minute),
+            ],
+            done: vec![
+                (kept(1), "Fix".to_owned(), at - 30 * minute),
+                (kept(1), "Read".to_owned(), at - 5 * minute),
+                (kept(6), "Elsewhere".to_owned(), at - minute),
+                // A subagent's own: its chat stands for it.
+                (kept(3), "Its own".to_owned(), at - 3 * 60 * minute),
+            ],
+            resolved: vec![(
+                kept(2),
+                Resolved {
+                    at: at - 20 * minute,
+                    by: ResolvedBy::Agent,
+                },
+            )],
+        };
+        let stopped = [KeptPlan {
+            chat: kept(4),
+            number: 3,
+            steps: vec![
+                step("Plan", StepState::Completed),
+                step("Build", StepState::InProgress),
+            ],
+            at: at - 3 * 60 * minute,
+        }];
+        let plans = Plans {
+            kept: &stopped,
+            moved: &moved,
+            at,
+            ..NO_PLANS
+        };
+        let places = Places {
+            wiki: &root.join("wiki"),
+            raw: &root.join("raw"),
+            triggers: &json!({}),
+        };
+
+        let json = told_of(&told, &root, &[], &plans, &|_| None, &places);
+
+        let summaries = json["summaries"].as_array().unwrap();
+        let line = |window: usize| &summaries[window]["moved"][0];
+        assert_eq!(
+            summaries
+                .iter()
+                .map(|summary| (
+                    summary["window"].as_str().unwrap(),
+                    summary["steps"].as_u64().unwrap(),
+                    summary["reports"].as_u64().unwrap(),
+                    summary["moved"].as_array().unwrap().len(),
+                ))
+                .collect::<Vec<_>>(),
+            [("15 min", 1, 0, 1), ("1 h", 2, 1, 1), ("4 h", 2, 1, 1)]
+        );
+        assert_eq!(line(0)["done"], json!(["Read"]));
+        assert_eq!(line(1)["done"], json!(["Read", "Fix"]));
+        let keys = |chats: &Value| -> Vec<u64> {
+            let chats = chats.as_array().unwrap().iter();
+            chats.map(|chat| chat["key"].as_u64().unwrap()).collect()
+        };
+        assert_eq!(keys(&line(1)["ended"]), [2]);
+        assert_eq!(keys(&line(1)["worked"]), [0; 0]);
+        assert_eq!(keys(&line(2)["worked"]), [3]);
+        for summary in summaries {
+            assert_eq!(
+                summary["waits"],
+                json!([{ "key": 5, "name": "chat 5", "why": "asks you" }])
+            );
+            let stopped = &summary["stopped"];
+            assert_eq!(
+                (&stopped[0]["key"], &stopped[0]["done"], &stopped[0]["of"]),
+                (&json!(4), &json!(1), &json!(2))
+            );
+            assert_eq!(stopped.as_array().unwrap().len(), 1);
+        }
+    }
+
+    #[test]
     fn a_subagent_links_to_the_step_its_name_reads_most_alike() {
         let step = |text: &str| Step {
             text: text.to_owned(),
             state: StepState::Pending,
+            since: None,
         };
         let plan = [
             step("--shout フラグを追加しテストを書く"),
