@@ -28,6 +28,9 @@ mod servers;
 mod translation;
 mod words;
 
+use crate::ui::depth::Stand as _;
+use coxd::theme::INPUT_RADIUS;
+use coxd::theme::OVERLAY;
 use std::path::PathBuf;
 
 use gpui::{
@@ -55,7 +58,6 @@ use coxd::home::home;
 use coxd::paths::shortened;
 use coxd::theme::{
     ACCENT, ACCENT_GROUND, BORDER, BUTTON, BUTTON_HOVER, DIM, FAILED, FAINT, FOREGROUND, HOVER,
-    LINK,
 };
 
 actions!(
@@ -412,7 +414,8 @@ impl Focusable for SettingsView {
 }
 
 impl Render for SettingsView {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let focused = self.input.focus_handle(cx).is_focused(window);
         let (told, color) = self.told();
         // The sections write their words after the home's, as they render
         // after the screen.
@@ -443,7 +446,7 @@ impl Render for SettingsView {
             .max_h_full()
             .flex()
             .flex_col()
-            .shadow_lg()
+            .stand(OVERLAY)
             // A click on the card stays there, not closing it.
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .on_action(cx.listener(|_, _: &CloseSettings, _, cx| cx.emit(Dismissed)))
@@ -473,9 +476,8 @@ impl Render for SettingsView {
                                     .px_2()
                                     .flex()
                                     .items_center()
-                                    .border_1()
-                                    .border_color(rgb(LINK))
-                                    .rounded(px(10.))
+                                    .sink(focused)
+                                    .rounded(px(INPUT_RADIUS))
                                     .text_size(px(13.))
                                     .text_color(rgb(FOREGROUND))
                                     .child(self.input.clone()),

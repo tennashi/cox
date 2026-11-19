@@ -8,7 +8,8 @@
 //!   that run as the [`snippet`]s the human clicks Run on; [`selection`]
 //!   is what the human selected.
 //! - [`icons`] is the icons drawn; how things look is
-//!   [`coxd::theme`], which the page coxd serves a phone shares.
+//!   [`coxd::theme`], which the page coxd serves a phone shares, and
+//!   [`depth`] draws how far a part stands up from what it sits on.
 //! - The [`Copy`] action and the [`LinkClicked`] event are what the parts
 //!   tell the window alike, and a [`Panel`] is what the window and a
 //!   stage share: whether the stage is in sight.
@@ -22,6 +23,7 @@
 
 pub mod button;
 pub mod composing;
+pub mod depth;
 pub mod diagram;
 pub mod drag;
 pub mod ellipsis;
@@ -36,14 +38,14 @@ pub mod snippet;
 pub mod text;
 pub mod translation;
 
+use coxd::theme::{CARD, OVERLAY};
+use depth::Stand as _;
 use gpui::{
     AnyView, App, AppContext, Context, Div, IntoElement, ParentElement, Render, SharedString,
     Styled, Window, actions, div, px, rgb,
 };
 
-use coxd::theme::{
-    ACCENT, BORDER, BORDER_STRONG, CARD_RADIUS, FOREGROUND, RAISED, SURFACE, UI_FONT,
-};
+use coxd::theme::{ACCENT, CARD_RADIUS, FOREGROUND, RAISED, SURFACE, UI_FONT};
 
 actions!(
     cox,
@@ -78,18 +80,15 @@ impl Panel {
 }
 
 /// A card: a part of the window, such as a chat's conversation or its
-/// stage, drawn apart from the ground and from the cards beside it.
+/// stage, standing well up from the ground, apart from the cards beside
+/// it.
 ///
 /// Its corners are round, but what it holds is not cut to them, so a
 /// part that fills its card to a corner leaves its ground to the card,
 /// or rounds its own corner by [`coxd::theme::CARD_INNER_RADIUS`].
 #[must_use]
 pub fn card() -> Div {
-    div()
-        .bg(rgb(SURFACE))
-        .border_1()
-        .border_color(rgb(BORDER))
-        .rounded(px(CARD_RADIUS))
+    div().bg(rgb(SURFACE)).stand(CARD).rounded(px(CARD_RADIUS))
 }
 
 /// The ring over a part of the window, `radius` round, that says Vim's
@@ -121,8 +120,7 @@ impl Render for Tip {
             .px_2()
             .py_1()
             .bg(rgb(RAISED))
-            .border_1()
-            .border_color(rgb(BORDER_STRONG))
+            .stand(OVERLAY)
             .rounded(px(8.))
             .text_color(rgb(FOREGROUND))
             .font_family(UI_FONT)

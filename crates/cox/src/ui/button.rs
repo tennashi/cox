@@ -1,16 +1,23 @@
 //! The button of the window, one kind wherever a button is, so that each
-//! reads as the others do: 28 points high, rounded by 8, filled; the one
-//! the human most likely wants filled in the accent, and one that takes
-//! something away quiet until the mouse rests on it.
+//! reads as the others do: 28 points high, rounded as a control is,
+//! filled, and standing a little up from its ground, as what the human
+//! clicks does; the one the human most likely wants filled in the accent,
+//! glowing in it, and one that takes something away quiet until the mouse
+//! rests on it.
 
-use gpui::{Div, ElementId, FontWeight, Stateful, div, prelude::*, px, rgb};
+use gpui::{Div, ElementId, FontWeight, Stateful, div, prelude::*, px, rgb, rgba};
 
-use coxd::theme::{ACCENT, BUTTON, BUTTON_HOVER, DIM, FOREGROUND, GROUND};
+use coxd::theme::{
+    ACCENT, BUTTON, BUTTON_HOVER, CONTROL, CONTROL_RADIUS, DIM, FOREGROUND, GROUND, PRIMARY_EDGE,
+    PRIMARY_GLOW,
+};
+
+use crate::ui::depth::{self, Stand as _};
 
 /// How tall a button is.
 pub const HEIGHT: f32 = 28.;
 /// How round a button is.
-pub const RADIUS: f32 = 8.;
+pub const RADIUS: f32 = CONTROL_RADIUS;
 /// How tall a line's input is, and a button beside one.
 pub const INPUT_HEIGHT: f32 = 32.;
 
@@ -48,10 +55,19 @@ pub fn button(id: impl Into<ElementId>, label: impl IntoElement, kind: Kind) -> 
         .child(label);
     match kind {
         Kind::Plain => button
+            .stand(CONTROL)
             .bg(rgb(BUTTON))
             .text_color(rgb(FOREGROUND))
             .hover(|style| style.bg(rgb(BUTTON_HOVER))),
         Kind::Primary => button
+            .border_1()
+            .border_color(rgba(PRIMARY_EDGE))
+            .shadow(
+                depth::shadows(CONTROL)
+                    .into_iter()
+                    .chain([depth::shadow(PRIMARY_GLOW)])
+                    .collect(),
+            )
             .bg(rgb(ACCENT))
             .text_color(rgb(GROUND))
             .font_weight(FontWeight::SEMIBOLD)

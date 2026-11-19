@@ -34,6 +34,10 @@
 //! each as it is set, and a click on it opens a list of them, from which
 //! each opens its choices (see [`settings`]).
 
+use crate::ui::depth::Stand as _;
+use coxd::theme::OVERLAY;
+use coxd::theme::{ACCENT_TINT, ACCENT_TINT_EDGE, CONTROL, INPUT_RADIUS};
+use gpui::rgba;
 use std::cell::Cell;
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -1420,10 +1424,8 @@ impl ChatView {
                 .flex_col()
                 .gap_1()
                 .rounded_md()
-                .border_1()
-                .border_color(rgb(BORDER))
                 .bg(rgb(RAISED))
-                .shadow_md()
+                .stand(OVERLAY)
                 .text_size(px(12.))
                 // The conversation under the card hears none of the mouse.
                 .occlude()
@@ -1625,10 +1627,8 @@ impl ChatView {
             .pl(px(16.))
             .pr(px(8.))
             .py(px(8.))
-            .rounded(px(16.))
-            .bg(rgb(RAISED))
-            .border_1()
-            .border_color(rgb(BORDER))
+            .rounded(px(INPUT_RADIUS + 4.))
+            .sink(false)
             .text_size(px(15.))
             // The box is where text goes in, past the input's own row too,
             // but for the chips and the Stop button, which point.
@@ -1753,7 +1753,9 @@ impl ChatView {
             .flex()
             .items_center()
             .rounded(px(12.))
-            .bg(rgb(BUTTON))
+            .bg(rgba(ACCENT_TINT))
+            .border_1()
+            .border_color(rgba(ACCENT_TINT_EDGE))
             .text_size(px(12.))
             .text_color(rgb(FAINT))
             .cursor_pointer()
@@ -1777,6 +1779,7 @@ impl ChatView {
             .justify_center()
             .rounded(px(10.))
             .bg(rgb(BUTTON))
+            .stand(CONTROL)
             .cursor_pointer()
             .hover(|style| style.bg(rgb(BUTTON_HOVER)))
             .tooltip(tip("Stop (Escape)"))

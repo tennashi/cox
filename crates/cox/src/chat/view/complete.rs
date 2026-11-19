@@ -12,6 +12,8 @@
 //! takes the rest of the line for its input: `look at the last commit
 //! /rev` becomes `/review look at the last commit`.
 
+use crate::ui::depth::Stand as _;
+use coxd::theme::OVERLAY;
 use std::ops::Range;
 use std::path::Path;
 
@@ -28,7 +30,7 @@ use crate::ui::ellipsis::ellipsis;
 use crate::ui::input::LineInput;
 use crate::vim::hints::Hinted as _;
 use coxd::chat::mention;
-use coxd::theme::{BORDER_STRONG, CODE_FONT, DIM, FAINT, FOREGROUND, RAISED, SELECTED};
+use coxd::theme::{CODE_FONT, DIM, FAINT, FOREGROUND, RAISED, SELECTED};
 
 /// How wide the tip of a command grows, before what the command does is
 /// cut short.
@@ -521,10 +523,8 @@ impl ChatView {
             .items_center()
             .gap(px(10.))
             .bg(rgb(RAISED))
-            .border_1()
-            .border_color(rgb(BORDER_STRONG))
             .rounded(px(10.))
-            .shadow_lg()
+            .stand(OVERLAY)
             .text_size(px(13.))
             .cursor_pointer()
             .hover(|style| style.bg(rgb(SELECTED)))
@@ -605,10 +605,8 @@ impl ChatView {
                 .right(px(12.))
                 .p(px(6.))
                 .bg(rgb(RAISED))
-                .border_1()
-                .border_color(rgb(BORDER_STRONG))
                 .rounded(px(14.))
-                .shadow_lg()
+                .stand(OVERLAY)
                 .child(
                     div()
                         .id("completions-rows")
