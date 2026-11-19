@@ -640,7 +640,10 @@ mod tests {
                 .map(|(_, bytes)| String::from_utf8_lossy(bytes))
                 .collect();
             for (file, bytes) in *files {
-                if !(file.ends_with(".html") || file.ends_with(".css")) {
+                let styled = Path::new(file)
+                    .extension()
+                    .is_some_and(|extension| extension == "html" || extension == "css");
+                if !styled {
                     continue;
                 }
                 let text = String::from_utf8_lossy(bytes);
