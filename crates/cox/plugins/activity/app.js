@@ -280,8 +280,9 @@ function ending(chat, story) {
   }
 }
 
-/// What opens under `chat`'s line: what it is, its story, how it ended,
-/// what it runs, its open pull requests, and its steps.
+/// What opens under `chat`'s line: what it is, then side by side its
+/// story, how it ended, what it runs and its open pull requests, and its
+/// steps.
 function opening(chat) {
   const spent = chat.spent && [chat.spent.cost, chat.spent.context == null ? null : `${chat.spent.context}% context`].filter((part) => part != null);
   const meta = [
@@ -322,11 +323,11 @@ function opening(chat) {
   return (
     `<div class="opened">` +
     (meta.length || dismissing ? `<div class="meta">${meta.join(" · ")}${dismissing}</div>` : "") +
-    toldStory +
-    background +
-    pulls +
+    // Its story on the left, its steps beside it, once there is room.
+    `<div class="columns${(chat.plan ?? []).length ? "" : " alone"}">` +
+    `<div class="story">${toldStory}${background}${pulls}</div>` +
     steps(chat) +
-    `</div>`
+    `</div></div>`
   );
 }
 
@@ -358,12 +359,12 @@ function steps(chat) {
         )
         .join("");
       return (
-        `<div class="step ${esc(step.state)}"><span></span><span class="mark" title="${named}">${mark}</span>` +
+        `<div class="step ${esc(step.state)}"><span class="mark" title="${named}">${mark}</span>` +
         `<span>${text}${shows ? thread(chat) : ""}${subs}</span></div>`
       );
     })
     .join("");
-  return `<div class="plan"><div class="count">steps · ${chat.done}/${plan.length} done · a click opens a step's thread</div>${lines}</div>`;
+  return `<div class="plan"><div class="count" title="a click on a step opens its thread">Steps · ${chat.done}/${plan.length} done</div>${lines}</div>`;
 }
 
 /// The thread of the step that shows, of `chat`'s plan: each line the

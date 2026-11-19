@@ -276,11 +276,42 @@
       .dismiss:hover {
         color: var(--link);
       }
+      /* The story, and the steps beside it: the story the wider, as its
+         lines are longer; one under the other only where the two would
+         be too narrow to read. */
+      .opened {
+        container-type: inline-size;
+      }
+      .columns {
+        display: grid;
+        grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
+        column-gap: var(--space-4);
+        align-items: start;
+      }
+      .columns.alone {
+        grid-template-columns: minmax(0, 1fr);
+      }
+      @container (max-width: 480px) {
+        .columns {
+          grid-template-columns: minmax(0, 1fr);
+        }
+        .columns .plan {
+          margin-top: var(--space-3);
+          padding-top: var(--space-2);
+          border-top: 1px solid var(--border);
+        }
+      }
       .event,
-      .end,
+      .end {
+        display: grid;
+        grid-template-columns: 44px 16px minmax(0, 1fr);
+        align-items: baseline;
+        column-gap: var(--space-1);
+        padding: 1px 0;
+      }
       .step {
         display: grid;
-        grid-template-columns: 52px 16px minmax(0, 1fr);
+        grid-template-columns: 16px minmax(0, 1fr);
         align-items: baseline;
         column-gap: var(--space-1);
         padding: 1px 0;
@@ -371,13 +402,10 @@
       .end.failed .how {
         color: var(--failed);
       }
-      .plan {
-        margin-top: var(--space-2);
-      }
       .plan .count {
         font-size: var(--small);
         color: var(--faint);
-        margin-left: 56px;
+        padding-bottom: var(--space-1);
       }
       .step .text {
         overflow-wrap: anywhere;
@@ -468,7 +496,7 @@
       .pull {
         font-size: var(--small);
         color: var(--dim);
-        margin-left: 56px;
+        margin-left: 48px;
       }
       .pull .number {
         font-family: var(--mono);
@@ -486,7 +514,7 @@
       .background {
         font-size: var(--small);
         color: var(--dim);
-        margin-left: 56px;
+        margin-left: 48px;
       }
     </style>
   </head>
