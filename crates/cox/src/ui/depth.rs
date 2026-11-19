@@ -6,7 +6,7 @@
 
 use gpui::{BoxShadow, Styled, linear_color_stop, linear_gradient, point, px, rgb, rgba};
 
-use coxd::theme::{Depth, FOCUS_RING, FOCUS_WIDTH, INSET, Shadow};
+use coxd::theme::{ACCENT_TINT, ACCENT_TINT_EDGE, Depth, FOCUS_RING, FOCUS_WIDTH, INSET, Shadow};
 
 /// `shadow` as GPUI casts one.
 #[must_use]
@@ -52,6 +52,21 @@ pub trait Stand: Styled + Sized {
     #[must_use]
     fn edged(self, depth: Depth) -> Self {
         self.border_1().border_color(rgba(depth.edge))
+    }
+
+    /// Marks it chosen, as the chat shown or the tab shown is, faint in
+    /// the accent with an edge a little less faint, when `chosen`; its
+    /// edge is drawn either way, unseen when not, so that choosing it
+    /// moves nothing.
+    #[must_use]
+    fn chosen(self, chosen: bool) -> Self {
+        let part = self.border_1();
+        if chosen {
+            part.bg(rgba(ACCENT_TINT))
+                .border_color(rgba(ACCENT_TINT_EDGE))
+        } else {
+            part.border_color(gpui::transparent_black())
+        }
     }
 
     /// Sinks into its ground, as what the human types into does: darker
@@ -114,5 +129,24 @@ mod tests {
         let ring = focus();
         assert_eq!(ring.blur_radius, px(0.));
         assert_eq!(ring.spread_radius, px(FOCUS_WIDTH));
+    }
+
+    #[test]
+    fn choosing_a_part_tints_it_and_moves_nothing() {
+        let mut chosen = gpui::div().chosen(true);
+        let mut not = gpui::div().chosen(false);
+        assert_eq!(chosen.style().border_widths, not.style().border_widths);
+        assert!(chosen.style().background.is_some());
+        assert!(not.style().background.is_none());
+        assert_ne!(chosen.style().border_color, not.style().border_color);
+    }
+
+    #[test]
+    fn a_sunk_part_rings_only_while_it_has_the_keyboard() {
+        let mut focused = gpui::div().sink(true);
+        let mut not = gpui::div().sink(false);
+        assert_eq!(focused.style().box_shadow, Some(vec![focus()]));
+        assert_eq!(not.style().box_shadow, None);
+        assert_eq!(focused.style().border_widths, not.style().border_widths);
     }
 }

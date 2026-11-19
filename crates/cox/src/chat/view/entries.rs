@@ -13,6 +13,9 @@
 //! it went, which opens its line with a click, with the last thought
 //! under them, until the human opens the whole of it.
 
+use crate::ui::depth::{self, Stand as _};
+use coxd::theme::{CONTROL, PRIMARY_EDGE};
+use gpui::rgba;
 use std::collections::HashSet;
 use std::ops::Range;
 
@@ -1384,6 +1387,7 @@ fn answer_card(
         .bg(rgb(tone.ground))
         .border_1()
         .border_color(rgb(tone.edge))
+        .shadow(depth::shadows(CONTROL))
         .child(
             div()
                 .flex()
@@ -1428,12 +1432,16 @@ fn answer_button(
             if first {
                 button
                     .bg(rgb(tone.mark))
+                    .border_1()
+                    .border_color(rgba(PRIMARY_EDGE))
+                    .shadow(depth::shadows(CONTROL))
                     .text_color(rgb(GROUND))
                     .font_weight(FontWeight::SEMIBOLD)
                     .hover(|style| style.opacity(0.9))
             } else {
                 button
                     .bg(rgb(tone.button))
+                    .stand(CONTROL)
                     .text_color(rgb(FOREGROUND))
                     .hover(|style| style.bg(rgb(tone.edge)))
             }
@@ -1834,11 +1842,15 @@ fn render_one_question(
                 if lit {
                     button
                         .bg(rgb(ASKING))
+                        .border_1()
+                        .border_color(rgba(PRIMARY_EDGE))
+                        .shadow(depth::shadows(CONTROL))
                         .text_color(rgb(GROUND))
                         .font_weight(FontWeight::SEMIBOLD)
                 } else {
                     button
                         .bg(rgb(ASKING_BUTTON))
+                        .stand(CONTROL)
                         .text_color(rgb(FOREGROUND))
                         .hover(|style| style.bg(rgb(ASKING_EDGE)))
                 }
@@ -1861,9 +1873,8 @@ fn render_one_question(
             .py(px(7.))
             .rounded(px(10.))
             .text_size(px(13.))
-            .cursor_pointer()
-            .border_1()
-            .border_color(rgb(ASKING_EDGE))
+            .cursor_text()
+            .sink(false)
             .text_color(rgb(if picked.other.is_some() {
                 FOREGROUND
             } else {

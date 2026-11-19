@@ -2,6 +2,7 @@
 //! chats, the panel folded to the window's edge, and the menu of a chat.
 
 use crate::ui::depth;
+use crate::ui::depth::Stand as _;
 use coxd::theme::OVERLAY;
 use gpui::{
     AnyElement, ClickEvent, Context, Div, Focusable, FontWeight, MouseButton, MouseDownEvent,
@@ -398,9 +399,10 @@ impl Workspace {
             .text_size(px(13.))
             .font_weight(FontWeight::MEDIUM)
             .cursor_pointer()
+            .chosen(shown)
             .map(|row| {
                 if shown {
-                    row.bg(rgb(SELECTED)).text_color(rgb(FOREGROUND))
+                    row.text_color(rgb(FOREGROUND))
                 } else {
                     row.text_color(rgb(DIM)).hover(|style| style.bg(rgb(HOVER)))
                 }

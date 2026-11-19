@@ -4,6 +4,9 @@
 //! the human would write it, or, emptied, Cox's own folder in its place;
 //! and "Choose…" asks for a folder and keeps it.
 
+use crate::ui::depth::Stand as _;
+use coxd::theme::INPUT_RADIUS;
+use gpui::Focusable as _;
 use std::path::PathBuf;
 
 use gpui::{
@@ -19,7 +22,7 @@ use crate::ui::input::{Blurred, LineInput, Submitted};
 use crate::vim::hints::Hinted as _;
 use coxd::home::home;
 use coxd::paths::shortened;
-use coxd::theme::{ACCENT, BORDER, DIM, FAILED, FAINT, FOREGROUND};
+use coxd::theme::{ACCENT, DIM, FAILED, FAINT, FOREGROUND};
 
 /// A folder of the settings, by its key in `settings.json`.
 pub struct FolderField {
@@ -187,7 +190,8 @@ impl FolderField {
 }
 
 impl Render for FolderField {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let focused = self.input.focus_handle(cx).is_focused(window);
         let key = self.key;
         let (told, color) = self.told.clone().unwrap_or_else(|| {
             (
@@ -220,9 +224,8 @@ impl Render for FolderField {
                             .px_2()
                             .flex()
                             .items_center()
-                            .border_1()
-                            .border_color(rgb(BORDER))
-                            .rounded(px(10.))
+                            .sink(focused)
+                            .rounded(px(INPUT_RADIUS))
                             .text_size(px(13.))
                             .text_color(rgb(FOREGROUND))
                             .child(self.input.clone()),
