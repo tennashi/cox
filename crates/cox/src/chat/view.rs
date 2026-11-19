@@ -157,6 +157,9 @@ const FAILED_TURN: u32 = 0x8c_4a48;
 /// before they scroll on their own.
 const PLAN_WIDTH: f32 = 240.;
 const PLAN_HEIGHT: f32 = 200.;
+/// How far the last change of the plan, under its line on the card, is
+/// set in: past the line's disclosure and the gap after it, under "Plan".
+const PLAN_REVISION_INDENT: f32 = 20.;
 
 /// How far past the conversation in sight the list measures the places
 /// it has not laid out yet, so that they are ready as it scrolls.
@@ -1437,27 +1440,25 @@ impl ChatView {
                         .id("plan-line")
                         .debug_selector(|| "plan-line".to_owned())
                         .flex()
-                        // Why how far it went moved goes under, once the
-                        // card is too narrow for it beside.
-                        .flex_wrap()
-                        .gap_x_2()
+                        .gap_2()
                         .text_color(rgb(DIM))
                         .cursor_pointer()
                         .child(disclosure(Some(open)))
                         .child(format!("Plan {}", StepsDone::count(steps)))
-                        // Why how far it went moved as it did, last.
-                        .children(self.conversation.last_revision().map(|revision| {
-                            div()
-                                .debug_selector(|| "plan-revision".to_owned())
-                                .min_w_0()
-                                .text_color(rgb(entries::revision_color(revision)))
-                                .child(revision.headline())
-                        }))
                         .on_hint_click(cx.listener(|view, _, _, cx| {
                             view.plan_folded = !view.plan_folded;
                             cx.notify();
                         })),
                 )
+                // Why how far it went moved as it did, last, under its
+                // line, folded or not.
+                .children(self.conversation.last_revision().map(|revision| {
+                    div()
+                        .debug_selector(|| "plan-revision".to_owned())
+                        .pl(px(PLAN_REVISION_INDENT))
+                        .text_color(rgb(entries::revision_color(revision)))
+                        .child(revision.headline())
+                }))
                 .when(open, |plan| {
                     plan.child(
                         div()
