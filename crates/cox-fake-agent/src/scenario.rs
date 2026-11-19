@@ -110,6 +110,8 @@ pub enum Step {
     Update(Value),
     /// Asks permission, and goes on as Cox answers.
     Ask(Ask),
+    /// Asks the human questions, as a form, and goes on as Cox answers.
+    Question(Question),
     /// Calls a tool of an MCP server Cox handed the agent.
     Call(Call),
     /// Waits this many milliseconds.
@@ -137,6 +139,19 @@ pub enum Event {
 /// steps are taken.
 #[derive(Debug, Deserialize)]
 pub struct Ask {
+    #[serde(default)]
+    pub then: HashMap<String, Vec<Step>>,
+    #[serde(flatten)]
+    pub request: Map<String, Value>,
+}
+
+/// ACP's `elicitation/create` in form mode, as `claude-agent-acp` asks
+/// Claude's `AskUserQuestion`: its `message` and `requestedSchema`, and
+/// in `then`, the steps to take for each way Cox may answer, by its
+/// `action`: `accept`, `decline` or `cancel`. What Cox filled the form
+/// in with stands for `{result}` in the steps after, as JSON.
+#[derive(Debug, Deserialize)]
+pub struct Question {
     #[serde(default)]
     pub then: HashMap<String, Vec<Step>>,
     #[serde(flatten)]
