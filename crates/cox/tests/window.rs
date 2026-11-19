@@ -1046,6 +1046,51 @@ async fn the_plan_stays_in_sight_until_the_next_line(cx: &mut TestAppContext) {
     });
 }
 
+#[gpui::test]
+async fn a_change_of_the_plan_shows_once_on_the_drifts_card_or_on_a_line_of_its_own(
+    cx: &mut TestAppContext,
+) {
+    let (_agent, view, cx) = open(cx);
+
+    // The plan the line started with, then a step the agent decided on
+    // its own: the receipt and the drift, written by the one change,
+    // show on the drift's card alone.
+    cx.simulate_input("replan");
+    cx.simulate_keystrokes("enter");
+    wait_for(cx, &view, State::Idle).await;
+    cx.run_until_parked();
+    view.read_with(cx, |view, _| {
+        let entries = view.conversation().entries();
+        assert!(matches!(entries[2], Entry::PlanRevised(_)), "{entries:?}");
+        assert!(
+            matches!(entries[3], Entry::PlanChanged { .. }),
+            "{entries:?}"
+        );
+    });
+    assert!(cx.debug_bounds("plan-changed-progress-3").is_some());
+    assert!(cx.debug_bounds("plan-revised-2").is_none());
+
+    // The next line's plan is told against it, with no drift: on a line
+    // of its own.
+    cx.simulate_input("plan");
+    cx.simulate_keystrokes("enter");
+    wait_for(cx, &view, State::Idle).await;
+    cx.run_until_parked();
+    let revised = view.read_with(cx, |view, _| {
+        view.conversation()
+            .entries()
+            .iter()
+            .rposition(|entry| matches!(entry, Entry::PlanRevised(_)))
+            .unwrap()
+    });
+    assert!(revised > 3);
+    // The selectors are looked up as they are drawn, for the test's run.
+    let line = format!("plan-revised-{revised}").leak();
+    let card = format!("plan-changed-progress-{}", revised + 1).leak();
+    assert!(cx.debug_bounds(line).is_some());
+    assert!(cx.debug_bounds(card).is_none());
+}
+
 /// The title and result of the first tool call in the conversation.
 fn tool_call(
     cx: &mut VisualTestContext,

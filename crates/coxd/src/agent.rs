@@ -1406,6 +1406,7 @@ fn said(entries: &[Entry]) -> Option<(String, bool)> {
                 | Entry::Thought(_)
                 | Entry::Plan(_)
                 | Entry::PlanChanged { .. }
+                | Entry::PlanRevised(_)
                 | Entry::Switched { .. }
                 | Entry::Login { .. }
                 | Entry::Keep { .. }
@@ -1485,6 +1486,7 @@ fn said(entries: &[Entry]) -> Option<(String, bool)> {
             Entry::Thought(_)
             | Entry::Plan(_)
             | Entry::PlanChanged { .. }
+            | Entry::PlanRevised(_)
             | Entry::Note(_)
             | Entry::Login { .. }
             | Entry::Keep { .. }

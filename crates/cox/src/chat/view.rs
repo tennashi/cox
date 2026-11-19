@@ -157,6 +157,9 @@ const FAILED_TURN: u32 = 0x8c_4a48;
 /// before they scroll on their own.
 const PLAN_WIDTH: f32 = 240.;
 const PLAN_HEIGHT: f32 = 200.;
+/// How far the last change of the plan, under its line on the card, is
+/// set in: past the line's disclosure and the gap after it, under "Plan".
+const PLAN_REVISION_INDENT: f32 = 20.;
 
 /// How far past the conversation in sight the list measures the places
 /// it has not laid out yet, so that they are ready as it scrolls.
@@ -1447,6 +1450,15 @@ impl ChatView {
                             cx.notify();
                         })),
                 )
+                // Why how far it went moved as it did, last, under its
+                // line, folded or not.
+                .children(self.conversation.last_revision().map(|revision| {
+                    div()
+                        .debug_selector(|| "plan-revision".to_owned())
+                        .pl(px(PLAN_REVISION_INDENT))
+                        .text_color(rgb(entries::revision_color(revision)))
+                        .child(revision.headline())
+                }))
                 .when(open, |plan| {
                     plan.child(
                         div()

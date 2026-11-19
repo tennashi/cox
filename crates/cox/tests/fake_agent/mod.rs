@@ -7,7 +7,9 @@
 //! mentions "tool", it first runs `ls` as a tool call that completes, showing
 //! what it printed, and when it mentions "twice" too, runs it again. When the
 //! prompt mentions "think", it first thinks [`THOUGHT`], and when it mentions
-//! "plan", it first sends a plan of two steps, the first under way. When it
+//! "plan", it first sends a plan of two steps, the first under way, and
+//! when it mentions "replan", that plan, then the plan again with a step
+//! more, as an agent that decides on a step of its own. When it
 //! mentions "retitle", it first titles its session [`TITLE`], and when it
 //! mentions "slow", it waits before anything until the test lets it go on
 //! ([`FakeAgent::go_on`]). When the prompt mentions "background", it
@@ -535,6 +537,10 @@ fn work(cx: &ConnectionTo<Client>, session: &SessionId, text: &str) -> Result<()
     if mentions(text, "plan") {
         plan(cx, session)?;
     }
+    if mentions(text, "replan") {
+        plan(cx, session)?;
+        grown_plan(cx, session)?;
+    }
     if mentions(text, "tool") {
         run_tool(cx, session, "call-2")?;
         if mentions(text, "twice") {
@@ -971,6 +977,19 @@ fn plan(cx: &ConnectionTo<Client>, session: &SessionId) -> Result<()> {
         SessionUpdate::Plan(Plan::new(vec![
             step("Read the code", PlanEntryStatus::InProgress),
             step("Fix it", PlanEntryStatus::Pending),
+        ])),
+    ))
+}
+
+/// The plan of [`plan`], its first step done, with a step more.
+fn grown_plan(cx: &ConnectionTo<Client>, session: &SessionId) -> Result<()> {
+    let step = |text: &str, status| PlanEntry::new(text, PlanEntryPriority::Medium, status);
+    cx.send_notification(SessionNotification::new(
+        session.clone(),
+        SessionUpdate::Plan(Plan::new(vec![
+            step("Read the code", PlanEntryStatus::Completed),
+            step("Fix it", PlanEntryStatus::InProgress),
+            step("Test it", PlanEntryStatus::Pending),
         ])),
     ))
 }

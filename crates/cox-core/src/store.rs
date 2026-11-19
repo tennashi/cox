@@ -1471,8 +1471,8 @@ impl Store {
 
     /// What `chat`'s story is told by, each entry with when it was first
     /// written, in milliseconds since the epoch, in order: the first line
-    /// the human sent, and the plans, the questions and the commits of
-    /// its agent.
+    /// the human sent, and the plans, the receipts of how they changed,
+    /// the questions and the commits of its agent.
     ///
     /// # Errors
     ///
@@ -1484,7 +1484,8 @@ impl Store {
         )?;
         let mut rest = self.connection.prepare_cached(
             r#"SELECT number, at, entry FROM entries WHERE chat = ?1
-             AND (entry LIKE '{"plan":%' OR entry LIKE '{"question":%' OR entry LIKE '{"commits":%')
+             AND (entry LIKE '{"plan":%' OR entry LIKE '{"plan_revised":%'
+              OR entry LIKE '{"question":%' OR entry LIKE '{"commits":%')
              ORDER BY number"#,
         )?;
         let row = |row: &rusqlite::Row<'_>| {

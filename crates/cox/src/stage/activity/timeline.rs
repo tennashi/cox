@@ -5,12 +5,13 @@
 //! time the page reads what goes on.
 //!
 //! What it tells is the chat's milestones: the first line, each step of
-//! its plans started and done, each question asked and what was chosen,
+//! its plans started and done, each change of its plan, with why how far
+//! it went moved, each question asked and what was chosen,
 //! each line on a step and the reply, each subagent opened and done, the
 //! commits, the pull requests opened, merged and closed, and their CI
 //! ended, and each turn's end.
 
-use cox_core::entry::{Entry, QuestionAnswer, StepState};
+use cox_core::entry::{Entry, QuestionAnswer, Revision, StepState};
 use cox_core::store::{ChatId, KeptAnswer, Resolved, ResolvedBy, Said, Store, TurnEnd};
 use coxd::daemon::wire::PullRow;
 use coxd::github::CheckState;
@@ -250,6 +251,7 @@ fn of_entries(kept: &Kept, zone: &TimeZone) -> Vec<Event> {
                     }
                 }
             }
+            Entry::PlanRevised(revision) => events.push(of_revision(*at, revision)),
             Entry::Question { .. } => events.extend(of_question(kept, *at, entry, zone)),
             Entry::Commits(commits) => {
                 events.extend(commits.iter().map(|commit| {
@@ -265,6 +267,22 @@ fn of_entries(kept: &Kept, zone: &TimeZone) -> Vec<Event> {
         events.extend(done.map(|at| Event::new(at, "step_done", text)));
     }
     events
+}
+
+/// What the receipt of how the plan changed, written `at` then, tells:
+/// how many steps came and went, and how much of the plan was done
+/// before and after, then each step, and whether less is done than
+/// before, for the page to tell why.
+fn of_revision(at: i64, revision: &Revision) -> Event {
+    Event::new(at, "plan_revised", revision.headline()).with(json!({
+        "added": revision.added,
+        "removed": revision.removed,
+        "reworded": revision.reworded,
+        "undone": revision.undone,
+        "before": revision.before,
+        "after": revision.after,
+        "dropped": revision.dropped(),
+    }))
 }
 
 /// What `question`, asked in `kept` `at` then, tells: that it was asked,
@@ -650,6 +668,66 @@ mod tests {
         // Its last turn ended as turns do, and nothing works now.
         assert_eq!(story["ended"]["how"], "done");
         assert_eq!(story["ended"]["when"], "14:29");
+    }
+
+    #[test]
+    fn tells_each_change_of_the_plan_with_why_how_far_it_went_moved() {
+        let chat = kept(7);
+        let revision = Revision {
+            before: cox_core::entry::StepsDone { done: 4, of: 5 },
+            after: cox_core::entry::StepsDone { done: 5, of: 8 },
+            added: vec![
+                "Write the docs".to_owned(),
+                "Push".to_owned(),
+                "Open a pull request".to_owned(),
+            ],
+            removed: Vec::new(),
+            reworded: vec![cox_core::entry::Reworded {
+                from: "Test".to_owned(),
+                to: "Test it all".to_owned(),
+            }],
+            undone: Vec::new(),
+            changes: 1,
+        };
+        let kept = Kept {
+            chat,
+            name: String::new(),
+            opened: at(10, 0),
+            resolved: None,
+            threads: Vec::new(),
+            subagents: Vec::new(),
+            milestones: vec![(at(10, 7), Entry::PlanRevised(revision))],
+            turns: Vec::new(),
+        };
+
+        let story = story(&kept, &Told::default(), &TimeZone::UTC, at(12, 0));
+
+        assert_eq!(
+            told(&story),
+            [(
+                "10:07".to_owned(),
+                "plan_revised".to_owned(),
+                "+3 steps, 1 reworded · 80% → 62%".to_owned()
+            )]
+        );
+        let event = &story["events"][0];
+        assert_eq!(
+            event["added"],
+            json!(["Write the docs", "Push", "Open a pull request"])
+        );
+        assert_eq!(
+            event["reworded"],
+            json!([{ "from": "Test", "to": "Test it all" }])
+        );
+        assert_eq!(event["removed"], json!([]));
+        assert_eq!(
+            (&event["before"], &event["after"]),
+            (
+                &json!({ "done": 4, "of": 5 }),
+                &json!({ "done": 5, "of": 8 })
+            )
+        );
+        assert_eq!(event["dropped"], true);
     }
 
     #[test]
