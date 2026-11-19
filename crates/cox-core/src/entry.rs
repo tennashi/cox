@@ -820,17 +820,48 @@ impl Revision {
         if told.is_empty() {
             told.push("back as it was".to_owned());
         }
+        format!("{} · {}", told.join(", "), self.progress())
+    }
+
+    /// How much of the plan was done before and is now, and over how
+    /// many changes, once more than one, as "80% → 62%".
+    #[must_use]
+    pub fn progress(&self) -> String {
         let over = if self.changes > 1 {
             format!(" · over {} changes", self.changes)
         } else {
             String::new()
         };
         format!(
-            "{} · {} → {}{over}",
-            told.join(", "),
+            "{} → {}{over}",
             self.before.percent_text(),
             self.after.percent_text()
         )
+    }
+
+    /// What it tells past how the plan stands against the one the human
+    /// left the agent to, as [`Entry::PlanChanged`] tells it with the
+    /// steps `added` and `removed` there, when the same change wrote
+    /// both: each step reworded and undone, and the steps that came and
+    /// went that are not so there, as one back in the human's plan, or
+    /// one the agent had added and took out again.
+    #[must_use]
+    pub fn past_drift(&self, added: &[String], removed: &[String]) -> Self {
+        Self {
+            added: self
+                .added
+                .iter()
+                .filter(|step| !added.contains(step))
+                .cloned()
+                .collect(),
+            removed: self
+                .removed
+                .iter()
+                .filter(|step| !removed.contains(step))
+                .cloned()
+                .collect(),
+            ..self.clone()
+        }
     }
 }
 
@@ -1056,6 +1087,38 @@ mod tests {
                 .unwrap(),
             kept
         );
+    }
+
+    #[test]
+    fn past_the_drift_a_revision_tells_what_the_drift_does_not() {
+        let revision = Revision {
+            before: StepsDone { done: 2, of: 4 },
+            after: StepsDone { done: 1, of: 4 },
+            added: vec!["Push".to_owned(), "Lint".to_owned()],
+            removed: vec!["Try it".to_owned(), "Commit".to_owned()],
+            reworded: vec![Reworded {
+                from: "Write the docs".to_owned(),
+                to: "Write the docs for --shout".to_owned(),
+            }],
+            undone: vec!["Test".to_owned()],
+            changes: 1,
+        };
+        // The agent added "Push" on its own, and "Lint" is back as the
+        // human planned it; "Commit" was the human's, "Try it" the
+        // agent's own.
+        let past = revision.past_drift(
+            &["Push".to_owned(), "Write the docs for --shout".to_owned()],
+            &["Commit".to_owned(), "Write the docs".to_owned()],
+        );
+        assert_eq!(
+            past,
+            Revision {
+                added: vec!["Lint".to_owned()],
+                removed: vec!["Try it".to_owned()],
+                ..revision.clone()
+            }
+        );
+        assert_eq!(past.progress(), "50% → 25%");
     }
 
     #[test]

@@ -225,11 +225,16 @@ fn is_work(entry: &Entry) -> bool {
 
 /// What the conversation shows of `entries`, in order: two entries of
 /// work or more in a row fold into one place, and so does a tool call
-/// alone, to show as a step.
+/// alone, to show as a step. A receipt of how the plan changed that the
+/// drift after it tells (see [`drift_revision`]) shows in none.
 pub(super) fn shown(entries: &[Entry]) -> Vec<Shown> {
     let mut shown = Vec::new();
     let mut index = 0;
     while index < entries.len() {
+        if drift_revision(entries, index + 1).is_some() {
+            index += 1;
+            continue;
+        }
         let work = entries[index..]
             .iter()
             .take_while(|entry| is_work(entry))
@@ -907,9 +912,12 @@ impl ChatView {
             }
             Entry::Thought(text) => self.render_thought(index, text, &mut writer, cx),
             Entry::Plan(steps) => self.render_plan_entry(index, steps, cx),
-            Entry::PlanChanged { added, removed } => {
-                render_drift(index, added, removed, &mut writer)
-            }
+            Entry::PlanChanged { added, removed } => render_drift(
+                index,
+                (added, removed),
+                drift_revision(self.conversation.entries(), index),
+                &mut writer,
+            ),
             Entry::PlanRevised(revision) => self.render_revision(index, revision, &mut writer, cx),
             Entry::Proposal(proposal) => render_proposal(index, proposal, &mut writer, cx),
             Entry::Keep { why, kept, .. } => render_keep(index, why, *kept, &mut writer, cx),
@@ -1177,7 +1185,7 @@ impl ChatView {
                         .flex()
                         .flex_col()
                         .gap_1()
-                        .children(revision_steps(revision, writer)),
+                        .children(revision_steps(revision, ASKING, writer)),
                 )
             })
             .into_any_element()
@@ -1220,10 +1228,10 @@ pub(super) fn revision_color(revision: &Revision) -> u32 {
 }
 
 /// The steps a receipt of how the plan changed tells, as
-/// [`ChatView::render_revision`] shows them: each that came, in amber,
-/// went, reworded, and was undone, then how far the plan went before and
-/// after.
-fn revision_steps(revision: &Revision, writer: &mut Writer) -> Vec<gpui::Div> {
+/// [`ChatView::render_revision`] and [`render_drift`] show them: each
+/// that came, in `added`'s color, went, reworded, and was undone, then
+/// how far the plan went before and after.
+fn revision_steps(revision: &Revision, added: u32, writer: &mut Writer) -> Vec<gpui::Div> {
     let step = |mark: &'static str, color: u32, text: &str, writer: &mut Writer| {
         div()
             .flex()
@@ -1235,7 +1243,7 @@ fn revision_steps(revision: &Revision, writer: &mut Writer) -> Vec<gpui::Div> {
     };
     let mut steps: Vec<gpui::Div> = Vec::new();
     for text in &revision.added {
-        steps.push(step("+", ASKING, text, writer));
+        steps.push(step("+", added, text, writer));
     }
     for text in &revision.removed {
         steps.push(step("−", DIM, text, writer));
@@ -1266,21 +1274,56 @@ fn revision_steps(revision: &Revision, writer: &mut Writer) -> Vec<gpui::Div> {
 
 /// How the plan differs from the one the human left the agent to: each
 /// step `added`, in amber, as what the agent decided on its own, and each
-/// it `removed`, dimmer.
+/// it `removed`, dimmer; with the receipt of the change that told it, if
+/// it wrote one, which shows on no line of its own (see [`shown`]): how
+/// much of the plan was done before and after, in amber once less is,
+/// and what the receipt tells past the steps above, as a step reworded
+/// or undone.
 fn render_drift(
     index: usize,
-    added: &[String],
-    removed: &[String],
+    (added, removed): (&[String], &[String]),
+    revision: Option<&Revision>,
     writer: &mut Writer,
 ) -> AnyElement {
+    let progress = revision.map(|revision| {
+        div()
+            .debug_selector(move || format!("plan-changed-progress-{index}"))
+            .text_color(rgb(if revision.dropped() { ASKING } else { FAINT }))
+            .child(format!("· {}", revision.progress()))
+    });
+    let past = revision.map(|revision| revision.past_drift(added, removed));
     div()
         .debug_selector(move || format!("plan-changed-{index}"))
         .flex()
         .flex_col()
         .gap_1()
-        .child(label().child("PLAN CHANGED"))
+        .child(
+            label()
+                .flex()
+                .gap_1()
+                .child("PLAN CHANGED")
+                .children(progress),
+        )
         .children(drift_steps(added, removed, writer))
+        .children(
+            past.iter()
+                .flat_map(|past| revision_steps(past, DIM, writer)),
+        )
         .into_any_element()
+}
+
+/// The receipt of how the plan changed that the same change wrote with
+/// the drift at `index`, one right after the other, if it wrote one: the
+/// drift's card tells it.
+pub(super) fn drift_revision(entries: &[Entry], index: usize) -> Option<&Revision> {
+    match index.checked_sub(1).and_then(|at| entries.get(at)) {
+        Some(Entry::PlanRevised(revision))
+            if matches!(entries.get(index), Some(Entry::PlanChanged { .. })) =>
+        {
+            Some(revision)
+        }
+        _ => None,
+    }
 }
 
 /// The steps of how the plan differs from the one the human left the
@@ -2735,6 +2778,51 @@ mod tests {
                 Shown::Entry(6),
             ]
         );
+    }
+
+    #[test]
+    fn a_change_of_the_plan_that_drifts_shows_on_the_drifts_card_alone() {
+        let revision = |added: &str| {
+            cox_core::entry::Revision::between(
+                &[],
+                &[cox_core::entry::Step {
+                    text: added.to_owned(),
+                    state: StepState::Pending,
+                    since: None,
+                    started: None,
+                    id: None,
+                }],
+                &[None],
+            )
+        };
+        let entries = [
+            Entry::Human("fix it".to_owned()),
+            Entry::Reply("reading".to_owned()),
+            Entry::PlanRevised(revision("Lint")),
+            Entry::PlanChanged {
+                added: vec!["Lint".to_owned()],
+                removed: Vec::new(),
+            },
+            Entry::Reply("linting".to_owned()),
+            Entry::PlanRevised(revision("Push")),
+            Entry::Reply("pushing".to_owned()),
+        ];
+
+        assert_eq!(
+            shown(&entries),
+            [
+                Shown::Entry(0),
+                Shown::Entry(1),
+                Shown::Entry(3),
+                Shown::Entry(4),
+                Shown::Entry(5),
+                Shown::Entry(6),
+            ]
+        );
+        assert_eq!(drift_revision(&entries, 3), Some(&revision("Lint")));
+        // A receipt with no drift after it shows on its own line.
+        assert_eq!(drift_revision(&entries, 6), None);
+        assert_eq!(drift_revision(&entries, 4), None);
     }
 
     fn shown_media(file: &str) -> Entry {
