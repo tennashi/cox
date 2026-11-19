@@ -311,6 +311,9 @@ struct Project {
     /// the chats of those after it keep the places they are listed by,
     /// with none of its own.
     deleted: bool,
+    /// The chat of it the window showed last, by its key, as kept past a
+    /// restart.
+    last: Option<u64>,
 }
 
 /// How far a sketch the human ends is on its way to its end.
@@ -460,6 +463,10 @@ struct Slot {
     /// When it was marked done, and by whom, while it is (see
     /// [`resolve`]).
     resolved: Option<Resolved>,
+    /// When it last moved, in milliseconds since the epoch: when a turn
+    /// last started or ended, or, before any did in this run, when the
+    /// last entry of its conversation was kept, or it was opened.
+    active: i64,
     /// The chat, once it was read or opened in this run.
     chat: Option<Chat>,
 }
@@ -541,6 +548,7 @@ impl Slot {
                 .as_ref()
                 .is_some_and(|chat| chat.conversation().steers()),
             on_steps: self.chat.as_ref().map_or_default(Chat::waiting_on_steps),
+            active: self.active,
         }
     }
 }
@@ -608,6 +616,9 @@ pub struct Daemon {
     last_id: u64,
     /// The chats the window is to show, once it is told of them.
     reveals: Vec<u64>,
+    /// The project the human chose last, by its place in the projects, as
+    /// kept past a restart.
+    chosen: usize,
     /// The connection of the window there, when it came over a socket.
     window_id: Option<u64>,
     /// Whether the daemon is to stop.
@@ -738,6 +749,7 @@ impl Daemon {
                 archived: false,
                 about: None,
                 deleted: false,
+                last: None,
             }],
             chats: Vec::new(),
             archived: Vec::new(),
@@ -760,6 +772,7 @@ impl Daemon {
             preparing: HashMap::new(),
             last_id: 0,
             reveals: Vec::new(),
+            chosen: 0,
             window_id: None,
             done: false,
             ran: None,
@@ -793,6 +806,7 @@ impl Daemon {
                 archived: project.archived,
                 about: project.about,
                 deleted: false,
+                last: None,
             }));
         for chat in chats {
             let Some(index) = self
@@ -848,6 +862,7 @@ impl Daemon {
                         .ok()
                 }),
                 resolved: chat.resolved,
+                active: chat.active,
                 chat: None,
             };
             if chat.archived {
@@ -855,6 +870,62 @@ impl Daemon {
             } else {
                 self.add(slot);
             }
+        }
+        self.read_shown();
+    }
+
+    /// Reads the chat the window showed last of each project, and the
+    /// project the human chose last, as kept.
+    fn read_shown(&mut self) {
+        let shown = match self.store.shown() {
+            Ok(shown) => shown,
+            Err(error) => {
+                tracing::error!("the chats shown last cannot be read: {error:#}");
+                return;
+            }
+        };
+        // The project chosen last comes last.
+        for kept in shown {
+            let Some(index) = self
+                .projects
+                .iter()
+                .position(|project| project.id == kept.project)
+            else {
+                continue;
+            };
+            let key = kept.chat.and_then(|chat| {
+                self.chats
+                    .iter()
+                    .chain(&self.archived)
+                    .find(|slot| slot.kept == Some(chat))
+                    .map(|slot| slot.key)
+            });
+            self.projects[index].last = key;
+            self.chosen = index;
+        }
+    }
+
+    /// Keeps that the window shows the chat `key`, or none, of the project
+    /// at `project`, the one the human chose, for a window that starts to
+    /// go back to.
+    fn keep_shown(&mut self, key: Option<u64>, project: usize) {
+        let slot = key.and_then(|key| self.slot(key));
+        let project = slot.map_or(project, |slot| slot.project);
+        let kept = slot.and_then(|slot| slot.kept);
+        let Some(chosen) = self
+            .projects
+            .get_mut(project)
+            .filter(|project| !project.deleted)
+        else {
+            return;
+        };
+        if key.is_some() {
+            chosen.last = key;
+        }
+        let id = chosen.id;
+        self.chosen = project;
+        if let Err(error) = self.store.keep_shown(id, kept) {
+            tracing::error!("the chat shown is not kept: {error:#}");
         }
     }
 
@@ -1270,6 +1341,7 @@ impl Daemon {
             archived: false,
             about: None,
             deleted: false,
+            last: None,
         });
         self.projects.len() - 1
     }
@@ -1382,6 +1454,7 @@ impl Daemon {
             pulls: pulls::Pulls::default(),
             spent: None,
             resolved: None,
+            active: cox_core::store::now(),
             chat: Some(chat),
         });
         // Its triggers run on its opening once its agent has started.
@@ -1545,8 +1618,9 @@ impl Daemon {
                     self.open_in(index, None, None);
                 }
             }
-            ToDaemon::Shown { key } => {
+            ToDaemon::Shown { key, project } => {
                 self.shown = key;
+                self.keep_shown(key, project);
                 if let Some(slot) = key.and_then(|key| self.slot_mut(key)) {
                     slot.unread = false;
                     slot.pulls.seen();
@@ -3075,6 +3149,7 @@ impl Daemon {
                     archived: project.archived,
                     deleted: project.deleted,
                     about: project.about.clone(),
+                    last: project.last.filter(|&key| self.slot(key).is_some()),
                 })
                 .collect(),
             chats: self
@@ -3089,6 +3164,7 @@ impl Daemon {
                 .collect(),
             agents: std::collections::BTreeMap::new(),
             github: self.github.clone(),
+            chosen: self.chosen,
         };
         let ids: HashSet<&str> = listing
             .chats
@@ -3174,7 +3250,7 @@ impl Daemon {
             });
             slot.plan_changes = changes;
             slot.asks = asks;
-            slot.state = state;
+            (slot.state, slot.active) = (state, moved(slot.state, state, slot.active));
             slot.goal = conversation.goal().map(|goal| goal.what().clone());
             let about = match (conversation.title(), conversation.first_line()) {
                 (Some(title), _) => Some((title.to_owned(), Named::Agent)),
@@ -3303,6 +3379,16 @@ pub fn working(state: State) -> bool {
         state,
         State::Busy | State::Asking | State::Stopping | State::Checking
     )
+}
+
+/// When a chat that stood as `was`, and last moved at `active`, last
+/// moved, standing as `now`: a turn that starts or ends moves it now.
+fn moved(was: State, now: State, active: i64) -> i64 {
+    if working(was) == working(now) {
+        active
+    } else {
+        cox_core::store::now()
+    }
 }
 
 /// Whether a chat in `state` is at work, so that an agent waiting for it
@@ -4915,7 +5001,10 @@ mod tests {
                 prompts[0]
             );
 
-            opener.daemon.act(ToDaemon::Shown { key: Some(ship) });
+            opener.daemon.act(ToDaemon::Shown {
+                key: Some(ship),
+                project: 0,
+            });
             assert_eq!(row(&opener)[0].unseen, None, "seen");
         });
     }
@@ -5161,6 +5250,74 @@ mod tests {
             }
         }
         prompts
+    }
+
+    #[test]
+    fn the_chat_shown_last_of_each_project_and_the_project_chosen_last_are_listed_past_a_restart() {
+        let home = TempDir::new();
+        let (store, older) = one_chat(&home);
+        let project = kept_chat(&store, older).project;
+        store.add_chat(project, "Newer").unwrap();
+        let own = store.add_chat(None, "Own").unwrap();
+        let (mut daemon, _told) = daemon_of(&store, &home);
+        let (older_key, own_key) = (key_of(&mut daemon, older), key_of(&mut daemon, own));
+        daemon.act(ToDaemon::Shown {
+            key: Some(older_key),
+            project: 1,
+        });
+        daemon.act(ToDaemon::Shown {
+            key: Some(own_key),
+            project: 0,
+        });
+
+        let listed = |daemon: &mut Daemon| {
+            daemon.listed = None;
+            daemon.tell_listing();
+            let listing = daemon.listed.clone().unwrap();
+            let lasts: Vec<_> = listing
+                .projects
+                .iter()
+                .map(|project| project.last)
+                .collect();
+            (lasts, listing.chosen)
+        };
+        let (mut again, _told) = daemon_of(&store, &home);
+        let (older_again, own_again) = (key_of(&mut again, older), key_of(&mut again, own));
+        assert_eq!(
+            listed(&mut again),
+            (vec![Some(own_again), Some(older_again)], 0),
+            "Cox's own chosen last, each project with the chat of it shown last"
+        );
+
+        // The project chosen with no chat shown keeps the chat of it shown
+        // before.
+        again.act(ToDaemon::Shown {
+            key: None,
+            project: 1,
+        });
+        let (mut third, _told) = daemon_of(&store, &home);
+        let (older_third, own_third) = (key_of(&mut third, older), key_of(&mut third, own));
+        assert_eq!(
+            listed(&mut third),
+            (vec![Some(own_third), Some(older_third)], 1)
+        );
+    }
+
+    #[test]
+    fn a_chat_listed_tells_when_it_last_moved() {
+        let home = TempDir::new();
+        let (store, chat) = one_chat(&home);
+        let (mut daemon, _told) = daemon_of(&store, &home);
+        let key = key_of(&mut daemon, chat);
+        let kept = kept_chat(&store, chat).active;
+        daemon.listed = None;
+        daemon.tell_listing();
+        let listing = daemon.listed.clone().unwrap();
+        assert_eq!(listing.chats[0].key, key);
+        assert_eq!(
+            listing.chats[0].active, kept,
+            "as kept, before a turn moved it"
+        );
     }
 
     #[test]

@@ -73,6 +73,7 @@ use coxd::daemon::wire::{
 };
 
 mod at_work;
+mod opens;
 pub(crate) mod project_card;
 mod render;
 mod render_panel;
@@ -282,6 +283,8 @@ pub struct Chat {
     /// The lines written on steps of its plan that wait for its turn to
     /// end.
     on_steps: Vec<OnStepLine>,
+    /// When it last moved, in milliseconds since the epoch.
+    active: i64,
     /// Its view, once the window showed it, or something asked of its
     /// stage.
     view: Option<Entity<ChatView>>,
@@ -312,6 +315,7 @@ impl Chat {
             resolved,
             steers,
             on_steps,
+            active,
         } = row;
         Self {
             key,
@@ -335,6 +339,7 @@ impl Chat {
             resolved,
             steers,
             on_steps,
+            active,
             view,
         }
     }
@@ -565,6 +570,9 @@ pub struct Workspace {
     chat_card: FocusHandle,
     /// Show the chat of a stage's tab that the human asks a stage to.
     shows_chats: Vec<Subscription>,
+    /// Whether the daemon listed the chats to the window yet: the first
+    /// listing chooses the project chosen last, and shows a chat of it.
+    listed: bool,
     /// The chats' names, by their keys, as the stages read them: told
     /// them as the list changes, for the stages never to read the
     /// workspace, which may be updating as it asks them something.
@@ -681,6 +689,7 @@ impl Workspace {
             stage_card: cx.focus_handle(),
             chat_card: cx.focus_handle(),
             shows_chats: Vec::new(),
+            listed: false,
             chat_names: Rc::default(),
             _from_daemon: heard,
             _said_on_steps: said_on_steps,
@@ -761,6 +770,7 @@ impl Workspace {
             chats,
             archived,
             github,
+            chosen,
             ..
         } = listing;
         self.github = github;
@@ -818,11 +828,15 @@ impl Workspace {
                 self.show(was.min(self.chats.len() - 1), window, cx);
             }
             (None, Some(_)) => {
-                self.tell(ToDaemon::Shown { key: None });
+                self.tell(ToDaemon::Shown {
+                    key: None,
+                    project: self.chosen,
+                });
                 window.focus(&self.focus_handle);
             }
             (None, None) => {}
         }
+        self.choose_at_start(chosen, window, cx);
         let rows: Vec<(Entity<ChatView>, Row)> = self
             .chats
             .iter()
@@ -849,6 +863,24 @@ impl Workspace {
         cx.notify();
     }
 
+    /// Chooses, as the daemon first lists the chats to the window that
+    /// starts, the project chosen last, at `chosen`, or Cox's own once that
+    /// one was put away, showing a chat of it, unless something showed one
+    /// already.
+    fn choose_at_start(&mut self, chosen: usize, window: &mut Window, cx: &mut Context<Self>) {
+        if std::mem::replace(&mut self.listed, true) || self.shown().is_some() {
+            return;
+        }
+        let chosen = Some(chosen)
+            .filter(|&index| {
+                self.projects
+                    .get(index)
+                    .is_some_and(|project| !project.archived && !project.deleted)
+            })
+            .unwrap_or(0);
+        self.choose(chosen, window, cx);
+    }
+
     /// Shows the projects as the daemon lists them now, `projects`, each
     /// with the chat of it shown last and its icon.
     fn list_projects(&mut self, projects: Vec<ProjectRow>) {
@@ -867,7 +899,9 @@ impl Workspace {
                 id: row.id,
                 name: row.name.into(),
                 folder: row.folder,
-                last: lasts.get(index).copied().flatten(),
+                // What the window showed in this run is newer than what
+                // the daemon kept of an earlier one.
+                last: lasts.get(index).copied().flatten().or(row.last),
                 icon: row
                     .id
                     .and_then(|id| icons.get(&id).cloned().unwrap_or_else(|| icon_of(id))),
@@ -1475,7 +1509,10 @@ impl Workspace {
         let key = chat.key;
         self.chosen = chat.project;
         self.projects[chat.project].last = Some(key);
-        self.tell(ToDaemon::Shown { key: Some(key) });
+        self.tell(ToDaemon::Shown {
+            key: Some(key),
+            project: self.chosen,
+        });
         self.view(key, cx);
         self.stage_shows(key, cx);
         self.sight(cx);
@@ -1837,22 +1874,25 @@ impl Workspace {
     }
 
     /// Chooses the project at `index` on the rail, showing the chat of it
-    /// shown last, or its first, or no chat when it has none.
+    /// shown last, unless it was marked done since, or else the one that
+    /// moved last, one marked done only when all are, or no chat when it
+    /// has none (see [`opens::chat_to_show`]).
     pub fn choose(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
         let Some(project) = self.projects.get(index) else {
             return;
         };
-        let mut chats = self
+        let chats = self
             .chats
             .iter()
             .enumerate()
-            .filter(|(_, chat)| chat.project == index);
-        let last = project.last;
-        let first = chats.clone().next().map(|(chat, _)| chat);
-        let shown = chats
-            .find(|(_, chat)| Some(chat.key) == last)
-            .map(|(chat, _)| chat)
-            .or(first);
+            .filter(|(_, chat)| chat.project == index)
+            .map(|(chat_index, chat)| opens::Candidate {
+                index: chat_index,
+                key: chat.key,
+                resolved: chat.is_resolved(),
+                active: chat.active,
+            });
+        let shown = opens::chat_to_show(chats, project.last);
         if let Some(chat) = shown {
             self.show(chat, window, cx);
         } else {
@@ -1861,7 +1901,10 @@ impl Workspace {
             self.switching = false;
             self.stage_chosen();
             self.sight(cx);
-            self.tell(ToDaemon::Shown { key: None });
+            self.tell(ToDaemon::Shown {
+                key: None,
+                project: index,
+            });
             window.focus(&self.focus_handle);
             cx.notify();
         }
