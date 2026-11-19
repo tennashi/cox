@@ -119,6 +119,15 @@ pub(crate) const SKETCH: &str = "Sketch";
 /// the agent asks.
 pub(crate) const OTHER: &str = "Other";
 
+/// The input the human writes their own answer to a question in: of the
+/// question at `question` among those of the entry at `at`.
+struct OtherInput {
+    input: Entity<LineInput>,
+    at: usize,
+    question: usize,
+    _submitted: Subscription,
+}
+
 /// Binds the keys of the conversation. Escape is the stage's while the
 /// stage has the keyboard, and the input method's while it composes.
 pub fn bind_keys(cx: &mut App) {
@@ -278,8 +287,8 @@ pub struct ChatView {
     /// the card of the entry at its index, before they send it.
     draft: Option<(usize, Vec<Picked>)>,
     /// The input the human writes their own answer to a question in, while
-    /// it is open, with the question's place among the questions.
-    other_input: Option<(Entity<LineInput>, usize, Subscription)>,
+    /// it is open.
+    other_input: Option<OtherInput>,
     /// The setting whose choices are open, by its place in the
     /// conversation's settings, while they are.
     setting_open: Option<settings::Menu>,
@@ -671,6 +680,13 @@ impl ChatView {
     #[must_use]
     pub fn input(&self) -> &Entity<LineInput> {
         &self.input
+    }
+
+    /// Whether the input the human writes their own answer to a question
+    /// in is open.
+    #[must_use]
+    pub fn writes_own_answer(&self) -> bool {
+        self.other_input.is_some()
     }
 
     /// The input the human sets the goal in, while it is open.
@@ -1169,7 +1185,12 @@ impl ChatView {
             view.end_other(true, window, cx);
         });
         window.focus(&input.focus_handle(cx));
-        self.other_input = Some((input, question, submitted));
+        self.other_input = Some(OtherInput {
+            input,
+            at,
+            question,
+            _submitted: submitted,
+        });
         cx.notify();
     }
 
@@ -1177,31 +1198,68 @@ impl ChatView {
     /// when `keep` says to: a single question it answers then and there,
     /// with the options picked beside it.
     fn end_other(&mut self, keep: bool, window: &mut Window, cx: &mut Context<Self>) {
-        let Some((input, question, _)) = self.other_input.take() else {
+        let Some(other) = self.close_other(window, cx) else {
             return;
         };
-        window.focus(&self.input.focus_handle(cx));
-        cx.notify();
         let Some((at, questions)) = self.asked_questions() else {
             return;
         };
-        if !keep {
+        if !keep || other.at != at {
             return;
         }
         let single = questions.len() == 1;
-        let words = input.read(cx).text().trim().to_owned();
-        let mut picked = self.picked(at);
-        if let Some(of) = picked.get_mut(question) {
-            of.other = (!words.is_empty()).then_some(words);
-        }
-        self.draft = Some((at, picked));
+        self.take_other_words(&other, cx);
         if single {
-            self.send_answer(at, cx);
+            self.send_answer(at, window, cx);
         }
     }
 
-    /// Sends what the human picked of the questions of the entry at `at`.
-    pub(super) fn send_answer(&mut self, at: usize, _: &mut Context<Self>) {
+    /// Closes the input of the human's own answer, if it is open, giving
+    /// the keyboard back to the chat's input when the input had it.
+    fn close_other(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Option<OtherInput> {
+        let other = self.other_input.take()?;
+        if other.input.focus_handle(cx).contains_focused(window, cx) {
+            window.focus(&self.input.focus_handle(cx));
+        }
+        cx.notify();
+        Some(other)
+    }
+
+    /// Keeps the words written in `other` as the human's own answer to
+    /// its question, or none when it is empty.
+    fn take_other_words(&mut self, other: &OtherInput, cx: &mut Context<Self>) {
+        let words = other.input.read(cx).text().trim().to_owned();
+        let mut picked = self.picked(other.at);
+        if let Some(of) = picked.get_mut(other.question) {
+            of.other = (!words.is_empty()).then_some(words);
+        }
+        self.draft = Some((other.at, picked));
+    }
+
+    /// Closes the input of the human's own answer once the question it
+    /// answers is no longer asked, as when the human answered it, the
+    /// agent withdrew it or the turn was stopped: the input answers that
+    /// question only.
+    fn close_other_unless_asked(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let asked = self.asked_questions().map(|(at, _)| at);
+        if self
+            .other_input
+            .as_ref()
+            .is_some_and(|other| Some(other.at) != asked)
+        {
+            self.close_other(window, cx);
+        }
+    }
+
+    /// Sends what the human picked of the questions of the entry at `at`,
+    /// with the words written in the input of their own answer, if it is
+    /// open, which closes.
+    pub(super) fn send_answer(&mut self, at: usize, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(other) = self.close_other(window, cx)
+            && other.at == at
+        {
+            self.take_other_words(&other, cx);
+        }
         let picked = self.picked(at);
         self.draft = None;
         self.tell(ToDaemon::AnswerQuestion {
@@ -1210,8 +1268,10 @@ impl ChatView {
         });
     }
 
-    /// Tells the agent the human chose not to answer its questions.
-    pub(super) fn decline_questions(&mut self, _: &mut Context<Self>) {
+    /// Tells the agent the human chose not to answer its questions, and
+    /// closes the input of their own answer, if it is open.
+    pub(super) fn decline_questions(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.close_other(window, cx);
         self.draft = None;
         self.tell(ToDaemon::AnswerQuestion {
             key: self.key,
@@ -1222,7 +1282,7 @@ impl ChatView {
     /// The input of the human's own answer to a question, while it is
     /// open.
     fn render_other_input(&self, cx: &mut Context<Self>) -> Option<impl IntoElement + use<>> {
-        let (input, _, _) = self.other_input.as_ref()?;
+        let input = &self.other_input.as_ref()?.input;
         Some(
             Self::render_input_card("Other", "your own answer · Enter takes it")
                 .key_context(OTHER)
@@ -1883,6 +1943,7 @@ impl ChatView {
 
 impl Render for ChatView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.close_other_unless_asked(window, cx);
         div()
             .size_full()
             .flex()
