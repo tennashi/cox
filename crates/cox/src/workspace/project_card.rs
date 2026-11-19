@@ -7,13 +7,15 @@
 //! the project's directories, in `directories` in its folder, which Enter
 //! makes, named as the project unless named otherwise, or clones a
 //! repository into, each of which can be renamed, become a Git
-//! repository and be linked to a remote. A project whose folder is not
-//! there says so. Escape, the ×, or a click beside the card closes it.
+//! repository and be linked to a remote. A repository's worktrees are
+//! listed under it, wherever they are, each with how it stands. A
+//! project whose folder is not there says so. Escape, the ×, or a click beside the card closes it.
 
 mod directory;
 
 use directory::Directory;
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -34,6 +36,7 @@ use crate::vim::Move;
 use crate::vim::hints::Hinted as _;
 use coxd::paths::shortened;
 use coxd::theme::{ACCENT, ASKING, BORDER, DIM, FAILED, FAINT, FOREGROUND, HOVER, LINK, RAISED};
+use coxd::worktrees::{self, Worktree};
 
 actions!(
     cox,
@@ -174,6 +177,9 @@ pub struct ProjectCard {
     about: Entity<LineInput>,
     /// The project's directories, as they stand.
     directories: Vec<Directory>,
+    /// How each worktree of the directories stands, by its path, once it
+    /// was read, or why it could not be.
+    standings: HashMap<PathBuf, Result<worktrees::Standing, String>>,
     /// The input of a directory's name, or a Git repository's URL.
     directory: Entity<LineInput>,
     /// What the line under it says.
@@ -225,9 +231,10 @@ impl ProjectCard {
         });
         // What the card says of the name follows it as it is typed.
         let typed = cx.observe(&name, |_, _, cx| cx.notify());
-        Self {
+        let mut card = Self {
             project,
             directories: directory::listed(&standing.folder),
+            standings: HashMap::new(),
             standing,
             name,
             about,
@@ -236,7 +243,55 @@ impl ProjectCard {
             editing: None,
             scroll: ScrollHandle::new(),
             _submitted: [named, told, made, typed],
+        };
+        card.read_standings(cx);
+        card
+    }
+
+    /// Lists the project's directories again, and reads how their
+    /// worktrees stand.
+    fn list(&mut self, cx: &mut Context<Self>) {
+        self.directories = directory::listed(&self.standing.folder);
+        self.read_standings(cx);
+    }
+
+    /// Reads, in the background, how each worktree of the directories
+    /// stands, which Git takes a while to tell of a big one.
+    fn read_standings(&mut self, cx: &mut Context<Self>) {
+        let project = self.standing.folder.clone();
+        let read: Vec<(PathBuf, PathBuf)> = self
+            .directories
+            .iter()
+            .flat_map(|directory| {
+                let repository = directory::folder_of(&project, &directory.name);
+                directory
+                    .worktrees
+                    .iter()
+                    .filter(|worktree| !worktree.gone)
+                    .map(move |worktree| (repository.clone(), worktree.path.clone()))
+            })
+            .collect();
+        if read.is_empty() {
+            return;
         }
+        cx.spawn(async move |this, cx| {
+            let standings = cx
+                .background_spawn(async move {
+                    read.into_iter()
+                        .map(|(repository, path)| {
+                            let standing = worktrees::standing(&repository, &path);
+                            (path, standing)
+                        })
+                        .collect::<HashMap<_, _>>()
+                })
+                .await;
+            this.update(cx, |card, cx| {
+                card.standings = standings;
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
     }
 
     /// The project the card edits.
@@ -492,7 +547,7 @@ impl ProjectCard {
                 })
                 .await;
             this.update(cx, |card, cx| {
-                card.directories = directory::listed(&card.standing.folder);
+                card.list(cx);
                 match done {
                     Ok(done) => {
                         card.directory.update(cx, LineInput::clear);
@@ -573,13 +628,16 @@ impl ProjectCard {
         if self.standing.about != standing.about && self.about.read(cx).text().trim() != about {
             self.about.update(cx, |input, cx| input.set_text(about, cx));
         }
-        if self.standing.folder != standing.folder {
+        let moved = self.standing.folder != standing.folder;
+        if moved {
             let text = named(&standing.folder);
             self.name.update(cx, |input, cx| input.set_text(&text, cx));
-            self.directories = directory::listed(&standing.folder);
             self.editing = None;
         }
         self.standing = standing;
+        if moved {
+            self.list(cx);
+        }
         cx.notify();
     }
 
@@ -598,8 +656,8 @@ impl ProjectCard {
                 self.about.read(cx).text()
             )))
             .chain(std::iter::once(self.described_icon()))
-            .chain(self.directories.iter().map(|directory| {
-                format!(
+            .chain(self.directories.iter().flat_map(|directory| {
+                std::iter::once(format!(
                     "Directory {}{}",
                     directory.name,
                     match (directory.git, &directory.remote) {
@@ -607,7 +665,15 @@ impl ProjectCard {
                         (true, None) => " (Git, no remote)".to_owned(),
                         (true, Some(remote)) => format!(" (Git, remote {remote})"),
                     }
-                )
+                ))
+                .chain(directory.worktrees.iter().map(|worktree| {
+                    format!(
+                        "  Worktree {} at {}: {}",
+                        worktree.label(),
+                        self.where_is(worktree),
+                        self.said_of_worktree(worktree).join("; ")
+                    )
+                }))
             }))
             .chain(self.editing.as_ref().map(|editing| {
                 format!(
@@ -936,12 +1002,114 @@ impl ProjectCard {
                     &editing.input,
                 ))
             });
+        let worktrees: Vec<gpui::Div> = directory
+            .worktrees
+            .iter()
+            .enumerate()
+            .map(|(at, worktree)| self.render_worktree(index, at, worktree))
+            .collect();
         div()
             .flex()
             .flex_col()
             .when(index > 0, |row| row.border_t_1().border_color(rgb(BORDER)))
             .child(row)
             .children(editing)
+            .children(worktrees)
+    }
+
+    /// Where `worktree` is: from the project's folder, when it is in it,
+    /// or else from the home.
+    fn where_is(&self, worktree: &Worktree) -> String {
+        let canonical = |path: &Path| path.canonicalize().unwrap_or_else(|_| path.to_owned());
+        let (path, project) = (canonical(&worktree.path), canonical(&self.standing.folder));
+        match path.strip_prefix(&project) {
+            Ok(within) if !worktree.outside => within.display().to_string(),
+            _ => shortened(&worktree.path),
+        }
+    }
+
+    /// What the card says of `worktree`, a few words each: where it is,
+    /// who made it, and how it stands.
+    fn said_of_worktree(&self, worktree: &Worktree) -> Vec<String> {
+        let mut said = Vec::new();
+        if worktree.outside {
+            said.push("outside".to_owned());
+        }
+        said.push(match worktree.made_for {
+            Some(chat) => format!("made for chat {chat}"),
+            None => "made by hand".to_owned(),
+        });
+        if worktree.gone {
+            said.push("its folder is gone".to_owned());
+        } else {
+            said.push(match self.standings.get(&worktree.path) {
+                None => "reading…".to_owned(),
+                Some(Ok(standing)) => standing.said(),
+                Some(Err(why)) => format!("Git cannot tell: {why}"),
+            });
+        }
+        said
+    }
+
+    /// The row of `worktree`, the `index`th of the directory `directory`,
+    /// under it.
+    fn render_worktree(&self, directory: usize, index: usize, worktree: &Worktree) -> gpui::Div {
+        let outside = worktree.outside;
+        div()
+            .debug_selector(move || format!("project-worktree-{directory}-{index}"))
+            .min_h(px(ROW_HEIGHT))
+            .pl(px(30.))
+            .pr_2()
+            .py_1()
+            .flex()
+            .items_center()
+            .gap_2()
+            .border_t_1()
+            .border_color(rgb(BORDER))
+            .child(icon(Icon::Flow, 13., DIM))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .flex()
+                    .flex_col()
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .text_size(px(13.))
+                            .text_color(rgb(FOREGROUND))
+                            .child(ellipsis(worktree.label()))
+                            .when(outside, |row| {
+                                row.child(
+                                    div()
+                                        .flex_shrink_0()
+                                        .px_1()
+                                        .rounded(px(4.))
+                                        .border_1()
+                                        .border_color(rgb(BORDER))
+                                        .text_size(px(10.))
+                                        .text_color(rgb(ASKING))
+                                        .child("outside"),
+                                )
+                            }),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(11.))
+                            .text_color(rgb(FAINT))
+                            .child(ellipsis(format!(
+                                "{} · {}",
+                                self.where_is(worktree),
+                                self.said_of_worktree(worktree)
+                                    .into_iter()
+                                    .filter(|said| said != "outside")
+                                    .collect::<Vec<_>>()
+                                    .join(" · ")
+                            ))),
+                    ),
+            )
     }
 
     /// The project's directories, a row each, under their heading, each

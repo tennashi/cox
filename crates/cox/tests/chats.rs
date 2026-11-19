@@ -2555,6 +2555,37 @@ fn a_url_on_the_projects_card_clones_the_repository_into_a_directory_named_after
 }
 
 #[gpui::test]
+fn a_repositorys_worktree_beside_it_is_listed_under_it_on_the_projects_card(
+    cx: &mut TestAppContext,
+) {
+    let (card, cx) = open_projects_card(cx);
+    enter(&card.url, &card.input, cx);
+    let beside = card.directories.join("origin-fix");
+    git(
+        &card.directories.join("origin"),
+        &[
+            "worktree",
+            "add",
+            "--quiet",
+            "-b",
+            "fix",
+            beside.to_str().unwrap(),
+        ],
+    );
+    // Making another directory lists them again.
+    card.make_app(cx);
+    let said = card.described(cx);
+    assert!(
+        said.contains(
+            &"  Worktree fix at directories/origin-fix: made by hand; clean, merged".to_owned()
+        ) && !said
+            .iter()
+            .any(|line| line.starts_with("Directory origin-fix")),
+        "{said:?}"
+    );
+}
+
+#[gpui::test]
 fn a_repository_cloned_already_is_not_cloned_over_its_directory(cx: &mut TestAppContext) {
     let (card, cx) = open_projects_card(cx);
     enter(&card.url, &card.input, cx);

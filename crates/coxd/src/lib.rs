@@ -29,7 +29,9 @@
 //! - [`raw`] is what the agents read, kept as they read it, as the
 //!   sources of research, apart from what is made of it.
 //! - [`repositories`] is the repositories of a folder Cox works in, and
-//!   [`github`] the pull requests the agents open there, and their CI.
+//!   [`github`] the pull requests the agents open there, and their CI;
+//!   [`worktrees`] is the other checkouts of a project's repositories,
+//!   which Cox makes for its chats and takes away once they are done.
 //! - [`media`] is the pictures and files the conversations show, kept as
 //!   they were shown.
 //! - [`theme`] is how Cox looks, which the window and the page coxd
@@ -73,3 +75,4 @@ pub mod trash;
 pub mod trigger;
 pub mod wiki;
 pub mod workflow;
+pub mod worktrees;
