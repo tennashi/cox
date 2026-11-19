@@ -122,6 +122,10 @@ pub struct Check {
     pub state: CheckState,
     /// Where it is shown, as its job's page.
     pub link: Option<String>,
+    /// When it ended, in milliseconds since the epoch, once it did, as
+    /// GitHub tells of a job.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ended: Option<i64>,
 }
 
 /// How a pull request stands, and its checks.
@@ -132,10 +136,33 @@ pub struct Status {
     /// The commit at its head, whose checks these are.
     pub head: String,
     pub checks: Vec<Check>,
+    /// When it was opened, merged and closed, as GitHub tells it.
+    #[serde(default)]
+    pub times: Times,
+}
+
+/// When a pull request was opened, merged and closed, each in
+/// milliseconds since the epoch, once it was, as GitHub tells it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Times {
+    pub opened: Option<i64>,
+    pub merged: Option<i64>,
+    pub closed: Option<i64>,
 }
 
 /// The fields of `gh pr view --json` that [`Status::parse`] reads.
-const FIELDS: &str = "title,state,isDraft,headRefOid,statusCheckRollup";
+const FIELDS: &str = "title,state,isDraft,headRefOid,statusCheckRollup,createdAt,mergedAt,closedAt";
+
+/// `at`, a time as GitHub tells it, as `2026-11-16T14:19:00Z`, in
+/// milliseconds since the epoch; none for none, or for one it cannot read.
+fn millis(at: Option<&str>) -> Option<i64> {
+    at.filter(|at| !at.is_empty())?
+        .parse::<jiff::Timestamp>()
+        .ok()
+        .map(jiff::Timestamp::as_millisecond)
+        // What gh tells of a job not ended, as the year 1.
+        .filter(|at| *at > 0)
+}
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -148,6 +175,9 @@ struct Viewed {
     head_ref_oid: String,
     #[serde(default)]
     status_check_rollup: Vec<Rolled>,
+    created_at: Option<String>,
+    merged_at: Option<String>,
+    closed_at: Option<String>,
 }
 
 /// A check as `gh` tells it: a check run, of GitHub Actions or another
@@ -162,6 +192,7 @@ struct Rolled {
     state: Option<String>,
     details_url: Option<String>,
     target_url: Option<String>,
+    completed_at: Option<String>,
 }
 
 impl Rolled {
@@ -185,6 +216,7 @@ impl Rolled {
                 .details_url
                 .or(self.target_url)
                 .filter(|link| !link.is_empty()),
+            ended: millis(self.completed_at.as_deref()),
         }
     }
 }
@@ -212,7 +244,22 @@ impl Status {
                 .into_iter()
                 .map(Rolled::check)
                 .collect(),
+            times: Times {
+                opened: millis(viewed.created_at.as_deref()),
+                merged: millis(viewed.merged_at.as_deref()),
+                closed: millis(viewed.closed_at.as_deref()),
+            },
         })
+    }
+
+    /// When its checks ended, together: when the last of them ended, once
+    /// none waits or runs, if GitHub told when each ended.
+    #[must_use]
+    pub fn checks_ended(&self) -> Option<i64> {
+        if matches!(self.checks(), None | Some(CheckState::Pending)) {
+            return None;
+        }
+        self.checks.iter().filter_map(|check| check.ended).max()
     }
 
     /// How its checks stand, together: pending while any is, then failed
@@ -418,6 +465,31 @@ mod tests {
     }
 
     #[test]
+    fn tells_when_a_pull_request_opened_merged_closed_and_its_ci_ended() {
+        let at = |text: &str| text.parse::<jiff::Timestamp>().unwrap().as_millisecond();
+        let status = Status::parse(include_str!("github/merged.json")).unwrap();
+        assert_eq!(
+            status.times,
+            Times {
+                opened: Some(at("2026-11-16T13:42:54Z")),
+                merged: Some(at("2026-11-16T14:19:00Z")),
+                closed: Some(at("2026-11-16T14:19:00Z")),
+            }
+        );
+        // The last of its two jobs.
+        assert_eq!(status.checks_ended(), Some(at("2026-11-16T14:17:14Z")));
+
+        // Open, its CI still running: not merged, not closed, not ended.
+        let json = r#"{"title":"t","state":"OPEN","headRefOid":"a","createdAt":"2026-11-16T13:42:54Z",
+            "mergedAt":null,"closedAt":null,"statusCheckRollup":[
+              {"name":"a","status":"COMPLETED","conclusion":"SUCCESS","completedAt":"2026-11-16T14:00:00Z"},
+              {"name":"b","status":"IN_PROGRESS","conclusion":"","completedAt":"0001-01-01T00:00:00Z"}]}"#;
+        let status = Status::parse(json).unwrap();
+        assert_eq!((status.times.merged, status.times.closed), (None, None));
+        assert_eq!(status.checks_ended(), None);
+    }
+
+    #[test]
     fn a_draft_with_a_running_job_and_a_commit_status_reads_pending() {
         let json = r#"{"title":"t","state":"OPEN","isDraft":true,"headRefOid":"a",
             "statusCheckRollup":[
@@ -442,8 +514,10 @@ mod tests {
                     name: "ci".to_owned(),
                     state,
                     link: None,
+                    ended: None,
                 })
                 .collect(),
+            times: Times::default(),
         }
     }
 

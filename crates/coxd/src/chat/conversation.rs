@@ -20,6 +20,7 @@ use cox_core::entry::{OnStep, alike};
 use cox_core::goal;
 use cox_core::settings::Setting;
 use cox_core::store::ChatId;
+use cox_core::store::{Ended as TurnOver, TurnEnd};
 
 use crate::agent::mcp::{Ended, Ran};
 use crate::agent::{AgentEvent, Command, Opened, Prompt};
@@ -261,6 +262,9 @@ struct Unkept {
     settings: bool,
     commands: bool,
     spent: bool,
+    /// The turns that ended, the first first, which the entries keep no
+    /// end of.
+    turns: Vec<TurnEnd>,
 }
 
 /// The conversation the window shows.
@@ -536,6 +540,20 @@ impl Conversation {
     /// to keep.
     pub fn take_spent_changed(&mut self) -> bool {
         std::mem::take(&mut self.unkept.spent)
+    }
+
+    /// The turns that ended since this was last called, each with when
+    /// and how, to keep.
+    pub fn take_turns_ended(&mut self) -> Vec<TurnEnd> {
+        std::mem::take(&mut self.unkept.turns)
+    }
+
+    /// Notes that the turn ended now, as `how` says.
+    fn turn_over(&mut self, how: TurnOver) {
+        self.unkept.turns.push(TurnEnd {
+            at: cox_core::store::now(),
+            how,
+        });
     }
 
     /// Whether the settings changed since this was last called, to keep.
@@ -1395,6 +1413,14 @@ impl Conversation {
     /// does, having done what it was asked, is when the goal is looked
     /// at, and the triggers due run.
     fn turn_ended(&mut self, reason: StopReason) {
+        self.turn_over(match reason {
+            StopReason::EndTurn => TurnOver::Done,
+            StopReason::Cancelled => TurnOver::Stopped,
+            StopReason::MaxTokens => TurnOver::TooLong,
+            StopReason::MaxTurnRequests => TurnOver::TooManyRequests,
+            StopReason::Refusal => TurnOver::Refused,
+            StopReason::Other => TurnOver::Other,
+        });
         if let Some(note) = ended(reason) {
             self.push(Entry::Note(note.to_owned()));
         }
@@ -1580,12 +1606,20 @@ impl Conversation {
                 let since = before
                     .filter(|before| before.state == step.state)
                     .map_or(now, |before| before.since);
+                let started = match step.state {
+                    StepState::Pending => None,
+                    // Under way since it was seen so, or since now; done,
+                    // since it was seen under way, if it was.
+                    StepState::InProgress => before.and_then(started_of).or(now),
+                    StepState::Completed => before.and_then(started_of),
+                };
                 let id = before.and_then(|before| before.id).unwrap_or_else(|| {
                     last += 1;
                     last
                 });
                 Step {
                     since,
+                    started,
                     id: Some(id),
                     ..step
                 }
@@ -1903,6 +1937,7 @@ impl Conversation {
             }
             AgentEvent::Note(note) => self.push(Entry::Note(note)),
             AgentEvent::TurnFailed(error) => {
+                self.turn_over(TurnOver::Failed);
                 self.push(Entry::Note(format!("The turn failed: {error}")));
                 // A line steered into it, which the agent side has not
                 // taken yet, starts a turn of its own.
@@ -1922,6 +1957,10 @@ impl Conversation {
             Some(error) => format!("The agent closed: {error}"),
             None => "The agent closed.".to_owned(),
         };
+        // A turn running ends with the agent.
+        if matches!(self.state, State::Busy | State::Asking | State::Stopping) {
+            self.turn_over(TurnOver::Closed);
+        }
         self.push(Entry::Note(note));
         self.state = State::Closed;
         self.checks = None;
@@ -2032,6 +2071,16 @@ fn tail(text: &str, length: usize) -> String {
     }
     let kept: String = text.chars().skip(count - length).collect();
     format!("[…]{kept}")
+}
+
+/// When `step` was first seen under way, as the step it was before: when
+/// it says, or, for one under way an older Cox kept, since it was so.
+fn started_of(step: &Step) -> Option<i64> {
+    step.started.or_else(|| {
+        (step.state == StepState::InProgress)
+            .then_some(step.since)
+            .flatten()
+    })
 }
 
 /// What the conversation notes of a turn that ended for `reason`: nothing
@@ -2459,6 +2508,7 @@ mod tests {
             .iter()
             .map(|step| Step {
                 since: None,
+                started: None,
                 id: None,
                 ..step.clone()
             })
@@ -2470,6 +2520,7 @@ mod tests {
             text: text.to_owned(),
             state,
             since: None,
+            started: None,
             id: None,
         }
     }
@@ -2640,6 +2691,93 @@ mod tests {
             step("Fix", StepState::Pending),
         ]));
         assert_eq!(since(&conversation), first);
+    }
+
+    #[test]
+    fn keeps_when_a_step_started_once_it_is_done() {
+        let mut conversation = Conversation::new();
+        conversation.submit("plan");
+        let started = |conversation: &Conversation| -> Vec<Option<i64>> {
+            conversation
+                .last_plan()
+                .unwrap()
+                .iter()
+                .map(|step| step.started)
+                .collect()
+        };
+        conversation.apply(AgentEvent::Plan(vec![
+            step("Read", StepState::InProgress),
+            step("Fix", StepState::Pending),
+            step("Lint", StepState::Completed),
+        ]));
+        let first = started(&conversation);
+        assert!(first[0].is_some(), "under way: started now");
+        // Not started, and done without being seen under way: no start.
+        assert_eq!(first[1..], [None, None]);
+
+        // Done later: it keeps when it started, its `since` is when it
+        // was done.
+        let later = Some(i64::MAX);
+        let then = conversation.stamped(
+            vec![
+                step("Read", StepState::Completed),
+                step("Fix", StepState::InProgress),
+                step("Lint", StepState::Completed),
+            ],
+            later,
+        );
+        assert_eq!((then[0].started, then[0].since), (first[0], later));
+        assert_eq!((then[1].started, then[1].since), (later, later));
+        assert_eq!(then[2].started, None);
+
+        // A step an older Cox kept under way, with no start: it started
+        // when it came to be under way.
+        let old = Step {
+            since: Some(5),
+            ..step("Old", StepState::InProgress)
+        };
+        assert_eq!(started_of(&old), Some(5));
+        assert_eq!(started_of(&step("Old", StepState::Completed)), None);
+    }
+
+    #[test]
+    fn tells_how_and_when_each_turn_ended() {
+        let hows = |conversation: &mut Conversation| -> Vec<TurnOver> {
+            conversation
+                .take_turns_ended()
+                .iter()
+                .map(|end| end.how)
+                .collect()
+        };
+        let before = cox_core::store::now();
+        let mut conversation = Conversation::new();
+        conversation.submit("one");
+        conversation.apply(AgentEvent::TurnEnded(StopReason::EndTurn));
+        let ended = conversation.take_turns_ended();
+        assert_eq!(ended.len(), 1);
+        assert_eq!(ended[0].how, TurnOver::Done);
+        assert!(ended[0].at >= before);
+        assert_eq!(hows(&mut conversation), [], "each told once");
+
+        conversation.submit("two");
+        conversation.cancel();
+        conversation.apply(AgentEvent::TurnEnded(StopReason::Cancelled));
+        conversation.submit("three");
+        conversation.apply(AgentEvent::TurnFailed("lost".to_owned()));
+        conversation.submit("four");
+        conversation.apply(AgentEvent::TurnEnded(StopReason::MaxTokens));
+        assert_eq!(
+            hows(&mut conversation),
+            [TurnOver::Stopped, TurnOver::Failed, TurnOver::TooLong]
+        );
+
+        // The agent closing ends a turn that runs, and no other.
+        conversation.apply(AgentEvent::Closed(None));
+        assert_eq!(hows(&mut conversation), []);
+        let mut busy = Conversation::new();
+        busy.submit("five");
+        busy.apply(AgentEvent::Closed(Some("crashed".to_owned())));
+        assert_eq!(hows(&mut busy), [TurnOver::Closed]);
     }
 
     #[test]

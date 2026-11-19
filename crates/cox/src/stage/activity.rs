@@ -40,10 +40,13 @@ use jiff::tz::TimeZone;
 use serde_json::{Value, json};
 
 use crate::stage::commands;
+
+mod timeline;
 use cox_acp::Microdollars;
 use coxd::chat::spent::Spent;
 use coxd::daemon::wire::{OnStepLine, PullRow};
 use coxd::github::CheckState;
+pub use timeline::{Of, timeline};
 
 /// How many of what happened the page is told of, the last first.
 const HAPPENED: usize = 50;
@@ -771,6 +774,7 @@ fn waiting_in(told: &Told, root: &Path, now: &dyn Fn(u64) -> Option<commands::No
         .map(|chat| {
             json!({
                 "key": chat.key,
+                "chat": chat.kept,
                 "name": chat.name,
                 "why": if chat.asking {
                     "asks you".to_owned()
@@ -1494,6 +1498,7 @@ mod tests {
             text: text.to_owned(),
             state,
             since: None,
+            started: None,
             id: None,
         }
     }
@@ -2463,6 +2468,7 @@ mod tests {
             text: text.to_owned(),
             state: StepState::Pending,
             since: None,
+            started: None,
             id: None,
         };
         let plan = [
@@ -2636,7 +2642,9 @@ mod tests {
                     name: "ci".to_owned(),
                     state: checks,
                     link: None,
+                    ended: None,
                 }],
+                times: coxd::github::Times::default(),
             }),
             unseen,
         }

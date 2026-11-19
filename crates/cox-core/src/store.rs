@@ -22,7 +22,7 @@ use crate::settings::Setting;
 use crate::tabs::KeptTabs;
 
 /// The version of the tables below, as `SQLite`'s `user_version` holds it.
-const VERSION: i64 = 22;
+const VERSION: i64 = 23;
 
 const TABLES: &str = "
 CREATE TABLE projects (
@@ -130,6 +130,17 @@ CREATE TABLE shown (
     -- epoch.
     at INTEGER NOT NULL
 );
+-- How each turn of a chat's agent ended, and when: what the Activity
+-- page tells a chat's story by, as the entries keep no end of a turn
+-- that ended as turns do.
+CREATE TABLE turns (
+    chat INTEGER NOT NULL REFERENCES chats (id),
+    -- When it ended, in milliseconds since the epoch.
+    at INTEGER NOT NULL,
+    -- How it ended, as `Ended` names it, such as `done` or `stopped`.
+    how TEXT NOT NULL
+);
+CREATE INDEX turns_of ON turns (chat, at);
 ";
 
 /// What makes the tables of each earlier version into those of the next:
@@ -178,6 +189,8 @@ const UPGRADES: &[&str] = &[
      ALTER TABLE chats ADD COLUMN resolved_by TEXT;",
     "CREATE INDEX on_steps ON entries (chat, number) WHERE entry LIKE '{\"on_step\":%';",
     "CREATE TABLE shown (project INTEGER PRIMARY KEY, chat INTEGER, at INTEGER NOT NULL);",
+    "CREATE TABLE turns (chat INTEGER NOT NULL REFERENCES chats (id), at INTEGER NOT NULL, how TEXT NOT NULL);
+     CREATE INDEX turns_of ON turns (chat, at);",
 ];
 
 /// How long a write waits for another Cox writing the same database.
@@ -317,6 +330,68 @@ impl ResolvedBy {
             Self::Human
         }
     }
+}
+
+/// How a turn of a chat's agent ended.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Ended {
+    /// The agent ended it, having done what it was asked.
+    Done,
+    /// The human, or Cox, stopped it.
+    Stopped,
+    /// The agent's reply grew too long.
+    TooLong,
+    /// The agent made more requests in it than it may.
+    TooManyRequests,
+    /// The agent refused to go on.
+    Refused,
+    /// It failed, as when the agent's side erred.
+    Failed,
+    /// The agent closed while it ran.
+    Closed,
+    /// For a reason Cox does not know.
+    Other,
+}
+
+impl Ended {
+    /// How it is kept.
+    #[must_use]
+    pub const fn word(self) -> &'static str {
+        match self {
+            Self::Done => "done",
+            Self::Stopped => "stopped",
+            Self::TooLong => "too_long",
+            Self::TooManyRequests => "too_many_requests",
+            Self::Refused => "refused",
+            Self::Failed => "failed",
+            Self::Closed => "closed",
+            Self::Other => "other",
+        }
+    }
+
+    /// What `word` keeps; a word a newer Cox kept is [`Self::Other`].
+    #[must_use]
+    pub fn from_word(word: &str) -> Self {
+        match word {
+            "done" => Self::Done,
+            "stopped" => Self::Stopped,
+            "too_long" => Self::TooLong,
+            "too_many_requests" => Self::TooManyRequests,
+            "refused" => Self::Refused,
+            "failed" => Self::Failed,
+            "closed" => Self::Closed,
+            _ => Self::Other,
+        }
+    }
+}
+
+/// A turn of a chat's agent that ended: when, and how.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct TurnEnd {
+    /// When, in milliseconds since the epoch.
+    pub at: i64,
+    pub how: Ended,
 }
 
 /// The plan a chat's agent sent last, as [`Store::plans`] reads it.
@@ -896,6 +971,10 @@ impl Store {
             &format!("DELETE FROM entries WHERE chat IN ({chats})"),
             [project.0],
         )?;
+        transaction.execute(
+            &format!("DELETE FROM turns WHERE chat IN ({chats})"),
+            [project.0],
+        )?;
         // A chat of another project, or of Cox's own, that one of these
         // opened forgets which did.
         transaction.execute(
@@ -1228,6 +1307,38 @@ impl Store {
         Ok(())
     }
 
+    /// Keeps that a turn of `chat`'s agent ended, as `end` says.
+    ///
+    /// # Errors
+    ///
+    /// When the database cannot be written.
+    pub fn keep_turn_end(&self, chat: ChatId, end: TurnEnd) -> anyhow::Result<()> {
+        self.connection.execute(
+            "INSERT INTO turns (chat, at, how) VALUES (?1, ?2, ?3)",
+            params![chat.0, end.at, end.how.word()],
+        )?;
+        Ok(())
+    }
+
+    /// How each turn of `chat`'s agent ended, the first first, of those
+    /// a Cox that kept them saw end.
+    ///
+    /// # Errors
+    ///
+    /// When the database cannot be read.
+    pub fn turns(&self, chat: ChatId) -> anyhow::Result<Vec<TurnEnd>> {
+        let mut statement = self
+            .connection
+            .prepare_cached("SELECT at, how FROM turns WHERE chat = ?1 ORDER BY at, rowid")?;
+        let ends = statement.query_map([chat.0], |row| {
+            Ok(TurnEnd {
+                at: row.get(0)?,
+                how: Ended::from_word(&row.get::<_, String>(1)?),
+            })
+        })?;
+        Ok(ends.collect::<Result<_, _>>()?)
+    }
+
     /// The plan each chat's agent sent last, for the chats whose agent
     /// sent one.
     ///
@@ -1356,6 +1467,43 @@ impl Store {
             .prepare_cached("SELECT id, created FROM chats ORDER BY id")?;
         let rows = statement.query_map([], |row| Ok((ChatId(row.get(0)?), row.get(1)?)))?;
         Ok(rows.collect::<Result<_, _>>()?)
+    }
+
+    /// What `chat`'s story is told by, each entry with when it was first
+    /// written, in milliseconds since the epoch, in order: the first line
+    /// the human sent, and the plans, the questions and the commits of
+    /// its agent.
+    ///
+    /// # Errors
+    ///
+    /// When the database cannot be read.
+    pub fn milestones(&self, chat: ChatId) -> anyhow::Result<Vec<(i64, Entry)>> {
+        let mut first = self.connection.prepare_cached(
+            r#"SELECT number, at, entry FROM entries
+             WHERE chat = ?1 AND entry LIKE '{"human":%' ORDER BY number LIMIT 1"#,
+        )?;
+        let mut rest = self.connection.prepare_cached(
+            r#"SELECT number, at, entry FROM entries WHERE chat = ?1
+             AND (entry LIKE '{"plan":%' OR entry LIKE '{"question":%' OR entry LIKE '{"commits":%')
+             ORDER BY number"#,
+        )?;
+        let row = |row: &rusqlite::Row<'_>| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        };
+        let mut read: Vec<(i64, i64, String)> = first
+            .query_map([chat.0], row)?
+            .chain(rest.query_map([chat.0], row)?)
+            .collect::<Result<_, _>>()?;
+        read.sort_by_key(|(number, _, _)| *number);
+        Ok(read
+            .into_iter()
+            // An entry this Cox cannot read tells nothing.
+            .filter_map(|(_, at, entry)| Some((at, serde_json::from_str(&entry).ok()?)))
+            .collect())
     }
 
     /// How many lines the human wrote on each step of the plans of
@@ -1629,6 +1777,16 @@ impl Record {
     /// as JSON.
     pub fn spent<T: serde::Serialize>(&self, spent: &T) -> anyhow::Result<()> {
         self.store.keep_spent(self.chat, spent)
+    }
+
+    /// Keeps that a turn of the chat's agent ended, as
+    /// [`Store::keep_turn_end`] does.
+    ///
+    /// # Errors
+    ///
+    /// When the database cannot be written.
+    pub fn turn_ended(&self, end: TurnEnd) -> anyhow::Result<()> {
+        self.store.keep_turn_end(self.chat, end)
     }
 
     /// What the human set each setting of `agent`'s sessions to last, of
@@ -1959,6 +2117,40 @@ mod tests {
     }
 
     #[test]
+    fn keeps_how_and_when_each_turn_ended_until_its_project_goes() {
+        let store = Store::in_memory().unwrap();
+        let app = store.project(Path::new("/src/app"), "app").unwrap();
+        let chat = store.add_chat(Some(app), "Chat 1").unwrap();
+        let other = store.add_chat(None, "Chat 2").unwrap();
+        let stopped = TurnEnd {
+            at: 20,
+            how: Ended::Stopped,
+        };
+        let done = TurnEnd {
+            at: 10,
+            how: Ended::Done,
+        };
+        store.keep_turn_end(chat, stopped).unwrap();
+        store.keep_turn_end(chat, done).unwrap();
+        store
+            .keep_turn_end(
+                other,
+                TurnEnd {
+                    at: 15,
+                    how: Ended::Failed,
+                },
+            )
+            .unwrap();
+
+        assert_eq!(store.turns(chat).unwrap(), [done, stopped]);
+        assert_eq!(Ended::from_word("what a newer Cox says"), Ended::Other);
+
+        store.delete_project(app).unwrap();
+        assert_eq!(store.turns(chat).unwrap(), []);
+        assert_eq!(store.turns(other).unwrap().len(), 1);
+    }
+
+    #[test]
     fn a_project_deleted_forgets_the_chat_shown_of_it() {
         let store = Store::in_memory().unwrap();
         let app = store.project(Path::new("/src/app"), "app").unwrap();
@@ -2055,12 +2247,14 @@ mod tests {
                     text: "Read the code".to_owned(),
                     state: StepState::Completed,
                     since: None,
+                    started: None,
                     id: None,
                 },
                 Step {
                     text: "Fix it".to_owned(),
                     state: StepState::InProgress,
                     since: None,
+                    started: None,
                     id: None,
                 },
             ]),
@@ -2276,6 +2470,7 @@ mod tests {
             text: text.to_owned(),
             state,
             since: None,
+            started: None,
             id: None,
         };
         let first = vec![step("Read", StepState::Completed)];
@@ -2326,6 +2521,7 @@ mod tests {
             text: text.to_owned(),
             state,
             since,
+            started: None,
             id: None,
         };
         let known = |text: &str, state, since, id| Step {
@@ -2416,6 +2612,43 @@ mod tests {
             )
             .unwrap();
         assert!(plan.contains("plans"), "read by the index: {plan}");
+    }
+
+    #[test]
+    fn reads_what_tells_a_chats_story_with_when_each_was_written() {
+        let store = Store::in_memory().unwrap();
+        let chat = store.add_chat(None, "Chat 1").unwrap();
+        let other = store.add_chat(None, "Chat 2").unwrap();
+        let plan = Entry::Plan(Vec::new());
+        let commits = Entry::Commits(Vec::new());
+        let entries = [
+            Entry::Note("instructions".to_owned()),
+            Entry::Human("split the parser".to_owned()),
+            plan.clone(),
+            Entry::Reply("reading".to_owned()),
+            Entry::Human("and the lexer".to_owned()),
+            commits.clone(),
+        ];
+        for (number, entry) in entries.iter().enumerate() {
+            store.keep_entry(chat, number, entry).unwrap();
+        }
+        store
+            .keep_entry(other, 0, &Entry::Human("elsewhere".to_owned()))
+            .unwrap();
+
+        let told: Vec<Entry> = store
+            .milestones(chat)
+            .unwrap()
+            .into_iter()
+            .map(|(at, entry)| {
+                assert!(at > 0, "each with when");
+                entry
+            })
+            .collect();
+        assert_eq!(
+            told,
+            [Entry::Human("split the parser".to_owned()), plan, commits]
+        );
     }
 
     #[test]
