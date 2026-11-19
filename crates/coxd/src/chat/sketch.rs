@@ -127,6 +127,57 @@ pub fn make(sketch: Sketch, project: &Path, sketches: &Path) -> Result<PathBuf, 
     Ok(folder)
 }
 
+/// The folder a sketch of the project starts from, for a chat that works
+/// in `from`: the directory `directory` of the project there, when one is
+/// named; or else `from`, when it is in a repository; or else the
+/// project's one repository among its directories.
+///
+/// # Errors
+///
+/// When the project has no such directory, or none that is a repository,
+/// or several, of which none was named.
+pub fn source(from: &Path, directory: Option<&str>) -> Result<PathBuf, String> {
+    let repositories = crate::worktrees::repositories(from);
+    let names = || {
+        repositories
+            .iter()
+            .map(|(name, _)| name.as_str())
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    if let Some(directory) = directory.map(str::trim).filter(|name| !name.is_empty()) {
+        return repositories
+            .iter()
+            .find(|(name, _)| name == directory)
+            .map(|(_, folder)| folder.clone())
+            .ok_or_else(|| {
+                format!(
+                    "the project has no repository {directory} in its directories{}",
+                    if repositories.is_empty() {
+                        String::new()
+                    } else {
+                        format!("; it has {}", names())
+                    }
+                )
+            });
+    }
+    if git(from, &["rev-parse", "--show-toplevel"]).is_ok() {
+        return Ok(from.to_owned());
+    }
+    match &repositories[..] {
+        [(_, folder)] => Ok(folder.clone()),
+        [] => Err(
+            "a sketch of the project needs a Git repository, and the project has none in its \
+             directories"
+                .to_owned(),
+        ),
+        _ => Err(format!(
+            "the project has several repositories, {}: name the one to sketch as `directory`",
+            names()
+        )),
+    }
+}
+
 /// Makes a worktree of the Git repository `project` is in, from its last
 /// commit, in `sketches`, and answers where the project is in it.
 fn worktree(project: &Path, sketches: &Path) -> Result<PathBuf, String> {
@@ -698,6 +749,40 @@ mod tests {
     use crate::agent::setup::{Asked, Decision};
     use crate::testing::TempDir;
     use crate::testing::run_git as git;
+
+    #[test]
+    fn a_sketch_of_a_project_is_of_its_one_repository_or_the_one_named() {
+        let project = TempDir::new();
+        let directories = project.join(crate::settings::DIRECTORIES);
+        for name in ["app", "lib"] {
+            let folder = directories.join(name);
+            std::fs::create_dir_all(&folder).unwrap();
+            git(&folder, &["init", "--quiet"]).unwrap();
+        }
+        std::fs::create_dir_all(directories.join("notes")).unwrap();
+
+        assert_eq!(
+            source(&project, None),
+            Err(
+                "the project has several repositories, app, lib: name the one to sketch as \
+                 `directory`"
+                    .to_owned()
+            )
+        );
+        assert_eq!(source(&project, Some("lib")), Ok(directories.join("lib")));
+        assert_eq!(
+            source(&project, Some("notes")),
+            Err(
+                "the project has no repository notes in its directories; it has app, lib"
+                    .to_owned()
+            )
+        );
+        std::fs::remove_dir_all(directories.join("lib")).unwrap();
+        assert_eq!(source(&project, None), Ok(directories.join("app")));
+        // A chat that works in a repository sketches it.
+        let app = directories.join("app");
+        assert_eq!(source(&app, None), Ok(app.clone()));
+    }
 
     #[test]
     fn a_sketch_works_in_a_worktree_of_the_last_commit() {

@@ -4001,6 +4001,7 @@ async fn opened_by_an_agent<'a>(
             model: None,
             goal: None,
             sketch: None,
+            within: Box::default(),
             answer,
         })
         .unwrap();
@@ -4135,6 +4136,7 @@ async fn opened_on(
             model: None,
             goal: None,
             sketch: None,
+            within: Box::default(),
             answer,
         })
         .unwrap();
@@ -4267,6 +4269,7 @@ async fn a_chat_opened_by_a_chat_is_allowed_no_more_than_it(cx: &mut TestAppCont
             model: None,
             goal: None,
             sketch: None,
+            within: Box::default(),
             answer,
         })
         .unwrap();
@@ -4349,6 +4352,7 @@ async fn open_sketch(
             model: None,
             goal: None,
             sketch: Some(sketch),
+            within: Box::default(),
             answer,
         })
         .unwrap();
@@ -4431,6 +4435,7 @@ async fn a_chat_opens_a_sketch_beside_it(cx: &mut TestAppContext) {
         asks.borrow()[from]
             .send(ChatRequest::StartSketch {
                 sketch: Sketch::Project,
+                directory: None,
                 what: "A warmer greeting.".to_owned(),
                 show: false,
                 answer,
@@ -4578,6 +4583,7 @@ async fn an_ended_sketch_goes_on_in_the_project(cx: &mut TestAppContext) {
             model: None,
             goal: None,
             sketch: None,
+            within: Box::default(),
             answer,
         })
         .unwrap();
@@ -5083,6 +5089,7 @@ async fn open_child(
             model: None,
             goal: None,
             sketch: None,
+            within: Box::default(),
             answer,
         })
         .unwrap();
@@ -5193,6 +5200,7 @@ async fn a_subagent_goes_by_its_title_and_runs_with_the_model_asked_as_offered(
                 model: Some(model.to_owned()),
                 goal: None,
                 sketch: None,
+                within: Box::default(),
                 answer,
             })
             .unwrap();
@@ -5271,6 +5279,7 @@ async fn a_subagent_run_in_the_background_reports_to_its_opener_unasked(cx: &mut
             model: None,
             goal: None,
             sketch: None,
+            within: Box::default(),
             answer,
         })
         .unwrap();

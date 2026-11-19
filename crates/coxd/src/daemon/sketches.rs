@@ -23,11 +23,13 @@ impl Daemon {
     /// by, or why it cannot open. The sketch's agent is set up as the
     /// chat's is, and told what the chat talked through so far, and what
     /// it tries; the chat goes on in the project, apart from it, and hears
-    /// how it ends (see [`Self::finish_sketch`]).
+    /// how it ends (see [`Self::finish_sketch`]). A sketch of the project
+    /// is of its directory `directory`, when one is named.
     pub(super) fn start_sketch(
         &mut self,
         key: u64,
         started: Sketch,
+        directory: Option<&str>,
         what: &str,
     ) -> Result<OpenedChat, String> {
         let slot = self
@@ -49,7 +51,7 @@ impl Daemon {
         let talked = self
             .chat(key)
             .map_or_default(|chat| agent::talked_through(chat.conversation().entries()));
-        let folder = make_sketch(started, &from)?;
+        let folder = make_sketch(started, &from, directory)?;
         let context = [setup.context.clone(), talked]
             .into_iter()
             .flatten()
