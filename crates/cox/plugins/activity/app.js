@@ -268,13 +268,25 @@ function revised(event) {
 /// Whether `event` tells of something that failed: CI, or a turn.
 const failed = (event) => (event.kind === "ci" || event.kind === "turn_end") && event.text === "failed";
 
-/// How `chat` ended, as its story tells, or that it goes on, as a line.
-function ending(chat, story) {
+/// A line of the day `time` is of, before the first line of the story
+/// that is of another day than the line before it, as `days` follows it,
+/// of the class `as` besides: the column of times has room for the time
+/// of day alone.
+function dayOf(time, days, as = "") {
+  const day = time?.day ?? null;
+  if (day === days.last) return "";
+  days.last = day;
+  return `<div class="day${as ? ` ${as}` : ""}">${esc(day ?? "Today")}</div>`;
+}
+
+/// How `chat` ended, as its story tells, or that it goes on, as a line,
+/// under the line of its day once it is another than `days` follows.
+function ending(chat, story, days) {
   const ended = story.ended;
   const since = story.started.at;
   const at = (when) => `<span class="at">${esc(when)}</span>`;
   const line = (as, mark, how, more, when) =>
-    `<div class="end ${as}">${at(when)}<span class="mark">${mark}</span><span class="how">${how} <span>· ${esc(more)}</span></span></div>`;
+    `${dayOf(ended, days, "ending")}<div class="end ${as}">${at(when)}<span class="mark">${mark}</span><span class="how">${how} <span>· ${esc(more)}</span></span></div>`;
   const clock = new Date().toTimeString().slice(0, 5);
   if (!ended) {
     const what = chat.stands.as === "ci" ? "Waits on CI" : "At work";
@@ -284,17 +296,17 @@ function ending(chat, story) {
   const took = `took ${long(since, ended.at)}`;
   switch (ended.how) {
     case "resolved":
-      return line("done", "✓", "Done", `marked done by ${ended.by === "human" ? "you" : "Cox"} · ${took}`, ended.when);
+      return line("done", "✓", "Done", `marked done by ${ended.by === "human" ? "you" : "Cox"} · ${took}`, ended.clock ?? ended.when);
     case "asks":
-      return line("yours", "?", "Waits for your answer", `since ${long(ended.at, Date.now())}`, ended.when);
+      return line("yours", "?", "Waits for your answer", `since ${long(ended.at, Date.now())}`, ended.clock ?? ended.when);
     case "done":
-      if (chat.finished) return line("done", "✓", "Done", took, ended.when);
-      if (chat.stands.as === "yours") return line("yours", "●", "Finished a turn", ago, ended.when);
-      return line("stopped", "■", chat.progress.of ? `Stopped at ${counted(chat.progress)}` : "Stopped", `after ${long(since, ended.at)} · ${ago}`, ended.when);
+      if (chat.finished) return line("done", "✓", "Done", took, ended.clock ?? ended.when);
+      if (chat.stands.as === "yours") return line("yours", "●", "Finished a turn", ago, ended.clock ?? ended.when);
+      return line("stopped", "■", chat.progress.of ? `Stopped at ${counted(chat.progress)}` : "Stopped", `after ${long(since, ended.at)} · ${ago}`, ended.clock ?? ended.when);
     case "stopped":
-      return line("stopped", "■", "Stopped", `after ${long(since, ended.at)} · ${ago}`, ended.when);
+      return line("stopped", "■", "Stopped", `after ${long(since, ended.at)} · ${ago}`, ended.clock ?? ended.when);
     default:
-      return line("failed", "×", esc(TURN_ENDS[ended.how] ?? "Ended"), ago, ended.when);
+      return line("failed", "×", esc(TURN_ENDS[ended.how] ?? "Ended"), ago, ended.clock ?? ended.when);
   }
 }
 
@@ -311,6 +323,8 @@ function opening(chat) {
     ? `<button class="dismiss" data-dismiss="${esc(JSON.stringify([chat.dismiss]))}" title="hides this plan until the agent sends another">dismiss</button>`
     : "";
   const story = chat.chat == null ? undefined : stories.get(chat.chat);
+  // The day of the line before, as the story goes, from today's.
+  const days = { last: null };
   const toldStory =
     story === undefined
       ? `<div class="none">Reading what it did…</div>`
@@ -319,14 +333,15 @@ function opening(chat) {
         : story.events
             .map(
               (event) =>
-                `<div class="event ${esc(event.kind)}${failed(event) ? " failed" : ""}${event.dropped ? " dropped" : ""}"><span class="at">${esc(event.when)}</span>` +
+                dayOf(event, days) +
+                `<div class="event ${esc(event.kind)}${failed(event) ? " failed" : ""}${event.dropped ? " dropped" : ""}"><span class="at">${esc(event.clock ?? event.when)}</span>` +
                 `<span class="mark">${MARKS[event.kind] ?? "·"}</span><span class="text">${says(event, chat)}</span></div>`,
             )
             .join("") +
           (chat.running
             ? `<div class="event running"><span class="at"></span><span class="mark">◌</span><span class="text" title="${esc(chat.running.line)}">Running: ${esc(chat.running.called)}</span></div>`
             : "") +
-          ending(chat, story);
+          ending(chat, story, days);
   const background = (chat.background ?? [])
     .map((what) => `<div class="background">${what.command ? "&gt;_ " : ""}${esc(what.what)} <span class="on">in the background</span></div>`)
     .join("");
