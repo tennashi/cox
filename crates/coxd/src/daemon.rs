@@ -4311,13 +4311,20 @@ mod tests {
             assert!(made.exists());
 
             daemon.resolve(number, ResolvedBy::Human);
-            for _ in 0..200 {
-                if !made.exists() && !daemon.tidying_now() {
-                    break;
+            // Cox looks on a thread of its own, and says what it took away.
+            let tidied = tokio::time::timeout(crate::testing::waits::GIVEN_UP, async {
+                loop {
+                    match heard.recv().await {
+                        Some(event @ Internal::Tidied { .. }) => break event,
+                        Some(event) => daemon.hear(event),
+                        None => panic!("the daemon's events ended"),
+                    }
                 }
-                tokio::time::sleep(Duration::from_millis(20)).await;
-                pump(&mut daemon, &mut heard).await;
-            }
+            })
+            .await
+            .expect("Cox looked which worktrees it may take away");
+            daemon.hear(tidied);
+            assert!(!daemon.tidying_now());
 
             assert!(!made.exists(), "the worktree is taken away");
             let notes: Vec<String> = daemon
