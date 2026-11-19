@@ -1,6 +1,9 @@
 {
+ "closedAt": "2026-11-16T14:19:00Z",
+ "createdAt": "2026-11-16T13:42:54Z",
  "headRefOid": "cbe63e7a5f0b32e667f6f4143c8ea6d541ea1657",
  "isDraft": false,
+ "mergedAt": "2026-11-16T14:19:00Z",
  "state": "MERGED",
  "statusCheckRollup": [
   {

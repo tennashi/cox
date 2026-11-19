@@ -1494,6 +1494,7 @@ mod tests {
             text: text.to_owned(),
             state,
             since: None,
+            started: None,
             id: None,
         }
     }
@@ -2463,6 +2464,7 @@ mod tests {
             text: text.to_owned(),
             state: StepState::Pending,
             since: None,
+            started: None,
             id: None,
         };
         let plan = [
@@ -2636,7 +2638,9 @@ mod tests {
                     name: "ci".to_owned(),
                     state: checks,
                     link: None,
+                    ended: None,
                 }],
+                times: coxd::github::Times::default(),
             }),
             unseen,
         }
