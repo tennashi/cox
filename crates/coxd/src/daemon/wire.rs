@@ -41,6 +41,10 @@ pub struct ProjectRow {
     /// the human set it.
     #[serde(default)]
     pub about: Option<String>,
+    /// The chat of it the window showed last, by its key, as kept past
+    /// a restart, once it showed one that is still there.
+    #[serde(default)]
+    pub last: Option<u64>,
 }
 
 /// A chat, as the window lists it in its tabs.
@@ -104,6 +108,11 @@ pub struct ChatRow {
     /// turn to end, the first first.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub on_steps: Vec<OnStepLine>,
+    /// When it last moved, in milliseconds since the epoch: when a turn
+    /// last started or ended, or, before any did in this run, when the
+    /// last entry of its conversation was kept, or it was opened.
+    #[serde(default)]
+    pub active: i64,
 }
 
 /// A line the human wrote on a step of a chat's plan, which waits for the
@@ -256,6 +265,10 @@ pub struct Listing {
     /// in, if that is so.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub github: Option<String>,
+    /// The project the human chose last, by its place in the projects,
+    /// as kept past a restart, for a window that starts to choose.
+    #[serde(default)]
+    pub chosen: usize,
 }
 
 /// What an agent's tools ask of its chat's stage, as Cox's
@@ -545,8 +558,9 @@ pub enum ToDaemon {
     /// Cox's own, as from the phone: the window lists it, but goes on
     /// showing what it shows.
     NewChat { folder: Option<PathBuf> },
-    /// The window shows the chat `key`, or none.
-    Shown { key: Option<u64> },
+    /// The window shows the chat `key`, or none, of the project chosen,
+    /// by its place in the projects.
+    Shown { key: Option<u64>, project: usize },
     /// The window shows the conversation of the chat `key` from now on:
     /// tell it how it changes.
     Watch { key: u64 },
@@ -787,6 +801,7 @@ mod tests {
             resolved: None,
             steers: false,
             on_steps: Vec::new(),
+            active: 0,
         };
         let line = serde_json::to_string(&row).unwrap();
         assert!(!line.contains("background"), "{line}");

@@ -1052,6 +1052,100 @@ fn a_closed_chat_is_there_to_read(cx: &mut TestAppContext) {
     assert_eq!(opened(cx, &workspace), [vec![false, true]]);
 }
 
+/// The name of the chat `workspace` shows, if it shows one.
+fn shown_name(cx: &mut VisualTestContext, workspace: &Entity<Workspace>) -> Option<String> {
+    workspace.read_with(cx, |workspace, _| {
+        workspace.shown().map(|chat| chat.name().to_owned())
+    })
+}
+
+/// Shows the chat of `workspace` named `name`, as the human clicks it in
+/// the list of its project.
+fn show_named(cx: &mut VisualTestContext, workspace: &Entity<Workspace>, name: &str) {
+    workspace.update_in(cx, |workspace, window, cx| {
+        let key = (0..workspace.projects().len())
+            .flat_map(|project| workspace.chats(project))
+            .find(|chat| chat.name() == name)
+            .map(Chat::key)
+            .expect("the chat is listed");
+        workspace.reveal(key, window, cx);
+    });
+}
+
+/// Opens three chats of Cox's own, saying "first", "second" and "third"
+/// in them, in that order.
+async fn three_chats_said(cx: &mut VisualTestContext, workspace: &Entity<Workspace>) {
+    for said in ["first", "second", "third"] {
+        cx.simulate_keystrokes("secondary-n");
+        say(cx, workspace, said).await;
+    }
+}
+
+#[gpui::test]
+async fn cox_started_again_shows_the_chat_shown_last_not_the_oldest(cx: &mut TestAppContext) {
+    let home = scratch::folder("shown-again-home");
+    let store = kept_store("shown-again");
+    let (agents, workspace, cx) = open_window_keeping(cx, home.clone(), store.clone());
+    three_chats_said(cx, &workspace).await;
+    click(cx, "chat-2");
+    assert_eq!(shown_name(cx, &workspace).as_deref(), Some("second"));
+
+    let again = start_again(cx, home, &store, &agents);
+    settled(cx, &again);
+
+    assert_eq!(shown_name(cx, &again).as_deref(), Some("second"));
+}
+
+#[gpui::test]
+async fn cox_started_again_with_a_chat_marked_done_shown_shows_the_one_not_done_that_moved_last(
+    cx: &mut TestAppContext,
+) {
+    let home = scratch::folder("shown-done-home");
+    let store = kept_store("shown-done");
+    let (agents, workspace, cx) = open_window_keeping(cx, home.clone(), store.clone());
+    three_chats_said(cx, &workspace).await;
+    // The oldest is shown last, and marked done.
+    click(cx, "chat-1");
+    workspace.update(cx, |workspace, cx| workspace.resolve(0, true, cx));
+    settled(cx, &workspace);
+    assert_eq!(shown_name(cx, &workspace).as_deref(), Some("first"));
+
+    let again = start_again(cx, home, &store, &agents);
+    settled(cx, &again);
+
+    assert_eq!(shown_name(cx, &again).as_deref(), Some("third"));
+}
+
+#[gpui::test]
+async fn cox_started_again_goes_back_to_the_project_chosen_last_and_each_project_to_its_chat(
+    cx: &mut TestAppContext,
+) {
+    let home = scratch::folder("chosen-again-home");
+    let folder = scratch::folder("chosen-again-folder");
+    std::fs::create_dir_all(&folder).unwrap();
+    let store = kept_store("chosen-again");
+    let (agents, workspace, cx) = open_window_keeping(cx, home.clone(), store.clone());
+    for said in ["older", "newer"] {
+        workspace.update_in(cx, |workspace, window, cx| {
+            workspace.open(Some(folder.clone()), window, cx);
+        });
+        say(cx, &workspace, said).await;
+    }
+    three_chats_said(cx, &workspace).await;
+    // The older chat of the project is the one shown last of it, then a
+    // chat of Cox's own is.
+    show_named(cx, &workspace, "older");
+    assert_eq!(shown_name(cx, &workspace).as_deref(), Some("older"));
+    show_named(cx, &workspace, "first");
+    assert_eq!(shown_name(cx, &workspace).as_deref(), Some("first"));
+
+    let again = start_again(cx, home, &store, &agents);
+    settled(cx, &again);
+    assert_eq!(shown_name(cx, &again).as_deref(), Some("first"));
+    again.update_in(cx, |workspace, window, cx| workspace.choose(1, window, cx));
+    assert_eq!(shown_name(cx, &again).as_deref(), Some("older"));
+}
+
 #[gpui::test]
 async fn chats_are_there_to_read_once_cox_starts_again(cx: &mut TestAppContext) {
     let home = scratch::folder("again-home");

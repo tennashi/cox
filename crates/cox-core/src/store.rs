@@ -22,7 +22,7 @@ use crate::settings::Setting;
 use crate::tabs::KeptTabs;
 
 /// The version of the tables below, as `SQLite`'s `user_version` holds it.
-const VERSION: i64 = 21;
+const VERSION: i64 = 22;
 
 const TABLES: &str = "
 CREATE TABLE projects (
@@ -119,6 +119,17 @@ CREATE TABLE stages (
     -- Its tabs, as JSON, each with the chat it is of.
     tabs TEXT NOT NULL
 );
+-- The chat the window showed last of each project, and when the human
+-- chose the project last, for a window that starts to go back to.
+CREATE TABLE shown (
+    -- The project, by its id, or 0 for Cox's own.
+    project INTEGER PRIMARY KEY,
+    -- The chat of it shown last, by its id, once one was.
+    chat INTEGER,
+    -- When the human chose the project last, in milliseconds since the
+    -- epoch.
+    at INTEGER NOT NULL
+);
 ";
 
 /// What makes the tables of each earlier version into those of the next:
@@ -166,6 +177,7 @@ const UPGRADES: &[&str] = &[
     "ALTER TABLE chats ADD COLUMN resolved_at INTEGER;
      ALTER TABLE chats ADD COLUMN resolved_by TEXT;",
     "CREATE INDEX on_steps ON entries (chat, number) WHERE entry LIKE '{\"on_step\":%';",
+    "CREATE TABLE shown (project INTEGER PRIMARY KEY, chat INTEGER, at INTEGER NOT NULL);",
 ];
 
 /// How long a write waits for another Cox writing the same database.
@@ -240,6 +252,23 @@ pub struct KeptChat {
     pub spent: Option<String>,
     /// When it was marked done, and by whom, while it is.
     pub resolved: Option<Resolved>,
+    /// When it last moved, in milliseconds since the epoch: when the last
+    /// entry of its conversation was written, or, with none, when it was
+    /// opened.
+    pub active: i64,
+}
+
+/// The chat the window showed last of a project, and when the human chose
+/// the project last.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct KeptShown {
+    /// The project, or `None` for Cox's own.
+    pub project: Option<ProjectId>,
+    /// The chat of it shown last, once one was.
+    pub chat: Option<ChatId>,
+    /// When the human chose the project last, in milliseconds since the
+    /// epoch.
+    pub at: i64,
 }
 
 /// A chat marked done: it stays in the list, folded away at its end, its
@@ -503,7 +532,9 @@ impl Store {
     pub fn chats(&self) -> anyhow::Result<Vec<KeptChat>> {
         let mut statement = self.connection.prepare(
             "SELECT id, project, name, named, archived, goal_command, parent, setup, goal_words,
-             folder, spent, resolved_at, resolved_by
+             folder, spent, resolved_at, resolved_by,
+             COALESCE((SELECT at FROM entries WHERE entries.chat = chats.id
+                       ORDER BY number DESC LIMIT 1), created)
              FROM chats ORDER BY id",
         )?;
         let chats = statement.query_map([], |row| {
@@ -527,9 +558,59 @@ impl Store {
                         by: ResolvedBy::from_word(by.as_deref().unwrap_or("")),
                     })
                 },
+                active: row.get(13)?,
             })
         })?;
         Ok(chats.collect::<Result<_, _>>()?)
+    }
+
+    /// The chat the window showed last of each project, and when the human
+    /// chose each last, the project chosen last last.
+    ///
+    /// # Errors
+    ///
+    /// When the database cannot be read.
+    pub fn shown(&self) -> anyhow::Result<Vec<KeptShown>> {
+        let mut statement = self
+            .connection
+            .prepare("SELECT project, chat, at FROM shown ORDER BY at, project")?;
+        let rows = statement.query_map([], |row| {
+            let project: i64 = row.get(0)?;
+            Ok(KeptShown {
+                project: (project != 0).then_some(ProjectId(project)),
+                chat: row.get::<_, Option<i64>>(1)?.map(ChatId),
+                at: row.get(2)?,
+            })
+        })?;
+        Ok(rows.collect::<Result<_, _>>()?)
+    }
+
+    /// Keeps that the human chose `project`, or Cox's own, now, showing
+    /// `chat` of it, or, with none, keeping the chat of it shown before.
+    ///
+    /// # Errors
+    ///
+    /// When the database cannot be written.
+    pub fn keep_shown(
+        &self,
+        project: Option<ProjectId>,
+        chat: Option<ChatId>,
+    ) -> anyhow::Result<()> {
+        self.connection
+            .prepare_cached(
+                // Later than any chosen before, though the clock says the
+                // same millisecond, or went back.
+                "INSERT INTO shown (project, chat, at)
+                 VALUES (?1, ?2, MAX(?3, COALESCE((SELECT MAX(at) + 1 FROM shown), 0)))
+                 ON CONFLICT (project) DO UPDATE
+                 SET chat = COALESCE(excluded.chat, chat), at = excluded.at",
+            )?
+            .execute(params![
+                project.map_or(0, |project| project.0),
+                chat.map(|chat| chat.0),
+                now()
+            ])?;
+        Ok(())
     }
 
     /// The project of `folder`, kept as `name` first if it is not kept.
@@ -833,6 +914,7 @@ impl Store {
             "DELETE FROM stages WHERE folder = (SELECT folder FROM projects WHERE id = ?1)",
             [project.0],
         )?;
+        transaction.execute("DELETE FROM shown WHERE project = ?1", [project.0])?;
         transaction.execute("DELETE FROM projects WHERE id = ?1", [project.0])?;
         transaction.commit()?;
         Ok(())
@@ -1589,8 +1671,10 @@ impl Record {
     }
 }
 
-/// The time now, in milliseconds since the epoch.
-fn now() -> i64 {
+/// The time now, in milliseconds since the epoch, as the store keeps
+/// times.
+#[must_use]
+pub fn now() -> i64 {
     SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
         .ok()
@@ -1843,6 +1927,80 @@ mod tests {
             .resolve_chat(other, None)
             .unwrap();
         assert_eq!(resolved(&path), [Some(by_human), None]);
+    }
+
+    #[test]
+    fn keeps_the_chat_shown_last_of_each_project_and_the_project_chosen_last() {
+        let folder = scratch();
+        let path = folder.path().join("chats.sqlite");
+        let (cox, second, own) = {
+            let store = Store::open(&path).unwrap();
+            let cox = store.project(Path::new("/src/cox"), "cox").unwrap();
+            let first = store.add_chat(Some(cox), "Chat 1").unwrap();
+            let second = store.add_chat(Some(cox), "Chat 2").unwrap();
+            let own = store.add_chat(None, "Chat 1").unwrap();
+            assert_eq!(store.shown().unwrap(), []);
+            store.keep_shown(Some(cox), Some(first)).unwrap();
+            store.keep_shown(Some(cox), Some(second)).unwrap();
+            store.keep_shown(None, Some(own)).unwrap();
+            // Choosing the project again with no chat shown keeps the
+            // chat of it shown before.
+            store.keep_shown(Some(cox), None).unwrap();
+            (cox, second, own)
+        };
+        let shown: Vec<_> = Store::open(&path)
+            .unwrap()
+            .shown()
+            .unwrap()
+            .into_iter()
+            .map(|shown| (shown.project, shown.chat))
+            .collect();
+        assert_eq!(shown, [(None, Some(own)), (Some(cox), Some(second))]);
+    }
+
+    #[test]
+    fn a_project_deleted_forgets_the_chat_shown_of_it() {
+        let store = Store::in_memory().unwrap();
+        let app = store.project(Path::new("/src/app"), "app").unwrap();
+        let chat = store.add_chat(Some(app), "Chat 1").unwrap();
+        store.keep_shown(Some(app), Some(chat)).unwrap();
+        store.keep_shown(None, None).unwrap();
+
+        store.delete_project(app).unwrap();
+
+        let shown: Vec<_> = store
+            .shown()
+            .unwrap()
+            .into_iter()
+            .map(|shown| (shown.project, shown.chat))
+            .collect();
+        assert_eq!(shown, [(None, None)]);
+    }
+
+    #[test]
+    fn a_chat_last_moved_when_its_last_entry_was_written_or_else_when_opened() {
+        let store = Store::in_memory().unwrap();
+        let quiet = store.add_chat(None, "Chat 1").unwrap();
+        let said = store.add_chat(None, "Chat 2").unwrap();
+        store
+            .keep_entry(said, 0, &Entry::Human("first".to_owned()))
+            .unwrap();
+        store
+            .connection
+            .execute("UPDATE entries SET at = 5000 WHERE chat = ?1", [said.0])
+            .unwrap();
+        store
+            .connection
+            .execute("UPDATE chats SET created = 1000", [])
+            .unwrap();
+
+        let active: Vec<_> = store
+            .chats()
+            .unwrap()
+            .into_iter()
+            .map(|chat| (chat.id, chat.active))
+            .collect();
+        assert_eq!(active, [(quiet, 1000), (said, 5000)]);
     }
 
     #[test]

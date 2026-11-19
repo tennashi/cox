@@ -1752,7 +1752,7 @@ mod tests {
                 let told = events.await.unwrap();
                 assert!(told.contains("text/event-stream"), "{told}");
                 assert!(
-                    told.contains(r#"data: {"Listing":{"projects":[],"chats":[],"archived":[],"agents":{}}}"#),
+                    told.contains(r#"data: {"Listing":{"projects":[],"chats":[],"archived":[],"agents":{},"chosen":0}}"#),
                     "{told}"
                 );
                 assert!(
