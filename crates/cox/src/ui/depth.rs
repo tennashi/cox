@@ -37,36 +37,45 @@ pub fn focus() -> BoxShadow {
     }
 }
 
-/// `part` standing up from its ground by `depth`: with its edge, as a
-/// border, and its shadows. A part seen through casts them under itself
-/// too, so one that is gets its edge alone, from [`edge`].
-pub fn stand<E: Styled>(part: E, depth: Depth) -> E {
-    edge(part, depth).shadow(shadows(depth))
-}
+/// What every part the window draws can do to stand up from what it
+/// sits on, or to sink into it.
+pub trait Stand: Styled + Sized {
+    /// Stands up by `depth`: with its edge, as a border, and its
+    /// shadows. A part seen through casts them under itself too, so one
+    /// that is takes its edge alone, from [`Stand::edged`].
+    #[must_use]
+    fn stand(self, depth: Depth) -> Self {
+        self.edged(depth).shadow(shadows(depth))
+    }
 
-/// `part` with the edge of `depth` alone, as a border.
-pub fn edge<E: Styled>(part: E, depth: Depth) -> E {
-    part.border_1().border_color(rgba(depth.edge))
-}
+    /// Takes the edge of `depth` alone, as a border.
+    #[must_use]
+    fn edged(self, depth: Depth) -> Self {
+        self.border_1().border_color(rgba(depth.edge))
+    }
 
-/// `part` sunk into its ground, as what the human types into is: darker
-/// than it, shaded from the top, with its edge, and the ring of
-/// [`focus`] around it while it has the keyboard.
-pub fn sink<E: Styled>(part: E, focused: bool) -> E {
-    let part = part
-        .bg(linear_gradient(
-            180.,
-            linear_color_stop(rgb(INSET.top), 0.),
-            linear_color_stop(rgb(INSET.ground), INSET.shade),
-        ))
-        .border_1()
-        .border_color(rgba(INSET.edge));
-    if focused {
-        part.shadow(vec![focus()])
-    } else {
-        part
+    /// Sinks into its ground, as what the human types into does: darker
+    /// than it, shaded from the top, with its edge, and the ring of
+    /// [`focus`] around it while it has the keyboard.
+    #[must_use]
+    fn sink(self, focused: bool) -> Self {
+        let part = self
+            .bg(linear_gradient(
+                180.,
+                linear_color_stop(rgb(INSET.top), 0.),
+                linear_color_stop(rgb(INSET.ground), INSET.shade),
+            ))
+            .border_1()
+            .border_color(rgba(INSET.edge));
+        if focused {
+            part.shadow(vec![focus()])
+        } else {
+            part
+        }
     }
 }
+
+impl<E: Styled> Stand for E {}
 
 #[cfg(test)]
 mod tests {

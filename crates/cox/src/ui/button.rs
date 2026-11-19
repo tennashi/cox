@@ -12,7 +12,7 @@ use coxd::theme::{
     PRIMARY_GLOW,
 };
 
-use crate::ui::depth;
+use crate::ui::depth::{self, Stand as _};
 
 /// How tall a button is.
 pub const HEIGHT: f32 = 28.;
@@ -54,7 +54,8 @@ pub fn button(id: impl Into<ElementId>, label: impl IntoElement, kind: Kind) -> 
         .cursor_pointer()
         .child(label);
     match kind {
-        Kind::Plain => depth::stand(button, CONTROL)
+        Kind::Plain => button
+            .stand(CONTROL)
             .bg(rgb(BUTTON))
             .text_color(rgb(FOREGROUND))
             .hover(|style| style.bg(rgb(BUTTON_HOVER))),
