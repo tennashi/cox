@@ -22,7 +22,7 @@ use crate::settings::Setting;
 use crate::tabs::KeptTabs;
 
 /// The version of the tables below, as `SQLite`'s `user_version` holds it.
-const VERSION: i64 = 23;
+const VERSION: i64 = 24;
 
 const TABLES: &str = "
 CREATE TABLE projects (
@@ -97,9 +97,6 @@ CREATE TABLE entries (
     entry TEXT NOT NULL,
     PRIMARY KEY (chat, number)
 ) WITHOUT ROWID;
--- The plans the agents sent, which the Activity page reads the last of
--- each chat's of every two seconds.
-CREATE INDEX plans ON entries (chat, number) WHERE entry LIKE '{\"plan\":%';
 -- The lines the human wrote on a step of a plan, which the Activity page
 -- reads the threads of the steps by.
 CREATE INDEX on_steps ON entries (chat, number) WHERE entry LIKE '{\"on_step\":%';
@@ -141,6 +138,38 @@ CREATE TABLE turns (
     how TEXT NOT NULL
 );
 CREATE INDEX turns_of ON turns (chat, at);
+-- The plan each chat's agent sent last, as its entry keeps it, kept
+-- again as that entry is: what the Activity page reads every two
+-- seconds, without looking for it among the chat's entries.
+CREATE TABLE last_plans (
+    chat INTEGER PRIMARY KEY REFERENCES chats (id),
+    -- The number of its entry.
+    number INTEGER NOT NULL,
+    -- Its steps, as JSON.
+    steps TEXT NOT NULL
+);
+-- Each step the plans of a chat's agent had, by what coxd knows it by,
+-- as the last plan that had it says, kept as each plan is: what the
+-- Activity page sums up what got done by, and tells a chat's story by,
+-- without reading every plan the chat kept.
+CREATE TABLE steps (
+    chat INTEGER NOT NULL REFERENCES chats (id),
+    -- What coxd knows it by in its chat, from 1.
+    id INTEGER NOT NULL,
+    text TEXT NOT NULL,
+    -- When coxd first saw it under way, in milliseconds since the epoch.
+    started INTEGER,
+    -- When coxd saw it done, while it is.
+    done INTEGER,
+    PRIMARY KEY (chat, id)
+) WITHOUT ROWID;
+CREATE INDEX steps_done ON steps (done) WHERE done IS NOT NULL;
+-- The entries that tell a chat's story, past its steps: the human's
+-- lines, of which the first starts it, the receipts of how its plan
+-- changed, the questions and the commits.
+CREATE INDEX milestones ON entries (chat, number) WHERE entry LIKE '{\"human\":%'
+    OR entry LIKE '{\"plan_revised\":%' OR entry LIKE '{\"question\":%'
+    OR entry LIKE '{\"commits\":%';
 ";
 
 /// What makes the tables of each earlier version into those of the next:
@@ -191,7 +220,43 @@ const UPGRADES: &[&str] = &[
     "CREATE TABLE shown (project INTEGER PRIMARY KEY, chat INTEGER, at INTEGER NOT NULL);",
     "CREATE TABLE turns (chat INTEGER NOT NULL REFERENCES chats (id), at INTEGER NOT NULL, how TEXT NOT NULL);
      CREATE INDEX turns_of ON turns (chat, at);",
+    // Kept from the plans the entries keep, each step as the last plan
+    // that had it says, which nothing then looks for among the entries.
+    r#"CREATE TABLE last_plans (
+         chat INTEGER PRIMARY KEY REFERENCES chats (id),
+         number INTEGER NOT NULL,
+         steps TEXT NOT NULL
+     );
+     CREATE TABLE steps (
+         chat INTEGER NOT NULL REFERENCES chats (id),
+         id INTEGER NOT NULL,
+         text TEXT NOT NULL,
+         started INTEGER,
+         done INTEGER,
+         PRIMARY KEY (chat, id)
+     ) WITHOUT ROWID;
+     CREATE INDEX steps_done ON steps (done) WHERE done IS NOT NULL;
+     CREATE INDEX milestones ON entries (chat, number) WHERE entry LIKE '{"human":%'
+         OR entry LIKE '{"plan_revised":%' OR entry LIKE '{"question":%'
+         OR entry LIKE '{"commits":%';
+     INSERT INTO last_plans (chat, number, steps)
+         SELECT chat, max(number), json_extract(entry, '$.plan') FROM entries
+         WHERE entry LIKE '{"plan":%' GROUP BY chat;
+     INSERT INTO steps (chat, id, text, started, done)
+         SELECT entries.chat, step.value ->> '$.id', step.value ->> '$.text',
+             step.value ->> '$.started',
+             CASE WHEN step.value ->> '$.state' = 'completed' THEN step.value ->> '$.since' END
+         FROM entries, json_each(entries.entry, '$.plan') AS step
+         WHERE entries.entry LIKE '{"plan":%' AND step.value ->> '$.id' IS NOT NULL
+         ORDER BY entries.chat, entries.number
+         ON CONFLICT (chat, id) DO UPDATE SET text = excluded.text,
+             started = coalesce(excluded.started, steps.started), done = excluded.done;
+     DROP INDEX plans;"#,
 ];
+
+/// What keeps an entry of a chat, in place of what was kept there.
+const KEEP_ENTRY: &str = "INSERT INTO entries (chat, number, at, entry) VALUES (?1, ?2, ?3, ?4)
+     ON CONFLICT (chat, number) DO UPDATE SET entry = excluded.entry";
 
 /// How long a write waits for another Cox writing the same database.
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
@@ -407,6 +472,19 @@ pub struct KeptPlan {
     pub at: i64,
 }
 
+/// A step of the plans of a chat's agent, as [`Store::steps`] reads it:
+/// by what coxd knows it by in the chat (see [`Step::id`]), as the last
+/// plan that had it says.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct KeptStep {
+    pub id: u64,
+    pub text: String,
+    /// When coxd first saw it under way, in milliseconds since the epoch.
+    pub started: Option<i64>,
+    /// When it was done, while it is.
+    pub done: Option<i64>,
+}
+
 /// What moved in the chats since a time, as [`Store::progress`] reads it.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Progress {
@@ -414,8 +492,9 @@ pub struct Progress {
     /// in milliseconds since the epoch.
     pub active: Vec<(ChatId, i64)>,
     /// The steps of their agents' plans done since, each once, as the
-    /// chat knows it, by its id, however the agent reworded it: its chat,
-    /// its text, as it reads last, and when it was done.
+    /// chat knows it, by its id, however the agent reworded it, while the
+    /// last plan that had it says it is done: its chat, its text, as it
+    /// reads last, and when it was done.
     pub done: Vec<(ChatId, String, i64)>,
     /// The chats marked done since.
     pub resolved: Vec<(ChatId, Resolved)>,
@@ -975,6 +1054,14 @@ impl Store {
             &format!("DELETE FROM turns WHERE chat IN ({chats})"),
             [project.0],
         )?;
+        transaction.execute(
+            &format!("DELETE FROM last_plans WHERE chat IN ({chats})"),
+            [project.0],
+        )?;
+        transaction.execute(
+            &format!("DELETE FROM steps WHERE chat IN ({chats})"),
+            [project.0],
+        )?;
         // A chat of another project, or of Cox's own, that one of these
         // opened forgets which did.
         transaction.execute(
@@ -1092,16 +1179,55 @@ impl Store {
     ///
     /// When the database cannot be written.
     pub fn keep_entry(&self, chat: ChatId, number: usize, entry: &Entry) -> anyhow::Result<()> {
-        self.connection.execute(
-            "INSERT INTO entries (chat, number, at, entry) VALUES (?1, ?2, ?3, ?4)
-             ON CONFLICT (chat, number) DO UPDATE SET entry = excluded.entry",
-            params![
-                chat.0,
-                i64::try_from(number)?,
-                now(),
-                serde_json::to_string(entry)?
-            ],
+        let Entry::Plan(steps) = entry else {
+            self.connection
+                .prepare_cached(KEEP_ENTRY)?
+                .execute(params![
+                    chat.0,
+                    i64::try_from(number)?,
+                    now(),
+                    serde_json::to_string(entry)?
+                ])?;
+            return Ok(());
+        };
+        // A plan is kept with what is read of it in its place: as the
+        // chat's last, and each of its steps.
+        let transaction = self.connection.unchecked_transaction()?;
+        let number = i64::try_from(number)?;
+        transaction.prepare_cached(KEEP_ENTRY)?.execute(params![
+            chat.0,
+            number,
+            now(),
+            serde_json::to_string(entry)?
+        ])?;
+        transaction
+            .prepare_cached(
+                "INSERT INTO last_plans (chat, number, steps) VALUES (?1, ?2, ?3)
+                 ON CONFLICT (chat) DO UPDATE SET number = excluded.number, steps = excluded.steps
+                 WHERE excluded.number >= last_plans.number",
+            )?
+            .execute(params![chat.0, number, serde_json::to_string(steps)?])?;
+        let mut step_kept = transaction.prepare_cached(
+            "INSERT INTO steps (chat, id, text, started, done) VALUES (?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT (chat, id) DO UPDATE SET text = excluded.text,
+                 started = coalesce(excluded.started, steps.started), done = excluded.done",
         )?;
+        for step in steps {
+            // A step an older Cox kept is known by no id.
+            let Some(id) = step.id else { continue };
+            let done = step
+                .since
+                .filter(|_| step.state == crate::entry::StepState::Completed);
+            step_kept.execute(params![
+                chat.0,
+                i64::try_from(id)?,
+                step.text,
+                step.started,
+                done
+            ])?;
+        }
+        drop(step_kept);
+        transaction.commit()?;
         Ok(())
     }
 
@@ -1346,17 +1472,12 @@ impl Store {
     ///
     /// When the database cannot be read.
     pub fn plans(&self) -> anyhow::Result<Vec<KeptPlan>> {
-        // The WHERE is the plans index's, word for word, for SQLite to
-        // read that index rather than every entry.
+        // Kept as each plan is, rather than looked for among the entries.
         let mut statement = self.connection.prepare(
-            r#"SELECT entries.chat, entries.number, entries.entry,
-             (SELECT at FROM entries AS later WHERE later.chat = entries.chat
-              ORDER BY later.number DESC LIMIT 1)
-             FROM entries JOIN
-             (SELECT chat, max(number) AS number FROM entries
-              WHERE entry LIKE '{"plan":%' GROUP BY chat) AS last
-             ON entries.chat = last.chat AND entries.number = last.number
-             ORDER BY entries.chat"#,
+            "SELECT chat, number, steps,
+             (SELECT at FROM entries WHERE entries.chat = last_plans.chat
+              ORDER BY number DESC LIMIT 1)
+             FROM last_plans ORDER BY chat",
         )?;
         let rows = statement.query_map([], |row| {
             Ok((
@@ -1368,8 +1489,8 @@ impl Store {
         })?;
         let mut plans = Vec::new();
         for row in rows {
-            let (chat, number, entry, at) = row?;
-            if let Ok(Entry::Plan(steps)) = serde_json::from_str(&entry) {
+            let (chat, number, steps, at) = row?;
+            if let Ok(steps) = serde_json::from_str(&steps) {
                 let number = usize::try_from(number)?;
                 plans.push(KeptPlan {
                     chat,
@@ -1398,45 +1519,24 @@ impl Store {
         )?;
         let rows = statement.query_map([since], |row| Ok((ChatId(row.get(0)?), row.get(1)?)))?;
         moved.active = rows.collect::<Result<_, _>>()?;
-        // The WHERE is the plans index's, word for word, for SQLite to
-        // read that index rather than every entry of the chat, which it
-        // would by the chat's key otherwise.
+        // The steps done since, as each plan was kept, rather than every
+        // plan the chats kept: each once, by its id, however the agent
+        // reworded it, as it reads last.
         let mut statement = self.connection.prepare(
-            r#"SELECT entry FROM entries INDEXED BY plans
-             WHERE chat = ?1 AND entry LIKE '{"plan":%' ORDER BY number"#,
+            "SELECT chat, text, done FROM steps INDEXED BY steps_done
+             WHERE done IS NOT NULL AND done >= ?1 ORDER BY chat, done, id",
         )?;
-        for &(chat, _) in &moved.active {
-            let rows = statement.query_map([chat.0], |row| row.get::<_, String>(0))?;
-            // Where in `done` each step the chat knows by an id is, which
-            // the agent may have reworded since, as it reads last.
-            let mut known: Vec<(u64, usize)> = Vec::new();
-            for entry in rows {
-                let Ok(Entry::Plan(steps)) = serde_json::from_str(&entry?) else {
-                    continue;
-                };
-                for step in steps {
-                    let Some(at) = step.since.filter(|at| *at >= since) else {
-                        continue;
-                    };
-                    if step.state != crate::entry::StepState::Completed {
-                        continue;
-                    }
-                    if let Some(&(_, place)) = step
-                        .id
-                        .and_then(|id| known.iter().find(|(known, _)| *known == id))
-                    {
-                        moved.done[place].1 = step.text;
-                    } else if !moved
-                        .done
-                        .iter()
-                        .any(|done| done.0 == chat && done.1 == step.text && done.2 == at)
-                    {
-                        if let Some(id) = step.id {
-                            known.push((id, moved.done.len()));
-                        }
-                        moved.done.push((chat, step.text, at));
-                    }
-                }
+        let rows = statement.query_map([since], |row| {
+            Ok((ChatId(row.get(0)?), row.get::<_, String>(1)?, row.get(2)?))
+        })?;
+        for row in rows {
+            let (chat, text, at) = row?;
+            if moved
+                .active
+                .binary_search_by_key(&chat.0, |(active, _)| active.0)
+                .is_ok()
+            {
+                moved.done.push((chat, text, at));
             }
         }
         let mut statement = self.connection.prepare(
@@ -1469,42 +1569,74 @@ impl Store {
         Ok(rows.collect::<Result<_, _>>()?)
     }
 
-    /// What `chat`'s story is told by, each entry with when it was first
-    /// written, in milliseconds since the epoch, in order: the first line
-    /// the human sent, and the plans, the receipts of how they changed,
-    /// the questions and the commits of its agent.
+    /// What `chat`'s story is told by, past its steps (see
+    /// [`Self::steps`]), each entry with when it was first written, in
+    /// milliseconds since the epoch, in order: the first line the human
+    /// sent, and the receipts of how its agent's plan changed, the
+    /// questions and the commits of its agent.
     ///
     /// # Errors
     ///
     /// When the database cannot be read.
     pub fn milestones(&self, chat: ChatId) -> anyhow::Result<Vec<(i64, Entry)>> {
-        let mut first = self.connection.prepare_cached(
-            r#"SELECT number, at, entry FROM entries
-             WHERE chat = ?1 AND entry LIKE '{"human":%' ORDER BY number LIMIT 1"#,
-        )?;
-        let mut rest = self.connection.prepare_cached(
-            r#"SELECT number, at, entry FROM entries WHERE chat = ?1
-             AND (entry LIKE '{"plan":%' OR entry LIKE '{"plan_revised":%'
-              OR entry LIKE '{"question":%' OR entry LIKE '{"commits":%')
+        // The WHERE is the milestones index's, word for word, for SQLite
+        // to read that index rather than every entry of the chat.
+        let mut statement = self.connection.prepare_cached(
+            r#"SELECT at, entry FROM entries INDEXED BY milestones WHERE chat = ?1
+             AND (entry LIKE '{"human":%' OR entry LIKE '{"plan_revised":%'
+             OR entry LIKE '{"question":%' OR entry LIKE '{"commits":%')
              ORDER BY number"#,
         )?;
-        let row = |row: &rusqlite::Row<'_>| {
+        let rows = statement.query_map([chat.0], |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+        })?;
+        let mut read = Vec::new();
+        let mut first = true;
+        for row in rows {
+            let (at, entry) = row?;
+            // An entry this Cox cannot read tells nothing.
+            let Ok(entry) = serde_json::from_str::<Entry>(&entry) else {
+                continue;
+            };
+            // Of the human's lines, the first tells the story's start.
+            if matches!(entry, Entry::Human(_)) && !std::mem::take(&mut first) {
+                continue;
+            }
+            read.push((at, entry));
+        }
+        Ok(read)
+    }
+
+    /// Each step the plans of `chat`'s agent had, in the order they first
+    /// came, as the last plan that had it says.
+    ///
+    /// # Errors
+    ///
+    /// When the database cannot be read.
+    pub fn steps(&self, chat: ChatId) -> anyhow::Result<Vec<KeptStep>> {
+        let mut statement = self.connection.prepare_cached(
+            "SELECT id, text, started, done FROM steps WHERE chat = ?1 ORDER BY id",
+        )?;
+        let rows = statement.query_map([chat.0], |row| {
             Ok((
                 row.get::<_, i64>(0)?,
-                row.get::<_, i64>(1)?,
-                row.get::<_, String>(2)?,
+                KeptStep {
+                    id: 0,
+                    text: row.get(1)?,
+                    started: row.get(2)?,
+                    done: row.get(3)?,
+                },
             ))
-        };
-        let mut read: Vec<(i64, i64, String)> = first
-            .query_map([chat.0], row)?
-            .chain(rest.query_map([chat.0], row)?)
-            .collect::<Result<_, _>>()?;
-        read.sort_by_key(|(number, _, _)| *number);
-        Ok(read
-            .into_iter()
-            // An entry this Cox cannot read tells nothing.
-            .filter_map(|(_, at, entry)| Some((at, serde_json::from_str(&entry).ok()?)))
-            .collect())
+        })?;
+        let mut steps = Vec::new();
+        for row in rows {
+            let (id, step) = row?;
+            steps.push(KeptStep {
+                id: u64::try_from(id)?,
+                ..step
+            });
+        }
+        Ok(steps)
     }
 
     /// How many lines the human wrote on each step of the plans of
@@ -2463,7 +2595,7 @@ mod tests {
     }
 
     #[test]
-    fn reads_the_last_plan_of_each_chat_through_the_plans_index() {
+    fn reads_the_last_plan_of_each_chat_as_it_was_kept_with_it() {
         let store = Store::in_memory().unwrap();
         let planned = store.add_chat(None, "Chat 1").unwrap();
         let quiet = store.add_chat(None, "Chat 2").unwrap();
@@ -2500,16 +2632,86 @@ mod tests {
             (plans[0].chat, plans[0].number, &plans[0].steps),
             (planned, 4, &last)
         );
-        let plan: String = store
-            .connection
-            .query_row(
-                r#"EXPLAIN QUERY PLAN SELECT chat, max(number) FROM entries
-                 WHERE entry LIKE '{"plan":%' GROUP BY chat"#,
-                [],
-                |row| row.get(3),
+        // A plan before it kept again does not take its place.
+        store
+            .keep_entry(planned, 1, &Entry::Plan(Vec::new()))
+            .unwrap();
+        assert_eq!(store.plans().unwrap()[0].number, 4);
+    }
+
+    #[test]
+    fn reads_each_step_of_a_chats_plans_as_the_last_plan_that_had_it_says() {
+        let store = Store::in_memory().unwrap();
+        let chat = store.add_chat(None, "Chat 1").unwrap();
+        let other = store.add_chat(None, "Chat 2").unwrap();
+        let step = |id: u64, text: &str, state, started: Option<i64>, since: i64| Step {
+            text: text.to_owned(),
+            state,
+            since: Some(since),
+            started,
+            id: Some(id),
+        };
+        let plans = [
+            Entry::Plan(vec![
+                step(1, "Read", StepState::InProgress, Some(10), 10),
+                step(2, "Fix", StepState::Pending, None, 10),
+            ]),
+            Entry::Human("again".to_owned()),
+            Entry::Plan(vec![
+                // Its start is kept once a plan tells none.
+                step(1, "Read the code", StepState::Completed, None, 20),
+                step(3, "Lint", StepState::Completed, None, 20),
+            ]),
+        ];
+        for (number, entry) in plans.iter().enumerate() {
+            store.keep_entry(chat, number, entry).unwrap();
+        }
+        store
+            .keep_entry(
+                other,
+                0,
+                &Entry::Plan(vec![step(1, "Elsewhere", StepState::Pending, None, 5)]),
             )
             .unwrap();
-        assert!(plan.contains("plans"), "read by the index: {plan}");
+        // The plan of the turn, kept again as it goes: it reads as it
+        // stands.
+        store
+            .keep_entry(
+                chat,
+                2,
+                &Entry::Plan(vec![
+                    step(1, "Read the code", StepState::Completed, None, 20),
+                    step(3, "Lint", StepState::InProgress, Some(30), 30),
+                ]),
+            )
+            .unwrap();
+
+        let steps = store.steps(chat).unwrap();
+
+        assert_eq!(
+            steps,
+            [
+                KeptStep {
+                    id: 1,
+                    text: "Read the code".to_owned(),
+                    started: Some(10),
+                    done: Some(20),
+                },
+                // Gone from the last plan, as the plan before it had it.
+                KeptStep {
+                    id: 2,
+                    text: "Fix".to_owned(),
+                    started: None,
+                    done: None,
+                },
+                KeptStep {
+                    id: 3,
+                    text: "Lint".to_owned(),
+                    started: Some(30),
+                    done: None,
+                },
+            ]
+        );
     }
 
     #[test]
@@ -2531,26 +2733,28 @@ mod tests {
         };
         let since = now();
         // Done before, in a turn before, and kept so in the next.
-        let read = step("Read", StepState::Completed, Some(since - 60_000));
+        let read = known("Read", StepState::Completed, Some(since - 60_000), 1);
         let entries = [
             Entry::Plan(vec![
                 read.clone(),
-                step("Fix", StepState::InProgress, Some(since)),
+                known("Fix", StepState::InProgress, Some(since), 2),
             ]),
             Entry::Human("again".to_owned()),
             Entry::Plan(vec![
                 read,
-                step("Fix", StepState::Completed, Some(since + 1)),
+                // Done, then left out of the plans after: done still.
+                known("Fix", StepState::Completed, Some(since + 1), 2),
+                // Done as an older Cox kept it, with no id or stamp.
                 step("Old", StepState::Completed, None),
                 known("Test", StepState::InProgress, Some(since + 2), 4),
+                known("Lint", StepState::Completed, Some(since + 2), 5),
             ]),
             Entry::Human("go on".to_owned()),
-            Entry::Plan(vec![known(
-                "Test",
-                StepState::Completed,
-                Some(since + 3),
-                4,
-            )]),
+            Entry::Plan(vec![
+                known("Test", StepState::Completed, Some(since + 3), 4),
+                // Done before, and not now.
+                known("Lint", StepState::InProgress, Some(since + 3), 5),
+            ]),
             Entry::Human("reword it".to_owned()),
             // Reworded, done as it was: done once, as it reads now.
             Entry::Plan(vec![known(
@@ -2606,13 +2810,13 @@ mod tests {
         let plan: String = store
             .connection
             .query_row(
-                r#"EXPLAIN QUERY PLAN SELECT entry FROM entries INDEXED BY plans
-                 WHERE chat = 1 AND entry LIKE '{"plan":%' ORDER BY number"#,
+                "EXPLAIN QUERY PLAN SELECT chat FROM steps INDEXED BY steps_done
+                 WHERE done IS NOT NULL AND done >= 1",
                 [],
                 |row| row.get(3),
             )
             .unwrap();
-        assert!(plan.contains("plans"), "read by the index: {plan}");
+        assert!(plan.contains("steps_done"), "read by the index: {plan}");
     }
 
     #[test]
@@ -2620,12 +2824,14 @@ mod tests {
         let store = Store::in_memory().unwrap();
         let chat = store.add_chat(None, "Chat 1").unwrap();
         let other = store.add_chat(None, "Chat 2").unwrap();
-        let plan = Entry::Plan(Vec::new());
         let commits = Entry::Commits(Vec::new());
+        let revised = Entry::PlanRevised(crate::entry::Revision::between(&[], &[], &[]));
         let entries = [
             Entry::Note("instructions".to_owned()),
             Entry::Human("split the parser".to_owned()),
-            plan.clone(),
+            // Its steps are read apart (see `Store::steps`).
+            Entry::Plan(Vec::new()),
+            revised.clone(),
             Entry::Reply("reading".to_owned()),
             Entry::Human("and the lexer".to_owned()),
             commits.clone(),
@@ -2648,8 +2854,23 @@ mod tests {
             .collect();
         assert_eq!(
             told,
-            [Entry::Human("split the parser".to_owned()), plan, commits]
+            [
+                Entry::Human("split the parser".to_owned()),
+                revised,
+                commits
+            ]
         );
+        let plan: String = store
+            .connection
+            .query_row(
+                r#"EXPLAIN QUERY PLAN SELECT number FROM entries INDEXED BY milestones
+                 WHERE chat = 1 AND (entry LIKE '{"human":%' OR entry LIKE '{"plan_revised":%'
+                 OR entry LIKE '{"question":%' OR entry LIKE '{"commits":%')"#,
+                [],
+                |row| row.get(3),
+            )
+            .unwrap();
+        assert!(plan.contains("milestones"), "read by the index: {plan}");
     }
 
     #[test]
@@ -3030,6 +3251,79 @@ mod tests {
         assert!(!chats[0].archived);
         assert_eq!(chats[0].goal, None);
         assert_eq!(chats[0].parent, None);
+    }
+
+    #[test]
+    fn the_plans_kept_before_are_read_as_kept_through_the_upgrade() {
+        let directory = scratch();
+        let path = directory.path().join("chats.sqlite");
+        database_of_version(&path, 23);
+        let step = |id: Option<u64>, text: &str, state, since: i64| Step {
+            text: text.to_owned(),
+            state,
+            since: Some(since),
+            started: Some(since),
+            id,
+        };
+        let entries = [
+            Entry::Plan(vec![
+                step(Some(1), "Read", StepState::InProgress, 10),
+                step(Some(2), "Fix", StepState::Pending, 10),
+                step(None, "Older", StepState::Completed, 10),
+            ]),
+            Entry::Human("again".to_owned()),
+            Entry::Plan(vec![
+                step(Some(1), "Read the code", StepState::Completed, 20),
+                step(Some(2), "Fix", StepState::InProgress, 20),
+            ]),
+        ];
+        {
+            let connection = Connection::open(&path).unwrap();
+            for (number, entry) in entries.iter().enumerate() {
+                connection
+                    .execute(
+                        "INSERT INTO entries (chat, number, at, entry) VALUES (1, ?1, ?2, ?3)",
+                        params![
+                            i64::try_from(number).unwrap(),
+                            now(),
+                            serde_json::to_string(entry).unwrap()
+                        ],
+                    )
+                    .unwrap();
+            }
+        }
+
+        let store = Store::open(&path).unwrap();
+
+        let plans = store.plans().unwrap();
+        assert_eq!(
+            plans
+                .iter()
+                .map(|plan| (plan.number, plan.steps.len()))
+                .collect::<Vec<_>>(),
+            [(2, 2)]
+        );
+        assert_eq!(
+            store.steps(plans[0].chat).unwrap(),
+            [
+                KeptStep {
+                    id: 1,
+                    text: "Read the code".to_owned(),
+                    started: Some(20),
+                    done: Some(20),
+                },
+                KeptStep {
+                    id: 2,
+                    text: "Fix".to_owned(),
+                    started: Some(20),
+                    done: None,
+                },
+            ]
+        );
+        assert_eq!(
+            store.progress(0).unwrap().done,
+            [(plans[0].chat, "Read the code".to_owned(), 20)]
+        );
     }
 
     #[test]

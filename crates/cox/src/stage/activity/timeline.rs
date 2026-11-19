@@ -11,8 +11,8 @@
 //! commits, the pull requests opened, merged and closed, and their CI
 //! ended, and each turn's end.
 
-use cox_core::entry::{Entry, QuestionAnswer, Revision, StepState};
-use cox_core::store::{ChatId, KeptAnswer, Resolved, ResolvedBy, Said, Store, TurnEnd};
+use cox_core::entry::{Entry, QuestionAnswer, Revision};
+use cox_core::store::{ChatId, KeptAnswer, KeptStep, Resolved, ResolvedBy, Said, Store, TurnEnd};
 use coxd::daemon::wire::PullRow;
 use coxd::github::CheckState;
 use jiff::tz::TimeZone;
@@ -37,6 +37,8 @@ pub struct Kept {
     /// Its milestone entries, each with when it was written, as
     /// [`Store::milestones`] reads them.
     pub milestones: Vec<(i64, Entry)>,
+    /// The steps its plans had, as [`Store::steps`] reads them.
+    pub steps: Vec<KeptStep>,
     pub turns: Vec<TurnEnd>,
     /// The threads of the steps the human wrote on, each with its step,
     /// by its text as it reads last.
@@ -90,16 +92,15 @@ fn kept(store: &Store, chat: ChatId) -> anyhow::Result<Option<Kept>> {
             .find(|(id, _)| *id == chat)
             .map_or(0, |(_, at)| *at)
     };
-    let milestones = store.milestones(chat)?;
-    let texts = last_texts(&milestones);
+    let steps = store.steps(chat)?;
     let threads = store
         .on_steps(chat)?
         .into_iter()
         .map(|(step, _)| {
-            let text = texts
+            let text = steps
                 .iter()
-                .find(|(id, _)| *id == step)
-                .map_or_else(String::new, |(_, text)| text.clone());
+                .find(|kept| kept.id == step)
+                .map_or_else(String::new, |kept| kept.text.clone());
             Ok((text, store.thread(chat, step)?))
         })
         .collect::<anyhow::Result<_>>()?;
@@ -108,7 +109,8 @@ fn kept(store: &Store, chat: ChatId) -> anyhow::Result<Option<Kept>> {
         name: this.name.clone(),
         opened: opened_of(chat),
         resolved: this.resolved,
-        milestones,
+        milestones: store.milestones(chat)?,
+        steps,
         turns: store.turns(chat)?,
         threads,
         subagents: chats
@@ -122,23 +124,6 @@ fn kept(store: &Store, chat: ChatId) -> anyhow::Result<Option<Kept>> {
             })
             .collect(),
     }))
-}
-
-/// Each step the plans of `milestones` had, by its id, with its text as
-/// it read last.
-fn last_texts(milestones: &[(i64, Entry)]) -> Vec<(u64, String)> {
-    let mut texts: Vec<(u64, String)> = Vec::new();
-    for (_, entry) in milestones {
-        let Entry::Plan(steps) = entry else { continue };
-        for step in steps {
-            let Some(id) = step.id else { continue };
-            match texts.iter_mut().find(|(known, _)| *known == id) {
-                Some(known) => known.1.clone_from(&step.text),
-                None => texts.push((id, step.text.clone())),
-            }
-        }
-    }
-    texts
 }
 
 /// One thing in a chat's story, at a time.
@@ -226,31 +211,15 @@ pub fn story(kept: &Kept, told: &Told, zone: &TimeZone, now: i64) -> Value {
     })
 }
 
-/// What the milestone entries of `kept` tell, the times of the answers as
-/// they read in `zone`: the first line, each step started and done, each
-/// question asked and answered, and the commits.
+/// What the milestone entries and the steps of `kept` tell, the times of
+/// the answers as they read in `zone`: the first line, each step started
+/// and done, each change of the plan, each question asked and answered,
+/// and the commits.
 fn of_entries(kept: &Kept, zone: &TimeZone) -> Vec<Event> {
     let mut events = Vec::new();
-    // Each step, by its id: its text as it reads last, when it started,
-    // and when it was done, if it is.
-    let mut steps: Vec<(u64, String, Option<i64>, Option<i64>)> = Vec::new();
     for (at, entry) in &kept.milestones {
         match entry {
             Entry::Human(line) => events.push(Event::new(*at, "start", line.clone())),
-            Entry::Plan(plan) => {
-                for step in plan {
-                    let Some(id) = step.id else { continue };
-                    let done = (step.state == StepState::Completed)
-                        .then_some(step.since)
-                        .flatten();
-                    match steps.iter_mut().find(|(known, ..)| *known == id) {
-                        Some(known) => {
-                            *known = (id, step.text.clone(), step.started.or(known.2), done);
-                        }
-                        None => steps.push((id, step.text.clone(), step.started, done)),
-                    }
-                }
-            }
             Entry::PlanRevised(revision) => events.push(of_revision(*at, revision)),
             Entry::Question { .. } => events.extend(of_question(kept, *at, entry, zone)),
             Entry::Commits(commits) => {
@@ -262,9 +231,15 @@ fn of_entries(kept: &Kept, zone: &TimeZone) -> Vec<Event> {
             _ => {}
         }
     }
-    for (_, text, started, done) in steps {
-        events.extend(started.map(|at| Event::new(at, "step_started", text.clone())));
-        events.extend(done.map(|at| Event::new(at, "step_done", text)));
+    for step in &kept.steps {
+        events.extend(
+            step.started
+                .map(|at| Event::new(at, "step_started", step.text.clone())),
+        );
+        events.extend(
+            step.done
+                .map(|at| Event::new(at, "step_done", step.text.clone())),
+        );
     }
     events
 }
@@ -410,7 +385,7 @@ fn time(at: i64, zone: &TimeZone, now: i64) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cox_core::entry::{Committed, Picked, Question, QuestionOption, Step};
+    use cox_core::entry::{Committed, Picked, Question, QuestionOption};
     use cox_core::store::{Ended, Sayer};
     use coxd::github::{Check, Pull, PullState, Status, Times};
 
@@ -420,16 +395,6 @@ mod tests {
 
     fn kept(number: u64) -> ChatId {
         serde_json::from_value(json!(number)).unwrap()
-    }
-
-    fn step(id: u64, text: &str, state: StepState, started: Option<i64>, since: i64) -> Step {
-        Step {
-            text: text.to_owned(),
-            state,
-            since: Some(since),
-            started,
-            id: Some(id),
-        }
     }
 
     fn shown(key: u64, chat: ChatId) -> Chat {
@@ -514,45 +479,7 @@ mod tests {
                     at(13, 48),
                     Entry::Human("CI takes 11 minutes, make it faster".to_owned()),
                 ),
-                (
-                    at(13, 49),
-                    Entry::Plan(vec![
-                        step(
-                            1,
-                            "Find why the build is slow",
-                            StepState::InProgress,
-                            Some(at(13, 49)),
-                            at(13, 49),
-                        ),
-                        step(
-                            2,
-                            "Cache the dependencies",
-                            StepState::Pending,
-                            None,
-                            at(13, 49),
-                        ),
-                    ]),
-                ),
                 (at(13, 52), question),
-                (
-                    at(14, 0),
-                    Entry::Plan(vec![
-                        step(
-                            1,
-                            "Find why the build is slow",
-                            StepState::Completed,
-                            Some(at(13, 49)),
-                            at(13, 51),
-                        ),
-                        step(
-                            2,
-                            "Cache the dependencies in CI",
-                            StepState::Completed,
-                            Some(at(14, 21)),
-                            at(14, 24),
-                        ),
-                    ]),
-                ),
                 (
                     at(14, 25),
                     Entry::Commits(vec![Committed {
@@ -565,6 +492,21 @@ mod tests {
                         amended: None,
                     }]),
                 ),
+            ],
+            steps: vec![
+                KeptStep {
+                    id: 1,
+                    text: "Find why the build is slow".to_owned(),
+                    started: Some(at(13, 49)),
+                    done: Some(at(13, 51)),
+                },
+                // Reworded since it was planned, and done.
+                KeptStep {
+                    id: 2,
+                    text: "Cache the dependencies in CI".to_owned(),
+                    started: Some(at(14, 21)),
+                    done: Some(at(14, 24)),
+                },
             ],
             turns: vec![TurnEnd {
                 at: at(14, 29),
@@ -696,6 +638,7 @@ mod tests {
             resolved: None,
             threads: Vec::new(),
             subagents: Vec::new(),
+            steps: Vec::new(),
             milestones: vec![(at(10, 7), Entry::PlanRevised(revision))],
             turns: Vec::new(),
         };
@@ -740,6 +683,7 @@ mod tests {
             resolved: None,
             threads: Vec::new(),
             subagents: Vec::new(),
+            steps: Vec::new(),
             milestones: vec![(
                 at(10, 5),
                 Entry::Question {
