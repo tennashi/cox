@@ -365,21 +365,31 @@ fn ended(
     Some((last.at, last.how.word(), None))
 }
 
-/// `at`, in milliseconds since the epoch, as JSON: as it is, and by the
-/// time of day in `zone`, with the day too when it is not the day of
-/// `now`.
+/// `at`, in milliseconds since the epoch, as JSON: as it is; as a line
+/// reads it, `when`, by the time of day in `zone`, with the day too when
+/// it is not the day of `now`; and apart, for the story's column of times,
+/// which has room for the time of day alone, the time of day, `clock`,
+/// and the day, `day`, when it is not the day of `now`, which the story
+/// tells on a line of its own where it changes.
 fn time(at: i64, zone: &TimeZone, now: i64) -> Value {
     let zoned = |at: i64| {
         jiff::Timestamp::from_millisecond(at)
             .ok()
             .map(|at| at.to_zoned(zone.clone()))
     };
-    let when = match (zoned(at), zoned(now)) {
-        (Some(at), Some(now)) if at.date() == now.date() => at.strftime("%H:%M").to_string(),
-        (Some(at), _) => at.strftime("%b %-d %H:%M").to_string(),
-        _ => String::new(),
+    let (when, clock, day) = match (zoned(at), zoned(now)) {
+        (Some(at), Some(now)) if at.date() == now.date() => {
+            let clock = at.strftime("%H:%M").to_string();
+            (clock.clone(), clock, None)
+        }
+        (Some(at), _) => (
+            at.strftime("%b %-d %H:%M").to_string(),
+            at.strftime("%H:%M").to_string(),
+            Some(at.strftime("%b %-d").to_string()),
+        ),
+        _ => (String::new(), String::new(), None),
     };
-    json!({ "at": at, "when": when })
+    json!({ "at": at, "when": when, "clock": clock, "day": day })
 }
 
 #[cfg(test)]
@@ -751,8 +761,22 @@ mod tests {
             (&json!("resolved"), &json!("human"))
         );
 
-        // Another day's time tells the day.
+        // Another day's time tells the day, and apart from the time of
+        // day, for the story's column, which has room for that alone.
         let yesterday = super::time(at(11, 0) - 24 * 60 * MIN, &TimeZone::UTC, at(12, 0));
-        assert_eq!(yesterday["when"], "Nov 18 11:00");
+        assert_eq!(
+            yesterday,
+            json!({
+                "at": at(11, 0) - 24 * 60 * MIN,
+                "when": "Nov 18 11:00",
+                "clock": "11:00",
+                "day": "Nov 18",
+            })
+        );
+        let today = super::time(at(11, 0), &TimeZone::UTC, at(12, 0));
+        assert_eq!(
+            (&today["when"], &today["clock"], &today["day"]),
+            (&json!("11:00"), &json!("11:00"), &Value::Null)
+        );
     }
 }

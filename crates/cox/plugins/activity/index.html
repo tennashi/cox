@@ -391,6 +391,26 @@
       .event .text a {
         color: var(--link);
       }
+      /* The day the lines under it are of, where it changes, as the
+         column of times has room for the time of day alone. */
+      .day {
+        font: var(--small) var(--mono);
+        color: var(--faint);
+        padding: var(--space-1) 0 1px;
+      }
+      .day:first-child {
+        padding-top: 0;
+      }
+      .day.ending {
+        margin-top: var(--space-1);
+        padding-top: var(--space-2);
+        border-top: 1px solid var(--border);
+      }
+      .day.ending + .end {
+        margin-top: 0;
+        padding-top: 1px;
+        border-top: none;
+      }
       .end {
         margin-top: var(--space-1);
         padding-top: var(--space-2);
