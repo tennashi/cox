@@ -103,8 +103,6 @@ const hint = (chat) => (chat.hint ? ` <span class="hint">${esc(chat.hint)}</span
 /// the class that colors it: the human's turn, at work, waiting on CI,
 /// stopped with its plan not done, or done.
 function standing(chat) {
-  const plan = chat.plan ?? [];
-  const done = plan.length && plan.every((step) => step.state === "completed");
   if (chat.working) return { as: "work", says: "at work" };
   const waits = chat.waits ?? chat.why;
   if (waits === "asks you" || waits === "finished a turn") return { as: "yours", says: waits };
@@ -112,13 +110,13 @@ function standing(chat) {
   // A chat only waiting, whose CI ended while the human did not look.
   if (!chat.plans && chat.why) return { as: "yours", says: chat.why };
   // Its plan done, a subagent that finished, or a chat marked done.
-  if (done || waits === "finished" || waits === "done") return { as: "done", says: "done" };
+  if (chat.finished || waits === "finished" || waits === "done") return { as: "done", says: "done" };
   return { as: "stopped", says: "stopped" };
 }
 
 /// The chats of the page, one each: those with a plan or at work, and
-/// those that only wait for the human, each with how it stands, its
-/// steps done, and the step under way.
+/// those that only wait for the human, each with how it stands, how far
+/// its plan went, as Cox counted it, and the step under way.
 function chats() {
   const all = told.plans.map((chat) => ({ ...chat, plans: true }));
   for (const waiting of told.waiting) {
@@ -131,7 +129,7 @@ function chats() {
     return {
       ...chat,
       stands: standing(chat),
-      done: plan.filter((step) => step.state === "completed").length,
+      progress: chat.progress ?? { done: 0, of: 0 },
       under: plan.find((step) => step.state === "in_progress"),
       next: plan.find((step) => step.state === "pending"),
     };
@@ -152,6 +150,9 @@ function now(chat) {
   return chat.stands.says;
 }
 
+/// How far a plan went, as Cox counted it, as "2/3".
+const counted = (progress) => `${progress.done}/${progress.of}`;
+
 /// The bar of `plan`, a block a step.
 const bar = (plan) =>
   `<span class="bar">${plan.map((step) => `<i class="${esc(step.state)}" title="${esc(step.text)}"></i>`).join("")}</span>`;
@@ -167,7 +168,7 @@ function row(chat) {
   return (
     `<div class="row ${chat.stands.as}${open ? " open" : ""}${chat.depth ? " under" : ""}" data-key="${chat.key}" title="${esc(chat.stands.says)}">` +
     `<span class="dot"></span><span class="name">${named}</span>` +
-    `${plan.length ? bar(plan) : "<span></span>"}<span class="steps">${plan.length ? `${chat.done}/${plan.length}` : ""}</span>` +
+    `${plan.length ? bar(plan) : "<span></span>"}<span class="steps">${plan.length ? counted(chat.progress) : ""}</span>` +
     `<span class="now">${esc(now(chat))}</span></div>` +
     (open ? opening(chat) : "")
   );
@@ -263,17 +264,15 @@ function ending(chat, story) {
   }
   const ago = `${long(ended.at, Date.now())} ago`;
   const took = `took ${long(since, ended.at)}`;
-  const plan = chat.plan ?? [];
-  const finished = plan.length > 0 && chat.done === plan.length;
   switch (ended.how) {
     case "resolved":
       return line("done", "✓", "Done", `marked done by ${ended.by === "human" ? "you" : "Cox"} · ${took}`, ended.when);
     case "asks":
       return line("yours", "?", "Waits for your answer", `since ${long(ended.at, Date.now())}`, ended.when);
     case "done":
-      if (finished) return line("done", "✓", "Done", took, ended.when);
+      if (chat.finished) return line("done", "✓", "Done", took, ended.when);
       if (chat.stands.as === "yours") return line("yours", "●", "Finished a turn", ago, ended.when);
-      return line("stopped", "■", plan.length ? `Stopped at ${chat.done}/${plan.length}` : "Stopped", `after ${long(since, ended.at)} · ${ago}`, ended.when);
+      return line("stopped", "■", chat.progress.of ? `Stopped at ${counted(chat.progress)}` : "Stopped", `after ${long(since, ended.at)} · ${ago}`, ended.when);
     case "stopped":
       return line("stopped", "■", "Stopped", `after ${long(since, ended.at)} · ${ago}`, ended.when);
     default:
@@ -365,7 +364,7 @@ function steps(chat) {
       );
     })
     .join("");
-  return `<div class="plan"><div class="count" title="a click on a step opens its thread">Steps · ${chat.done}/${plan.length} done</div>${lines}</div>`;
+  return `<div class="plan"><div class="count" title="a click on a step opens its thread">Steps · ${counted(chat.progress)} done</div>${lines}</div>`;
 }
 
 /// The thread of the step that shows, of `chat`'s plan: each line the
@@ -407,10 +406,12 @@ function numbers(all) {
     .map((summary) => `<button class="pick${summary === shown ? " picked" : ""}" data-window="${esc(summary.window)}">${esc(summary.window)}</button>`)
     .join("");
   const yours = all.filter((chat) => chat.stands.as === "yours").length;
-  const steps = all.filter((chat) => !chat.depth).flatMap((chat) => chat.plan ?? []);
+  const tops = all.filter((chat) => !chat.depth);
+  const steps = tops.flatMap((chat) => chat.plan ?? []);
   const rank = { completed: 0, in_progress: 1, pending: 2 };
   steps.sort((one, other) => (rank[one.state] ?? 3) - (rank[other.state] ?? 3));
-  const done = steps.filter((step) => step.state === "completed").length;
+  // How far all the plans went, as Cox counted each.
+  const done = tops.reduce((sum, chat) => sum + chat.progress.done, 0);
   return (
     `<div class="numbers">` +
     `<div class="number yours"><div class="count">${yours}</div><div class="what">${yours === 1 ? "waits" : "wait"} for you</div></div>` +
@@ -418,7 +419,7 @@ function numbers(all) {
     `<div class="number"><div class="count">${shown?.steps ?? 0}</div><div class="what">${shown?.steps === 1 ? "step" : "steps"} done in ${picks}</div></div>` +
     `</div>` +
     (steps.length
-      ? `<div class="overall"><span>${done} of ${many(steps.length, "step", "steps")}</span>${bar(steps)}<span>${many(all.filter((chat) => !chat.depth).length, "chat", "chats")}</span></div>`
+      ? `<div class="overall"><span>${done} of ${many(tops.reduce((sum, chat) => sum + chat.progress.of, 0), "step", "steps")}</span>${bar(steps)}<span>${many(tops.length, "chat", "chats")}</span></div>`
       : "")
   );
 }

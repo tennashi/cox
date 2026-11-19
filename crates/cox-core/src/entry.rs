@@ -623,6 +623,48 @@ pub struct Step {
     pub id: Option<u64>,
 }
 
+/// How far a plan has gone: how many of its steps are done, of how many
+/// it has. Every place that tells how far a plan went counts it so, and
+/// the pages of the stage are told it rather than count it again.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StepsDone {
+    pub done: usize,
+    pub of: usize,
+}
+
+impl StepsDone {
+    /// How far the plan of `steps` has gone.
+    #[must_use]
+    pub fn count(steps: &[Step]) -> Self {
+        Self {
+            done: steps
+                .iter()
+                .filter(|step| step.state == StepState::Completed)
+                .count(),
+            of: steps.len(),
+        }
+    }
+
+    /// Whether the plan has steps, and every one of them is done.
+    #[must_use]
+    pub fn finished(self) -> bool {
+        self.of > 0 && self.done == self.of
+    }
+
+    /// How many of its steps are not done.
+    #[must_use]
+    pub fn left(self) -> usize {
+        self.of - self.done
+    }
+}
+
+impl std::fmt::Display for StepsDone {
+    /// As "2/3".
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}/{}", self.done, self.of)
+    }
+}
+
 /// A step of the agent's plan a line of the human's is on: the step the
 /// chat knows by `id` (see [`Step::id`]), as it read as they wrote.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -744,6 +786,39 @@ mod tests {
             path: path.to_owned(),
             lines: Vec::new(),
         }
+    }
+
+    fn step(text: &str, state: StepState) -> Step {
+        Step {
+            text: text.to_owned(),
+            state,
+            since: None,
+            started: None,
+            id: None,
+        }
+    }
+
+    #[test]
+    fn how_far_a_plan_went_counts_its_steps_done_of_all() {
+        let plan = [
+            step("Read", StepState::Completed),
+            step("Fix", StepState::InProgress),
+            step("Test", StepState::Pending),
+        ];
+        let done = StepsDone::count(&plan);
+        assert_eq!(done, StepsDone { done: 1, of: 3 });
+        assert_eq!(done.to_string(), "1/3");
+        assert_eq!(done.left(), 2);
+        assert!(!done.finished());
+        assert!(StepsDone::count(&plan[..1]).finished());
+        // A plan with no steps is not finished, and has none left.
+        let none = StepsDone::count(&[]);
+        assert_eq!((none.to_string().as_str(), none.left()), ("0/0", 0));
+        assert!(!none.finished());
+        assert_eq!(
+            serde_json::to_value(done).unwrap(),
+            serde_json::json!({ "done": 1, "of": 3 })
+        );
     }
 
     #[test]

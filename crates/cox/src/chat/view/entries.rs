@@ -22,7 +22,7 @@ use std::ops::Range;
 use cox_core::diff::Line;
 use gpui::{AnyElement, Context, FontWeight, SharedString, Stateful, div, prelude::*, px, rgb};
 
-use cox_core::entry::MediaKind;
+use cox_core::entry::{MediaKind, StepsDone};
 use cox_core::goal::Goal;
 
 use crate::chat::view::ChatView;
@@ -511,7 +511,7 @@ impl ChatView {
             told.push(counted(thoughts, "thought").to_uppercase());
         }
         if let Some(steps) = plan {
-            told.push(format!("PLAN {}", progress(steps)));
+            told.push(format!("PLAN {}", StepsDone::count(steps)));
         }
         let start = work.start;
         let header = label()
@@ -1155,7 +1155,7 @@ impl ChatView {
             .text_color(rgb(DIM))
             .child(disclosure(Some(open)))
             .child(div().flex_shrink_0().child("≡"))
-            .child(format!("Plan {}", progress(steps)));
+            .child(format!("Plan {}", StepsDone::count(steps)));
         div()
             .flex()
             .flex_col()
@@ -2361,15 +2361,6 @@ fn counted(count: usize, one: &str) -> String {
     } else {
         format!("{count} {one}s")
     }
-}
-
-/// How far a plan has gone, as how many of its steps are done of all.
-pub(super) fn progress(steps: &[Step]) -> String {
-    let done = steps
-        .iter()
-        .filter(|step| step.state == StepState::Completed)
-        .count();
-    format!("{done}/{}", steps.len())
 }
 
 /// The steps of a plan, each under a mark of how far it has gone.

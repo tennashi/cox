@@ -46,7 +46,7 @@ use std::time::Duration;
 /// How long an entry the human asked to see stays marked.
 const MARKED_FOR: Duration = Duration::from_millis(1600);
 
-use cox_core::entry::Attachment;
+use cox_core::entry::{Attachment, StepsDone};
 use cox_core::goal;
 use cox_core::tabs::KeptTabs;
 use gpui::{
@@ -87,7 +87,7 @@ mod settings;
 mod snippets;
 
 use crate::vim::hints::Hinted as _;
-use entries::{Folds, disclosure, progress, render_steps};
+use entries::{Folds, disclosure, render_steps};
 
 actions!(
     cox,
@@ -1441,7 +1441,7 @@ impl ChatView {
                         .text_color(rgb(DIM))
                         .cursor_pointer()
                         .child(disclosure(Some(open)))
-                        .child(format!("Plan {}", progress(steps)))
+                        .child(format!("Plan {}", StepsDone::count(steps)))
                         .on_hint_click(cx.listener(|view, _, _, cx| {
                             view.plan_folded = !view.plan_folded;
                             cx.notify();
