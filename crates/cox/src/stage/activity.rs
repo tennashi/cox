@@ -967,8 +967,9 @@ fn top_of<'a>(told: &'a Told, chat: &'a Chat) -> &'a Chat {
 /// What moved in the folder `root`, or in every folder in the home, over
 /// each of [`WINDOWS`], as JSON, from what `plans` read moved and the
 /// questions answered of `decided`: each chat at the top of those that
-/// moved, by what its own agent's plan got done, the subagents' chats
-/// under it that reported or were marked done, and those that worked;
+/// moved, by what its own agent's plan and those of the subagents' chats
+/// under it, at any depth, got done, the subagents' chats under it that
+/// reported or were marked done, and those that worked;
 /// and, as things stand, the chats that wait on the human, and those
 /// that stopped with their plan not done, with when they last moved.
 fn summaries(told: &Told, root: &Path, plans: &Plans<'_>, decided: &[Decided]) -> Vec<Value> {
@@ -1039,9 +1040,9 @@ fn summaries(told: &Told, root: &Path, plans: &Plans<'_>, decided: &[Decided]) -
 }
 
 /// A chat at the top of those that moved in a window, as [`summed`] sums
-/// it up: the steps its agent's plan got done, the last first, and the
-/// subagents' chats under it that `ended`, as they reported or were
-/// marked done, and that `worked`.
+/// it up: the steps its agent's plan and those of the subagents' chats
+/// under it got done, the last first, and the subagents' chats under it
+/// that `ended`, as they reported or were marked done, and that `worked`.
 struct Line<'a> {
     chat: &'a Chat,
     done: Vec<(&'a str, i64)>,
@@ -1050,14 +1051,22 @@ struct Line<'a> {
 }
 
 /// What moved among `chats` of `told` since `start`, as `moved` read it,
-/// as JSON: how many steps the plans of the chats at the top were done,
-/// which the lines name, how many subagents reported, and
+/// as JSON: how many steps of the plans of `chats` were done, each once,
+/// those of a subagent's chat as those of the chat at the top of its, at
+/// any depth, which the lines name, how many subagents reported, and
 /// each chat at the top of those that moved, as a [`Line`].
 fn summed(told: &Told, chats: &[&Chat], moved: &Progress, start: i64) -> Value {
     let mut lines: Vec<Line<'_>> = Vec::new();
     let (mut steps, mut reports) = (0, 0);
+    // The chats summed up, as coxd keeps them, for the steps of each to
+    // count once, however many of the window's chats stand for it.
+    let mut summed: Vec<ChatId> = Vec::new();
     for chat in chats {
-        let kept = |id: ChatId| chat.kept == Some(id);
+        let Some(id) = chat.kept.filter(|id| !summed.contains(id)) else {
+            continue;
+        };
+        summed.push(id);
+        let kept = |kept: ChatId| kept == id;
         let done: Vec<(&str, i64)> = moved
             .done
             .iter()
@@ -1090,10 +1099,14 @@ fn summed(told: &Told, chats: &[&Chat], moved: &Progress, start: i64) -> Value {
                 lines.len() - 1
             });
         let line = &mut lines[at];
+        // What a subagent's plan got done is done for the chat at the top,
+        // whose line names it.
+        steps += done.len();
+        line.done.extend(done);
         if top.key == chat.key {
-            steps += done.len();
-            line.done.extend(done);
-        } else if let Some(resolved) = resolved {
+            continue;
+        }
+        if let Some(resolved) = resolved {
             if resolved.by == ResolvedBy::Agent {
                 reports += 1;
             }
@@ -2581,7 +2594,7 @@ mod tests {
                 (kept(1), "Fix".to_owned(), at - 30 * minute),
                 (kept(1), "Read".to_owned(), at - 5 * minute),
                 (kept(6), "Elsewhere".to_owned(), at - minute),
-                // A subagent's own: its chat stands for it.
+                // A subagent's own, done for the chat at the top too.
                 (kept(3), "Its own".to_owned(), at - 3 * 60 * minute),
             ],
             resolved: vec![(
@@ -2627,7 +2640,7 @@ mod tests {
                     summary["moved"].as_array().unwrap().len(),
                 ))
                 .collect::<Vec<_>>(),
-            [("15 min", 1, 0, 1), ("1 h", 2, 1, 1), ("4 h", 2, 1, 1)]
+            [("15 min", 1, 0, 1), ("1 h", 2, 1, 1), ("4 h", 3, 1, 1)]
         );
         assert_eq!(line(0)["done"], json!(["Read"]));
         assert_eq!(line(1)["done"], json!(["Read", "Fix"]));
@@ -2650,6 +2663,89 @@ mod tests {
             );
             assert_eq!(stopped.as_array().unwrap().len(), 1);
         }
+    }
+
+    #[test]
+    fn counts_the_steps_the_subagents_under_a_chat_got_done_at_any_depth_once() {
+        let folder = TempDir::new();
+        let root = folder.path().join("app");
+        let minute = 60 * 1000;
+        let at = 100 * 24 * 60 * minute;
+        let listed = |key: u64, kept_as: u64, parent: Option<u64>| {
+            let mut listed = chat(key, &root, &root, false, false);
+            listed.kept = Some(kept(kept_as));
+            listed.parent = parent;
+            listed
+        };
+        let told = Told {
+            chats: vec![
+                // The chat at the top hands its work out, with no plan of
+                // its own; its subagent opens one more.
+                listed(1, 1, None),
+                listed(2, 2, Some(1)),
+                listed(3, 3, Some(2)),
+                // Another of the window's chats that stands for the
+                // subagent's, as coxd keeps it.
+                listed(4, 2, Some(1)),
+                listed(5, 5, None),
+            ],
+            projects: vec![(root.clone(), "app".to_owned())],
+            home: folder.path().to_owned(),
+            github: None,
+        };
+        let moved = Progress {
+            active: [1, 2, 3, 5]
+                .into_iter()
+                .map(|chat| (kept(chat), at - minute))
+                .collect(),
+            done: vec![
+                (kept(2), "Add the flag".to_owned(), at - 5 * minute),
+                (kept(2), "Test it".to_owned(), at - 10 * minute),
+                (kept(3), "Write the docs".to_owned(), at - 40 * minute),
+                (kept(3), "Push".to_owned(), at - 2 * 60 * minute),
+                (kept(5), "Its own".to_owned(), at - 3 * 60 * minute),
+            ],
+            resolved: Vec::new(),
+        };
+        let plans = Plans {
+            moved: &moved,
+            at,
+            ..NO_PLANS
+        };
+        let places = Places {
+            wiki: &root.join("wiki"),
+            raw: &root.join("raw"),
+            triggers: &json!({}),
+        };
+
+        let json = told_of(&told, &root, &[], &plans, &|_| None, &places);
+
+        let summaries = json["summaries"].as_array().unwrap();
+        assert_eq!(
+            summaries
+                .iter()
+                .map(|summary| summary["steps"].as_u64().unwrap())
+                .collect::<Vec<_>>(),
+            [2, 3, 5]
+        );
+        // The chat at the top names what its subagents got done, the
+        // last first, and has them under it as they worked.
+        let line = &summaries[2]["moved"][0];
+        assert_eq!(line["key"], 1);
+        assert_eq!(
+            (&line["done"], &line["more"]),
+            (
+                &json!(["Add the flag", "Test it", "Write the docs"]),
+                &json!(1)
+            )
+        );
+        let worked: Vec<u64> = line["worked"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|chat| chat["key"].as_u64().unwrap())
+            .collect();
+        assert_eq!(worked, [2, 3]);
     }
 
     #[test]
