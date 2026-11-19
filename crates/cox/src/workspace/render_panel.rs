@@ -1,9 +1,11 @@
 //! The panel of the chat shown: its head, the list of the project's
 //! chats, the panel folded to the window's edge, and the menu of a chat.
 
+use crate::ui::depth;
+use coxd::theme::OVERLAY;
 use gpui::{
     AnyElement, ClickEvent, Context, Div, Focusable, FontWeight, MouseButton, MouseDownEvent,
-    Stateful, Window, anchored, deferred, div, prelude::*, px, rgb,
+    Stateful, Window, anchored, deferred, div, prelude::*, px, rgb, rgba,
 };
 
 use super::render::keys_edge;
@@ -296,8 +298,8 @@ impl Workspace {
             .gap(px(2.))
             .bg(rgb(RAISED))
             .border_b_1()
-            .border_color(rgb(BORDER_STRONG))
-            .shadow_lg()
+            .border_color(rgba(OVERLAY.edge))
+            .shadow(depth::shadows(OVERLAY))
             .children(rows)
             .child(
                 div()

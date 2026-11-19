@@ -4,6 +4,8 @@
 //! which open on the stage. It stays while the mouse is on the name or on
 //! it.
 
+use crate::ui::depth::Stand as _;
+use coxd::theme::OVERLAY;
 use std::ops::Range;
 use std::time::Duration;
 
@@ -15,7 +17,7 @@ use gpui::{
 };
 
 use super::Code;
-use super::menu::{MENU, MENU_BORDER};
+use super::menu::MENU;
 use crate::ui::LinkClicked;
 use crate::ui::markdown::{self, Block};
 use crate::ui::text::Reading;
@@ -251,10 +253,8 @@ impl Code {
             .px_3()
             .py_2()
             .bg(rgb(MENU))
-            .border_1()
-            .border_color(rgb(MENU_BORDER))
             .rounded_md()
-            .shadow_md()
+            .stand(OVERLAY)
             .text_color(rgb(FOREGROUND))
             .on_hover(cx.listener(|code, over: &bool, _, cx| {
                 if let Some(hovered) = &mut code.hover {

@@ -7,10 +7,9 @@ use gpui::{Context, IntoElement, anchored, deferred, prelude::*, px, rgb};
 use super::Code;
 use crate::ui::selected::Selected as _;
 use crate::vim::hints::Hinted as _;
-use coxd::theme::{BORDER_STRONG, FOREGROUND, RAISED};
+use coxd::theme::{FOREGROUND, RAISED};
 
 pub(super) const MENU: u32 = RAISED;
-pub(super) const MENU_BORDER: u32 = BORDER_STRONG;
 
 impl Code {
     /// The menu of the right button, if it is open.

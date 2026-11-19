@@ -3,9 +3,11 @@
 //! rows the height of a button, the row under the mouse lit, and the keys
 //! that do the same at a row's right.
 
+use crate::ui::depth::Stand as _;
+use coxd::theme::OVERLAY;
 use gpui::{Div, ElementId, Stateful, div, prelude::*, px, rgb};
 
-use coxd::theme::{BORDER, BORDER_STRONG, FAINT, FOREGROUND, RAISED, SELECTED};
+use coxd::theme::{BORDER, FAINT, FOREGROUND, RAISED, SELECTED};
 
 /// How round a menu is, and a row of it.
 const RADIUS: f32 = 14.;
@@ -23,10 +25,8 @@ pub fn menu() -> Div {
         .flex()
         .flex_col()
         .bg(rgb(RAISED))
-        .border_1()
-        .border_color(rgb(BORDER_STRONG))
         .rounded(px(RADIUS))
-        .shadow_lg()
+        .stand(OVERLAY)
         .text_size(px(13.))
         .text_color(rgb(FOREGROUND))
 }

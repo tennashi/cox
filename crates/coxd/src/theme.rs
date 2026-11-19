@@ -27,7 +27,7 @@ pub const CODE_FONT: &str = "DejaVu Sans Mono";
 /// How far apart the window's cards sit, and from its edges.
 pub const GAP: f32 = 10.;
 /// How round a card's corners are: the stage's, and the conversation's.
-pub const CARD_RADIUS: f32 = 18.;
+pub const CARD_RADIUS: f32 = 16.;
 /// How round the corners of what fills a card are, inside its border.
 pub const CARD_INNER_RADIUS: f32 = CARD_RADIUS - 1.;
 /// How round a control's corners are: a button, an option to choose, a
@@ -45,9 +45,9 @@ pub const TEXT_LG: f32 = 15.;
 pub const TEXT_TITLE: f32 = 18.;
 
 /// The window's back, which the list of chats and the cards are on.
-pub const GROUND: u32 = 0x0e_0e0f;
+pub const GROUND: u32 = 0x08_080a;
 /// The ground of a card: a chat's conversation and its stage.
-pub const SURFACE: u32 = 0x15_1517;
+pub const SURFACE: u32 = 0x13_1316;
 /// The ground of a part a card holds a step above its own: a list, a
 /// section of a page.
 pub const PANE: u32 = 0x1a_1a1e;
@@ -407,7 +407,7 @@ mod tests {
     #[test]
     fn the_css_names_each_color_as_the_window_draws_it() {
         let css = css();
-        assert!(css.contains("  --ground: #0e0e0f;\n"), "{css}");
+        assert!(css.contains("  --ground: #08080a;\n"), "{css}");
         assert!(css.contains("  --asking-ground: #1e1b15;\n"), "{css}");
         assert!(css.starts_with(":root {") && css.ends_with("}\n"), "{css}");
     }

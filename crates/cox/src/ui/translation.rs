@@ -6,6 +6,8 @@
 //! also hands the selection to the chat shown, as [`crate::chat::hand`]
 //! says, where it knows where the selection is from.
 
+use crate::ui::depth::Stand as _;
+use coxd::theme::OVERLAY;
 use gpui::{
     App, AppContext, ClipboardItem, Context, Entity, FocusHandle, Focusable, Global,
     InteractiveElement, IntoElement, KeyBinding, MouseButton, ParentElement, Pixels, Point, Render,
@@ -16,7 +18,7 @@ use gpui::{
 use cox_core::entry::Attachment;
 
 use crate::vim::hints::Hinted as _;
-use coxd::theme::{BORDER_STRONG, BUTTON_HOVER, DIM, FAILED, FAINT, FOREGROUND, RAISED};
+use coxd::theme::{BUTTON_HOVER, DIM, FAILED, FAINT, FOREGROUND, RAISED};
 use coxd::translate::{Arriving, Way};
 
 actions!(
@@ -274,10 +276,8 @@ impl Render for TranslationCard {
             .flex_col()
             .gap_2()
             .bg(rgb(RAISED))
-            .border_1()
-            .border_color(rgb(BORDER_STRONG))
             .rounded(px(10.))
-            .shadow_lg()
+            .stand(OVERLAY)
             .text_size(px(13.))
             .child(head)
             .child(
