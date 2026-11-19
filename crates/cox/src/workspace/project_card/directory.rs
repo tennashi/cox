@@ -4,12 +4,15 @@
 //! human's to put anything in. A directory is a Git repository or not,
 //! and a repository is linked to a remote, as `origin`, or not. A
 //! directory named as its project is renamed with it, until the human
-//! names it otherwise.
+//! names it otherwise. A repository's worktrees go with it, wherever they
+//! are, rather than being directories of their own, even those in
+//! `directories` beside it (see [`coxd::worktrees`]).
 
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
 use coxd::settings::DIRECTORIES;
+use coxd::worktrees::{self, Worktree};
 
 /// A directory of a project, as it stands.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -20,6 +23,9 @@ pub struct Directory {
     pub git: bool,
     /// The URL of the remote it is linked to, `origin`, if it is.
     pub remote: Option<String>,
+    /// The worktrees of its repository, but for itself, as Git lists
+    /// them.
+    pub worktrees: Vec<Worktree>,
 }
 
 /// How a repository was linked to its remote.
@@ -70,13 +76,15 @@ pub fn why_not_named(name: &str) -> Option<&'static str> {
     None
 }
 
-/// The directories of the project in `project`, by name.
+/// The directories of the project in `project`, by name, each
+/// repository with its worktrees, but for the worktrees of another of
+/// them, which go under it.
 #[must_use]
 pub fn listed(project: &Path) -> Vec<Directory> {
     let Ok(entries) = std::fs::read_dir(project.join(DIRECTORIES)) else {
         return Vec::new();
     };
-    let mut directories: Vec<Directory> = entries
+    let mut directories: Vec<(PathBuf, Directory)> = entries
         .filter_map(Result::ok)
         .filter(|entry| entry.path().is_dir())
         .filter_map(|entry| {
@@ -86,11 +94,37 @@ pub fn listed(project: &Path) -> Vec<Directory> {
             let remote = git
                 .then(|| run(&folder, &["remote", "get-url", "origin"]).ok())
                 .flatten();
-            Some(Directory { name, git, remote })
+            let worktrees = if git && worktrees::is_main(&folder) {
+                worktrees::of(&folder, project)
+            } else {
+                Vec::new()
+            };
+            let directory = Directory {
+                name,
+                git,
+                remote,
+                worktrees,
+            };
+            Some((canonical(&folder), directory))
         })
+        .collect();
+    let under_another: Vec<PathBuf> = directories
+        .iter()
+        .flat_map(|(_, directory)| &directory.worktrees)
+        .map(|worktree| canonical(&worktree.path))
+        .collect();
+    directories.retain(|(folder, _)| !under_another.contains(folder));
+    let mut directories: Vec<Directory> = directories
+        .into_iter()
+        .map(|(_, directory)| directory)
         .collect();
     directories.sort_by(|a, b| a.name.cmp(&b.name));
     directories
+}
+
+/// `path` as the file system resolves it, or as it is when it cannot.
+fn canonical(path: &Path) -> PathBuf {
+    path.canonicalize().unwrap_or_else(|_| path.to_owned())
 }
 
 /// Renames the directory `from` of the project in `project` `to`,
@@ -249,12 +283,14 @@ mod tests {
                 Directory {
                     name: "app".to_owned(),
                     git: false,
-                    remote: None
+                    remote: None,
+                    worktrees: Vec::new(),
                 },
                 Directory {
                     name: "origin".to_owned(),
                     git: true,
-                    remote: Some(url)
+                    remote: Some(url),
+                    worktrees: Vec::new(),
                 },
             ],
             "the folders out of the project's directories are not listed"
@@ -342,5 +378,83 @@ mod tests {
 
         assert!(folder_of(&project, "fresh").exists());
         assert!(!project.join("out").exists());
+    }
+
+    #[test]
+    fn a_repositorys_worktrees_go_under_it_not_beside_it() {
+        let (_root, _url, project) = remote_and_project();
+        let app = folder_of(&project, "app");
+        origin(&app);
+        let beside = folder_of(&project, "app-fix");
+        let made = project
+            .join(coxd::worktrees::WORKTREES)
+            .join("app")
+            .join("feature");
+        for (branch, path) in [("fix", &beside), ("feature", &made)] {
+            let path = path.to_str().unwrap();
+            run_git(&app, &["worktree", "add", "--quiet", "-b", branch, path]).unwrap();
+        }
+
+        let listed = listed(&project);
+
+        assert_eq!(
+            listed.iter().map(|d| d.name.as_str()).collect::<Vec<_>>(),
+            ["app"],
+            "the worktree in directories is not a directory of its own"
+        );
+        let mut branches: Vec<_> = listed[0]
+            .worktrees
+            .iter()
+            .map(|w| (w.branch.clone().unwrap(), w.outside))
+            .collect();
+        branches.sort();
+        assert_eq!(
+            branches,
+            [("feature".to_owned(), false), ("fix".to_owned(), false)]
+        );
+    }
+
+    #[test]
+    fn a_worktree_moved_by_hand_with_git_stays_under_its_repository() {
+        let (root, _url, project) = remote_and_project();
+        let app = folder_of(&project, "app");
+        origin(&app);
+        let beside = folder_of(&project, "app-fix");
+        let path = beside.to_str().unwrap();
+        run_git(&app, &["worktree", "add", "--quiet", "-b", "fix", path]).unwrap();
+        let moved = project
+            .join(coxd::worktrees::WORKTREES)
+            .join("app")
+            .join("fix");
+        make(moved.parent().unwrap()).unwrap();
+        run_git(&app, &["worktree", "move", path, moved.to_str().unwrap()]).unwrap();
+        let outside = root.join("elsewhere");
+        run_git(
+            &app,
+            &[
+                "worktree",
+                "add",
+                "--quiet",
+                "--detach",
+                outside.to_str().unwrap(),
+            ],
+        )
+        .unwrap();
+
+        let listed = listed(&project);
+
+        assert_eq!(listed.len(), 1);
+        let worktrees = &listed[0].worktrees;
+        assert_eq!(worktrees.len(), 2, "{worktrees:?}");
+        let fix = worktrees
+            .iter()
+            .find(|w| w.branch.as_deref() == Some("fix"))
+            .unwrap();
+        assert_eq!(
+            fix.path.canonicalize().unwrap(),
+            moved.canonicalize().unwrap()
+        );
+        assert!(!fix.outside);
+        assert!(worktrees.iter().any(|w| w.branch.is_none() && w.outside));
     }
 }

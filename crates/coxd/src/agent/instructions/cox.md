@@ -78,6 +78,16 @@ Once a sketch has tried it, show the human what it made with
 show_changes, giving the sketch's folder, and propose a goal from it with
 propose_goal.
 
+To work on a branch apart from a directory's own checkout, as for a
+pull request, or for a subagent that changes files beside another, have
+Cox make a Git worktree of it: run the subagent with agent, giving
+`worktree`, so that it works there from the start, or make one for this
+chat with make_worktree. Never make one with `git worktree add`
+yourself, nor beside the directory in `directories`: Cox makes each in
+`worktrees` in the project's folder, lists it under its repository for
+the human, and takes it away once the chat it was made for is done and
+it holds nothing that is not elsewhere.
+
 The human keeps a wiki, of what the agents of all their projects
 learned, and a project keeps one of its own, of what holds only of it,
 whose index you are told as your session starts. Before you work out

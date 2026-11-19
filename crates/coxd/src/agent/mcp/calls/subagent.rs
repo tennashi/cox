@@ -16,7 +16,7 @@ use serde_json::{Value, json};
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::oneshot;
 
-use crate::agent::mcp::{ChatRequest, OpenedChat, Stopped, Subagent, Waited};
+use crate::agent::mcp::{ChatRequest, OpenedChat, Stopped, Subagent, Waited, Within};
 use crate::agent::setup::{Policy, Setup, StageUse, Withheld};
 use crate::chat::sketch::Sketch;
 
@@ -89,7 +89,7 @@ pub(super) fn agent_tool() -> Value {
             it did so far; run a new one only for new work. To stop one, call agent_stop, \
             giving its title. {NOT_CLAUDES_OWN} The chat works in the \
             same folder as this one, so two that change files at once may collide, unless \
-            `sketch` gives it a folder of its own. Beside the Agent tool's arguments, \
+            `worktree` or `sketch` gives it a folder of its own. Beside the Agent tool's arguments, \
             Cox's own say how the subagent is set up: `context` is told to it after the \
             project's instructions; `tools` names which of Cox's tools it gets, all of them \
             unless given; `stage` is \"look\" to keep it from driving the pages of its \
@@ -107,7 +107,12 @@ pub(super) fn agent_tool() -> Value {
             apart from the project, and change and test its files there without asking the \
             human: \"project\", a Git worktree of the project's last commit, to try a \
             change to the project, or \"empty\", an empty Git repository, to try something \
-            from nothing."
+            from nothing; `directory` names the project's directory a sketch from the \
+            project is of, when the project has several repositories. `worktree` has Cox \
+            make a Git worktree of one of the project's directories, on a branch, in \
+            `worktrees` in the project's folder, for the subagent to work in from the start, \
+            as for work that goes on to a pull request; Cox takes it away once the subagent \
+            is done and it holds nothing that is not elsewhere."
             .replace("{NOT_CLAUDES_OWN}", NOT_CLAUDES_OWN),
         "inputSchema": {
             "type": "object",
@@ -180,6 +185,25 @@ pub(super) fn agent_tool() -> Value {
                     "type": "string",
                     "description": "What the subagent works until it is met: \"$ \" and a \
                         shell command, which has to pass, or words, which an agent judges.",
+                },
+                "worktree": {
+                    "type": "object",
+                    "description": "The worktree Cox makes for the subagent to work in: \
+                        `directory`, the project's directory it is of; `branch`, which it \
+                        checks out, made from `from` unless there is one of that name \
+                        already; `from`, the commit it starts from, the remote's default \
+                        branch unless given.",
+                    "properties": {
+                        "directory": { "type": "string" },
+                        "branch": { "type": "string" },
+                        "from": { "type": "string" },
+                    },
+                    "required": ["directory"],
+                },
+                "directory": {
+                    "type": "string",
+                    "description": "The project's directory a `sketch` from \"project\" is a \
+                        worktree of, when the project has several repositories.",
                 },
                 "sketch": {
                     "type": "string",
@@ -497,6 +521,19 @@ pub(super) async fn agent(
     let sketch = string(arguments, "sketch")?
         .map(|name| Sketch::parse(&name).ok_or("`sketch` is not \"project\" or \"empty\""))
         .transpose()?;
+    let directory = string(arguments, "directory")?;
+    let worktree = match arguments.get("worktree") {
+        None | Some(Value::Null) => None,
+        Some(asked @ Value::Object(_)) => Some(super::asked_worktree(asked)?),
+        Some(_) => {
+            return Err(
+                "`worktree` is not an object of `directory`, `branch` and `from`".to_owned(),
+            );
+        }
+    };
+    if sketch.is_some() && worktree.is_some() {
+        return Err("give `sketch` or `worktree`, not both".to_owned());
+    }
     let (answer, opened) = oneshot::channel();
     chats
         .send(ChatRequest::OpenChat {
@@ -506,6 +543,10 @@ pub(super) async fn agent(
             model: model.clone(),
             goal,
             sketch,
+            within: Box::new(Within {
+                directory,
+                worktree,
+            }),
             answer,
         })
         .map_err(|_| "the chat has closed".to_owned())?;
@@ -838,6 +879,7 @@ mod tests {
                         model,
                         goal,
                         sketch,
+                        within,
                         answer,
                     } => {
                         let _ = answer.send(Ok(opened.clone()));
@@ -849,6 +891,7 @@ mod tests {
                             model,
                             goal,
                             sketch,
+                            within,
                             answer,
                         }
                     }
@@ -1031,6 +1074,51 @@ mod tests {
                 sketch: None,
             }
         );
+    }
+
+    #[tokio::test]
+    async fn asks_for_a_worktree_for_the_subagent_and_not_beside_a_sketch() {
+        let project = TempDir::new();
+        let (chats, asked) = unbounded_channel();
+        let window = window(asked, opened(4), vec![Waited::default()]);
+
+        let (error, told) = call(
+            json!({
+                "prompt": "Fix the login.",
+                "worktree": { "directory": "app", "branch": "fix/login" },
+                "directory": "app",
+            }),
+            project.path(),
+            &chats,
+        )
+        .await;
+
+        assert!(!error, "{told}");
+        drop(chats);
+        let heard = window.await.unwrap();
+        let [ChatRequest::OpenChat { within, sketch, .. }, ..] = &heard[..] else {
+            panic!("the window was asked {} times", heard.len());
+        };
+        assert_eq!(sketch, &None);
+        assert_eq!(within.directory.as_deref(), Some("app"));
+        assert_eq!(
+            within.worktree,
+            Some(crate::worktrees::Asked {
+                directory: "app".to_owned(),
+                branch: Some("fix/login".to_owned()),
+                from: None,
+            })
+        );
+
+        let (chats, _asked) = unbounded_channel();
+        for arguments in [
+            json!({ "prompt": "go", "sketch": "project", "worktree": { "directory": "app" } }),
+            json!({ "prompt": "go", "worktree": "app" }),
+            json!({ "prompt": "go", "worktree": { "branch": "fix" } }),
+        ] {
+            let (error, _) = call(arguments.clone(), project.path(), &chats).await;
+            assert!(error, "{arguments}");
+        }
     }
 
     #[tokio::test]

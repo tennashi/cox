@@ -2751,6 +2751,51 @@ fn a_url_on_the_projects_card_clones_the_repository_into_a_directory_named_after
 }
 
 #[gpui::test]
+fn a_repositorys_worktree_beside_it_is_listed_under_it_on_the_projects_card(
+    cx: &mut TestAppContext,
+) {
+    let (card, cx) = open_projects_card(cx);
+    enter(&card.url, &card.input, cx);
+    let beside = card.directories.join("origin-fix");
+    git(
+        &card.directories.join("origin"),
+        &[
+            "worktree",
+            "add",
+            "--quiet",
+            "-b",
+            "fix",
+            beside.to_str().unwrap(),
+        ],
+    );
+    // Making another directory lists them again.
+    card.make_app(cx);
+    let said = card.described(cx);
+    assert!(
+        said.contains(
+            &"  Worktree fix at directories/origin-fix: clean, merged; Left be: made by hand"
+                .to_owned()
+        ) && !said
+            .iter()
+            .any(|line| line.starts_with("Directory origin-fix")),
+        "{said:?}"
+    );
+
+    // The human takes it away on its row, its branch, merged, with it.
+    click(cx, "worktree-remove-1-0");
+    cx.run_until_parked();
+    assert!(!beside.exists());
+    let said = card.described(cx);
+    assert!(
+        said.iter().any(
+            |line| line.starts_with("Under it: Took away the worktree at ")
+                && line.ends_with("/directories/origin-fix, and its branch fix, merged.")
+        ) && !said.iter().any(|line| line.starts_with("  Worktree")),
+        "{said:?}"
+    );
+}
+
+#[gpui::test]
 fn a_repository_cloned_already_is_not_cloned_over_its_directory(cx: &mut TestAppContext) {
     let (card, cx) = open_projects_card(cx);
     enter(&card.url, &card.input, cx);
@@ -4166,6 +4211,7 @@ async fn opened_by_an_agent<'a>(
             model: None,
             goal: None,
             sketch: None,
+            within: Box::default(),
             answer,
         })
         .unwrap();
@@ -4300,6 +4346,7 @@ async fn opened_on(
             model: None,
             goal: None,
             sketch: None,
+            within: Box::default(),
             answer,
         })
         .unwrap();
@@ -4432,6 +4479,7 @@ async fn a_chat_opened_by_a_chat_is_allowed_no_more_than_it(cx: &mut TestAppCont
             model: None,
             goal: None,
             sketch: None,
+            within: Box::default(),
             answer,
         })
         .unwrap();
@@ -4514,6 +4562,7 @@ async fn open_sketch(
             model: None,
             goal: None,
             sketch: Some(sketch),
+            within: Box::default(),
             answer,
         })
         .unwrap();
@@ -4596,6 +4645,7 @@ async fn a_chat_opens_a_sketch_beside_it(cx: &mut TestAppContext) {
         asks.borrow()[from]
             .send(ChatRequest::StartSketch {
                 sketch: Sketch::Project,
+                directory: None,
                 what: "A warmer greeting.".to_owned(),
                 show: false,
                 answer,
@@ -4743,6 +4793,7 @@ async fn an_ended_sketch_goes_on_in_the_project(cx: &mut TestAppContext) {
             model: None,
             goal: None,
             sketch: None,
+            within: Box::default(),
             answer,
         })
         .unwrap();
@@ -5248,6 +5299,7 @@ async fn open_child(
             model: None,
             goal: None,
             sketch: None,
+            within: Box::default(),
             answer,
         })
         .unwrap();
@@ -5358,6 +5410,7 @@ async fn a_subagent_goes_by_its_title_and_runs_with_the_model_asked_as_offered(
                 model: Some(model.to_owned()),
                 goal: None,
                 sketch: None,
+                within: Box::default(),
                 answer,
             })
             .unwrap();
@@ -5436,6 +5489,7 @@ async fn a_subagent_run_in_the_background_reports_to_its_opener_unasked(cx: &mut
             model: None,
             goal: None,
             sketch: None,
+            within: Box::default(),
             answer,
         })
         .unwrap();

@@ -85,6 +85,8 @@ impl Daemon {
         for child in children {
             self.resolve(child, by);
         }
+        // The worktrees made for it may go now.
+        self.tidy_worktrees(Instant::now(), true);
     }
 
     /// Reopens the chat `key`, if it was marked done.

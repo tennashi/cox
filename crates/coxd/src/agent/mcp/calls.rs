@@ -19,7 +19,7 @@ use crate::agent::mcp::{
     answered_with_picture,
 };
 use crate::chat::sketch::Sketch;
-use crate::{raw, wiki};
+use crate::{raw, wiki, worktrees};
 
 mod android;
 mod mac;
@@ -38,6 +38,7 @@ const PROPOSE_ABOUT: &str = "propose_about";
 const PROPOSE_ICON: &str = "propose_icon";
 const PROPOSE_PROJECT: &str = "propose_project";
 const START_SKETCH: &str = "start_sketch";
+const MAKE_WORKTREE: &str = "make_worktree";
 const WIKI_SEARCH: &str = "wiki_search";
 const WIKI_READ: &str = "wiki_read";
 const WIKI_WRITE: &str = "wiki_write";
@@ -231,6 +232,7 @@ fn all_tools() -> Value {
     propose_icon_tool(),
     propose_project_tool(),
     start_sketch_tool(),
+    make_worktree_tool(),
     ]);
     if let Some(all) = tools.as_array_mut() {
         all.extend(wiki_tools());
@@ -533,6 +535,96 @@ fn show_map_tool() -> Value {
 }
 
 /// The tool that opens a sketch beside the chat, as the agent learns of it.
+fn make_worktree_tool() -> Value {
+    json!(
+    {
+        "name": MAKE_WORKTREE,
+        "description": "Makes a Git worktree of one of the project's directories, to work \
+            on a branch apart from the directory's own checkout, and answers where it is: \
+            in `worktrees/<directory>/<branch>` in the project's folder, where Cox lists it \
+            under its repository for the human. Make worktrees with this, never with `git \
+            worktree add` yourself. Cox marks it as this chat's, and takes it away once this \
+            chat is done and the worktree holds nothing that is not elsewhere: no change left \
+            uncommitted, and its commits merged or pushed. A worktree for a subagent, make \
+            with agent's `worktree` instead, so that it works there from the start.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "directory": {
+                    "type": "string",
+                    "description": "The project's directory whose repository it is of, by \
+                        its name in `directories`.",
+                },
+                "branch": {
+                    "type": "string",
+                    "description": "The branch it checks out: made from `from`, unless the \
+                        repository has one of that name already. With none, its head is \
+                        detached at `from`, to look at a commit.",
+                },
+                "from": {
+                    "type": "string",
+                    "description": "The commit it starts from, as Git names one, such as \
+                        `origin/main`; the remote's default branch unless given.",
+                },
+            },
+            "required": ["directory"],
+        },
+    })
+}
+
+/// What `arguments` ask a worktree to be made of, as `make_worktree` and
+/// agent's `worktree` take it.
+pub(super) fn asked_worktree(arguments: &Value) -> Result<worktrees::Asked, String> {
+    let text = |key: &str| -> Result<Option<String>, String> {
+        match arguments.get(key) {
+            None | Some(Value::Null) => Ok(None),
+            Some(Value::String(text)) => Ok(Some(text.clone())),
+            Some(_) => Err(format!("`{key}` is not a string")),
+        }
+    };
+    Ok(worktrees::Asked {
+        directory: text("directory")?
+            .ok_or("no `directory`: name the project's directory the worktree is of")?,
+        branch: text("branch")?,
+        from: text("from")?,
+    })
+}
+
+/// Makes a worktree, as `asked` says, of a directory of the project the
+/// chat is in, for the chat, and answers where it is.
+pub(super) async fn make_worktree_for(
+    asked: worktrees::Asked,
+    chats: &UnboundedSender<ChatRequest>,
+) -> Result<PathBuf, String> {
+    let whereabouts = whereabouts(chats).await?;
+    let project = whereabouts
+        .folder
+        .ok_or("this chat is in no project, so it has no directories to make a worktree of")?;
+    let chat = whereabouts.kept.and_then(|kept| kept.parse::<i64>().ok());
+    tokio::task::spawn_blocking(move || worktrees::make(&project, &asked, chat))
+        .await
+        .map_err(|error| format!("the worktree is not made: {error}"))?
+}
+
+/// Makes the worktree `arguments` ask for, and tells the agent where.
+async fn make_worktree(
+    arguments: &Value,
+    chats: &UnboundedSender<ChatRequest>,
+) -> Result<String, String> {
+    let asked = asked_worktree(arguments)?;
+    let label = asked
+        .branch
+        .clone()
+        .unwrap_or_else(|| "a detached head".to_owned());
+    let folder = make_worktree_for(asked, chats).await?;
+    Ok(format!(
+        "Made a worktree on {label} at {}. Work there, giving its path, as `git -C` or a \
+         `cd` in each command. Cox takes it away once this chat is done and it holds \
+         nothing that is not elsewhere.",
+        folder.display()
+    ))
+}
+
 fn start_sketch_tool() -> Value {
     json!(
     {
@@ -558,6 +650,12 @@ fn start_sketch_tool() -> Value {
                     "type": "string",
                     "description": "What the sketch tries, in a sentence: its agent is \
                         told it, and the sketch is named after it.",
+                },
+                "directory": {
+                    "type": "string",
+                    "description": "The project's directory a sketch from \"project\" is \
+                        a worktree of, by its name in `directories`, when the project has \
+                        several repositories; its one repository unless given.",
                 },
             },
             "required": ["from", "what"],
@@ -855,6 +953,7 @@ pub(super) async fn call(
         PROPOSE_PROJECT => propose_project(arguments, chats).await,
         SHOW_MEDIA => show_media(arguments, cwd, chats).await,
         START_SKETCH => start_sketch(arguments, chats).await,
+        MAKE_WORKTREE => make_worktree(arguments, chats).await,
         WIKI_SEARCH => wiki_search(arguments, chats).await,
         WIKI_READ => wiki_read(arguments, chats).await,
         WIKI_WRITE => wiki_write(arguments, cwd, chats).await,
@@ -1502,10 +1601,16 @@ async fn start_sketch(
         .filter(|what| !what.is_empty())
         .ok_or("no `what`: say what you try")?
         .to_owned();
+    let directory = match arguments.get("directory") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(directory)) => Some(directory.clone()),
+        Some(_) => return Err("`directory` is not a string".to_owned()),
+    };
     let (answer, made) = oneshot::channel();
     chats
         .send(ChatRequest::StartSketch {
             sketch,
+            directory,
             what,
             show: false,
             answer,
@@ -2120,6 +2225,7 @@ mod tests {
             "propose_icon",
             "propose_project",
             "start_sketch",
+            "make_worktree",
             "wiki_search",
             "wiki_read",
             "wiki_write",
@@ -2329,12 +2435,60 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn makes_a_worktree_of_a_directory_of_the_chats_project_for_it() {
+        let project = TempDir::new();
+        let app = project.join(crate::settings::DIRECTORIES).join("app");
+        fs::create_dir_all(&app).unwrap();
+        crate::testing::run_git(&app, &["init", "--quiet", "-b", "main"]).unwrap();
+        crate::testing::run_git(&app, &["commit", "--quiet", "--allow-empty", "-m", "first"])
+            .unwrap();
+        let (sent, _requests) = unbounded_channel();
+        let (chats, mut asked) = unbounded_channel();
+        let folder = project.to_path_buf();
+        let window = tokio::spawn(async move {
+            while let Some(request) = asked.recv().await {
+                if let ChatRequest::Whereabouts { answer } = request {
+                    let _ = answer.send(Whereabouts {
+                        project: "shop".to_owned(),
+                        folder: Some(folder.clone()),
+                        chat: "Chat 1".to_owned(),
+                        kept: Some("12".to_owned()),
+                    });
+                }
+            }
+        });
+        let params = json!({ "name": MAKE_WORKTREE, "arguments": {
+            "directory": "app",
+            "branch": "fix",
+        } });
+
+        let answered = call(&params, Path::new("/work"), None, false, &sent, &chats)
+            .await
+            .unwrap();
+
+        assert_eq!(answered["isError"], false, "{answered}");
+        let made = project.join(worktrees::WORKTREES).join("app").join("fix");
+        let told = answered["content"][0]["text"].as_str().unwrap();
+        assert!(told.contains(&made.display().to_string()), "{told}");
+        assert_eq!(worktrees::of(&app, &project)[0].made_for, Some(12));
+
+        let params = json!({ "name": MAKE_WORKTREE, "arguments": { "branch": "fix" } });
+        let answered = call(&params, Path::new("/work"), None, false, &sent, &chats)
+            .await
+            .unwrap();
+        assert_eq!(answered["isError"], true, "a directory is named");
+        drop(chats);
+        window.await.unwrap();
+    }
+
+    #[tokio::test]
     async fn asks_the_window_to_make_the_chat_a_sketch() {
         let (sent, _requests) = unbounded_channel();
         let (chats, mut asked) = unbounded_channel();
         let window = tokio::spawn(async move {
             let Some(ChatRequest::StartSketch {
                 sketch,
+                directory: None,
                 what,
                 show,
                 answer,

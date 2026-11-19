@@ -21,6 +21,8 @@
 //! - [`main`] starts coxd, and [`process`] runs it as a process of its
 //!   own, which a window reaches on a socket, and [`client`] is how the
 //!   window does. [`launcher`] starts each chat's agent for it.
+//! - [`tidy`] takes away the worktrees Cox made for chats once they
+//!   are done.
 //! - [`phone`] serves the human's phone a page of the chats, which watches
 //!   them beside the window, and [`push`] tells the phone of the chats that
 //!   need the human while they are away from the Mac.
@@ -36,6 +38,7 @@ mod pulls;
 pub mod push;
 mod resolve;
 mod sketches;
+mod tidy;
 pub mod wire;
 
 pub use launcher::{hands_off, session_meta};
@@ -55,7 +58,7 @@ use tokio::sync::oneshot;
 
 use crate::agent::instructions::Instructions;
 use crate::agent::mcp::{
-    ChatRequest, OpenedChat, Ran, Seen, Stopped, Subagent, ToolRequest, Waited, Whereabouts,
+    ChatRequest, OpenedChat, Ran, Seen, Stopped, Subagent, ToolRequest, Waited, Whereabouts, Within,
 };
 use crate::agent::setup::{Policy, Setup, StageUse, Withheld, keeps_in_wiki};
 use crate::agent::{Agent, AgentEvent, Start};
@@ -69,6 +72,7 @@ use crate::storage;
 use crate::terminal::run_unseen;
 use crate::trigger::By;
 use crate::workflow;
+use crate::worktrees;
 use chat::{Again, Chat, Task, spawn};
 use wire::{AtWork, ChatRow, FromDaemon, Hello, Listing, ProjectRow, StageAsk, ToDaemon};
 
@@ -287,6 +291,11 @@ pub enum Internal {
     Pulled {
         pull: crate::github::Pull,
         read: Result<crate::github::Status, crate::github::Problem>,
+    },
+    /// Cox took away the worktrees `removed`, of chats that were done
+    /// (see [`tidy`]).
+    Tidied {
+        removed: Vec<crate::worktrees::Removed>,
     },
 }
 
@@ -634,6 +643,9 @@ pub struct Daemon {
     /// Why no chat shows its pull requests, as when `gh` is not logged
     /// in, if that is so.
     github: Option<String>,
+    /// Whether coxd looks which worktrees it may take away (see
+    /// [`tidy`]).
+    tidying: tidy::Tidying,
 }
 
 /// How the daemon is reached: what to tell it.
@@ -779,6 +791,7 @@ impl Daemon {
             scheduled: HashMap::new(),
             watches: pulls::Watches::new(),
             github: None,
+            tidying: tidy::Tidying::default(),
         };
         daemon.read_kept();
         daemon
@@ -1670,7 +1683,7 @@ impl Daemon {
                 }
             }
             ToDaemon::StartSketch { key, sketch, what } => {
-                match self.start_sketch(key, sketch, &what) {
+                match self.start_sketch(key, sketch, None, &what) {
                     Ok(opened) => self.reveals.push(opened.number),
                     Err(why) => {
                         if let Some(chat) = self.chat(key) {
@@ -2104,8 +2117,13 @@ impl Daemon {
             Internal::Schedules => {
                 self.run_schedules(&crate::settings::workflow(), &jiff::Zoned::now());
             }
-            Internal::Pulls => self.look_at_pulls(Instant::now()),
+            Internal::Pulls => {
+                let now = Instant::now();
+                self.look_at_pulls(now);
+                self.tidy_worktrees(now, false);
+            }
             Internal::Pulled { pull, read } => self.pulled(&pull, read, Instant::now()),
+            Internal::Tidied { removed } => self.tidied(removed),
         }
     }
 
@@ -2379,11 +2397,12 @@ impl Daemon {
         match request {
             ChatRequest::StartSketch {
                 sketch,
+                directory,
                 what,
                 show,
                 answer,
             } => {
-                let opened = self.start_sketch(key, sketch, &what);
+                let opened = self.start_sketch(key, sketch, directory.as_deref(), &what);
                 if show && let Ok(opened) = &opened {
                     self.reveals.push(opened.number);
                 }
@@ -2440,10 +2459,12 @@ impl Daemon {
                 model,
                 goal,
                 sketch,
+                within,
                 answer,
             } => {
                 let setup = Setup { sketch, ..setup };
-                let opened = self.open_chat(key, &text, title, setup, model.as_deref(), goal);
+                let opened =
+                    self.open_chat(key, &text, title, setup, model.as_deref(), goal, *within);
                 answer.send(opened).ok();
             }
             ChatRequest::WaitChat { chat, answer } => self.wait_chat(key, chat, answer),
@@ -2931,7 +2952,10 @@ impl Daemon {
     /// own; any other chat works where the chat that opened it does. Its
     /// agent runs with `model` as far as its session offers it, and it
     /// goes by `title`, if given, as it would by its first line, until its
-    /// agent titles it.
+    /// agent titles it. Where it works, `within` says: a sketch of the
+    /// project of one of its directories, or a worktree Cox makes for it,
+    /// marked as its own.
+    #[expect(clippy::too_many_arguments, reason = "what a chat opens with")]
     fn open_chat(
         &mut self,
         key: u64,
@@ -2940,21 +2964,45 @@ impl Daemon {
         setup: Setup,
         model: Option<&str>,
         goal: Option<Goal>,
+        within: Within,
     ) -> Result<OpenedChat, String> {
         let slot = self.slot(key).ok_or("the chat is gone")?;
         let (mut setup, withheld) = setup.opened_by(slot.setup.as_ref());
         let folder = slot.setup.as_ref().and_then(|setup| setup.folder.clone());
         let project = slot.project;
-        setup.folder = match setup.sketch {
-            Some(sketch) => {
-                let from = folder.unwrap_or_else(|| self.projects[project].folder.clone());
-                let made = make_sketch(sketch, &from)?;
+        let project_folder = self.projects[project].folder.clone();
+        let mut worktree = None;
+        setup.folder = match (setup.sketch, within.worktree) {
+            (Some(_), Some(_)) => {
+                return Err("a subagent works in a sketch or in a worktree, not both".to_owned());
+            }
+            (Some(sketch), None) => {
+                let from = folder.unwrap_or_else(|| project_folder.clone());
+                let made = make_sketch(sketch, &from, within.directory.as_deref())?;
                 setup.policy = sketch::allow(setup.policy, &made, &workflow::sketch().allow);
                 Some(made)
             }
-            None => folder,
+            (None, Some(asked)) => {
+                if project == 0 {
+                    return Err(
+                        "this chat is in no project, so it has no directories to make a \
+                         worktree of"
+                            .to_owned(),
+                    );
+                }
+                let made = worktrees::make(&project_folder, &asked, None)?;
+                worktree = Some(made.clone());
+                Some(made)
+            }
+            (None, None) => folder,
         };
         let mut opened = self.open_under(key, text, setup, model, goal)?;
+        if let Some(made) = &worktree
+            && let Some(kept) = self.slot(opened.number).and_then(|slot| slot.kept)
+            && let Err(error) = worktrees::claim(made, kept.number())
+        {
+            tracing::error!("the worktree is not marked as the chat's: {error}");
+        }
         let store = Rc::clone(&self.store);
         if let Some(title) = title
             && let Some(slot) = self.slot_mut(opened.number)
@@ -3328,11 +3376,15 @@ fn agent_of(agents: &Agents, kept: Option<ChatId>, store: &Store) -> String {
 }
 
 /// Makes the folder of a sketch that starts from `sketch`, of the folder
-/// `from`, and answers it.
-fn make_sketch(sketch: Sketch, from: &Path) -> Result<PathBuf, String> {
+/// `from`, or of its project's directory `directory`, and answers it.
+fn make_sketch(sketch: Sketch, from: &Path, directory: Option<&str>) -> Result<PathBuf, String> {
     let sketches =
         storage::path(storage::Kept::Sketches).ok_or("Cox cannot tell where to keep sketches")?;
-    sketch::make(sketch, from, &sketches)
+    let from = match sketch {
+        Sketch::Project => sketch::source(from, directory)?,
+        Sketch::Empty => from.to_owned(),
+    };
+    sketch::make(sketch, &from, &sketches)
 }
 
 /// Whether a chat set up as `setup` merges what it made when the human
@@ -4176,6 +4228,7 @@ mod tests {
                         model: None,
                         goal: None,
                         sketch: None,
+                        within: Box::default(),
                         answer,
                     },
                 );
@@ -4239,6 +4292,165 @@ mod tests {
     /// What the chat's agent is told of a subagent, "Look", that ended its
     /// turn saying "Found it.", per the requirement.
     const FOUND_IT: &str = "The subagent \"Look\" ended its turn. It last said:\n\nFound it.";
+
+    /// A daemon whose agents the test plays, with a chat of the project in
+    /// `home/shop`, whose directory `app` is a repository with a commit,
+    /// and the chat's key.
+    async fn shop_with_app(
+        home: &TempDir,
+        agents: &Rc<PlayedAgents>,
+    ) -> (Daemon, UnboundedReceiver<Internal>, u64) {
+        storage::keep_on_this_thread(Some(home.join("data")));
+        let shop = home.join("shop");
+        let app = shop.join(crate::settings::DIRECTORIES).join("app");
+        std::fs::create_dir_all(&app).unwrap();
+        crate::testing::run_git(&app, &["init", "--quiet", "-b", "main"]).unwrap();
+        crate::testing::run_git(&app, &["commit", "--quiet", "--allow-empty", "-m", "first"])
+            .unwrap();
+        let store = Rc::new(Store::in_memory().unwrap());
+        store.project(&shop, "shop").unwrap();
+        let (internal, mut heard) = unbounded_channel();
+        let spawns: Rc<dyn Spawns> = agents.clone();
+        let mut daemon = Daemon::new(home.to_path_buf(), false, store, spawns, internal);
+        daemon.act(ToDaemon::NewChat { folder: Some(shop) });
+        pump(&mut daemon, &mut heard).await;
+        let key = daemon.chats.last().unwrap().key;
+        (daemon, heard, key)
+    }
+
+    #[test]
+    fn a_subagent_given_a_worktree_works_in_one_cox_makes_marked_as_its_own() {
+        on_daemon(async {
+            let home = TempDir::new();
+            let agents = Rc::new(PlayedAgents::default());
+            let (mut daemon, _heard, key) = shop_with_app(&home, &agents).await;
+            let (answer, mut opened) = oneshot::channel();
+            daemon.asked(
+                key,
+                ChatRequest::OpenChat {
+                    text: "fix it".to_owned(),
+                    title: Some("Fix".to_owned()),
+                    setup: Setup::default(),
+                    model: None,
+                    goal: None,
+                    sketch: None,
+                    within: Box::new(Within {
+                        directory: None,
+                        worktree: Some(worktrees::Asked {
+                            directory: "app".to_owned(),
+                            branch: Some("fix".to_owned()),
+                            from: None,
+                        }),
+                    }),
+                    answer,
+                },
+            );
+            let number = opened.try_recv().unwrap().unwrap().number;
+
+            let shop = home.join("shop");
+            let made = shop.join(worktrees::WORKTREES).join("app").join("fix");
+            let slot = daemon.slot(number).unwrap();
+            assert_eq!(
+                slot.setup.as_ref().and_then(|setup| setup.folder.clone()),
+                Some(made.clone())
+            );
+            let kept = slot.kept.unwrap().number();
+            let listed = worktrees::of(&shop.join(crate::settings::DIRECTORIES).join("app"), &shop);
+            assert_eq!(listed.len(), 1);
+            assert_eq!(listed[0].made_for, Some(kept));
+        });
+    }
+
+    #[test]
+    fn the_worktree_made_for_a_subagent_goes_once_it_is_done_and_it_is_told() {
+        on_daemon(async {
+            let home = TempDir::new();
+            let agents = Rc::new(PlayedAgents::default());
+            let (mut daemon, mut heard, key) = shop_with_app(&home, &agents).await;
+            let (answer, mut opened) = oneshot::channel();
+            daemon.asked(
+                key,
+                ChatRequest::OpenChat {
+                    text: "look".to_owned(),
+                    title: Some("Look".to_owned()),
+                    setup: Setup::default(),
+                    model: None,
+                    goal: None,
+                    sketch: None,
+                    within: Box::new(Within {
+                        directory: None,
+                        worktree: Some(worktrees::Asked {
+                            directory: "app".to_owned(),
+                            branch: Some("look".to_owned()),
+                            from: None,
+                        }),
+                    }),
+                    answer,
+                },
+            );
+            let number = opened.try_recv().unwrap().unwrap().number;
+            let made = home
+                .join("shop")
+                .join(worktrees::WORKTREES)
+                .join("app")
+                .join("look");
+            assert!(made.exists());
+
+            daemon.resolve(number, ResolvedBy::Human);
+            // Cox looks on a thread of its own, and says what it took away.
+            let tidied = tokio::time::timeout(crate::testing::waits::GIVEN_UP, async {
+                loop {
+                    match heard.recv().await {
+                        Some(event @ Internal::Tidied { .. }) => break event,
+                        Some(event) => daemon.hear(event),
+                        None => panic!("the daemon's events ended"),
+                    }
+                }
+            })
+            .await
+            .expect("Cox looked which worktrees it may take away");
+            daemon.hear(tidied);
+            assert!(!daemon.tidying_now());
+
+            assert!(!made.exists(), "the worktree is taken away");
+            let notes: Vec<String> = daemon
+                .chat(number)
+                .unwrap()
+                .conversation()
+                .entries()
+                .iter()
+                .filter_map(|entry| match entry {
+                    Entry::Note(note) => Some(note.clone()),
+                    _ => None,
+                })
+                .collect();
+            assert!(
+                notes
+                    .iter()
+                    .any(|note| note.starts_with("Took away the worktree at ")
+                        && note.ends_with("held nothing that is not elsewhere.")),
+                "{notes:?}"
+            );
+        });
+    }
+
+    #[test]
+    fn a_sketch_of_a_project_whose_folder_is_no_repository_is_of_its_one_repository() {
+        on_daemon(async {
+            let home = TempDir::new();
+            let agents = Rc::new(PlayedAgents::default());
+            let (mut daemon, _heard, key) = shop_with_app(&home, &agents).await;
+
+            let opened = daemon.start_sketch(key, Sketch::Project, None, "try");
+
+            let folder = opened.unwrap().folder.unwrap();
+            assert!(
+                crate::testing::run_git(&folder, &["rev-parse", "HEAD"]).is_ok(),
+                "{}",
+                folder.display()
+            );
+        });
+    }
 
     #[test]
     fn an_agent_finds_a_subagent_by_its_title_among_its_own_or_by_its_number() {

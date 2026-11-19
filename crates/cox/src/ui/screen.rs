@@ -122,15 +122,30 @@ pub fn click(
     button: gpui::MouseButton,
     count: usize,
 ) -> Result<(), String> {
-    use objc2_app_kit::NSEventType;
-    let (down, up) = match button {
-        gpui::MouseButton::Right => (NSEventType::RightMouseDown, NSEventType::RightMouseUp),
-        gpui::MouseButton::Middle => (NSEventType::OtherMouseDown, NSEventType::OtherMouseUp),
-        _ => (NSEventType::LeftMouseDown, NSEventType::LeftMouseUp),
+    use objc2_app_kit::{NSEventModifierFlags, NSEventType};
+    // An event the system makes numbers its button 0, which gpui takes
+    // for the left one; gpui takes a left click with Control held for a
+    // right one, as macOS does.
+    let (down, up, held) = match button {
+        gpui::MouseButton::Right => (
+            NSEventType::LeftMouseDown,
+            NSEventType::LeftMouseUp,
+            NSEventModifierFlags::Control,
+        ),
+        gpui::MouseButton::Middle => (
+            NSEventType::OtherMouseDown,
+            NSEventType::OtherMouseUp,
+            NSEventModifierFlags::empty(),
+        ),
+        _ => (
+            NSEventType::LeftMouseDown,
+            NSEventType::LeftMouseUp,
+            NSEventModifierFlags::empty(),
+        ),
     };
     for clicks in 1..=count {
         for kind in [down, up] {
-            mouse(view, kind, at, isize::try_from(clicks).unwrap_or(1))?;
+            mouse(view, kind, at, isize::try_from(clicks).unwrap_or(1), held)?;
         }
     }
     Ok(())
@@ -164,7 +179,13 @@ pub fn drag(
         Drag::Move => NSEventType::LeftMouseDragged,
         Drag::Release => NSEventType::LeftMouseUp,
     };
-    mouse(view, kind, at, 1)
+    mouse(
+        view,
+        kind,
+        at,
+        1,
+        objc2_app_kit::NSEventModifierFlags::empty(),
+    )
 }
 
 /// Turns the wheel over `at`, as [`drag`] hands the view a drag, by `down`
@@ -209,8 +230,9 @@ fn mouse(
     kind: objc2_app_kit::NSEventType,
     at: gpui::Point<Pixels>,
     clicks: isize,
+    held: objc2_app_kit::NSEventModifierFlags,
 ) -> Result<(), String> {
-    use objc2_app_kit::{NSEvent, NSEventModifierFlags, NSEventType};
+    use objc2_app_kit::{NSEvent, NSEventType};
     use objc2_foundation::{NSPoint, NSProcessInfo};
     let window = view.window().ok_or("the view is in no window")?;
     // `at` is a point of the screenshot, which shows the whole window, its
@@ -229,7 +251,7 @@ fn mouse(
     let event = NSEvent::mouseEventWithType_location_modifierFlags_timestamp_windowNumber_context_eventNumber_clickCount_pressure(
         kind,
         location,
-        NSEventModifierFlags::empty(),
+        held,
         NSProcessInfo::processInfo().systemUptime(),
         window.windowNumber(),
         None,

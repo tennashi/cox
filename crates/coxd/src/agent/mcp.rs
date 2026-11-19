@@ -247,6 +247,8 @@ pub enum ChatRequest {
         /// What the chat starts from when it is a sketch, working in a
         /// folder of its own.
         sketch: Option<Sketch>,
+        /// Where the chat works, beside what its setup says.
+        within: Box<Within>,
         answer: oneshot::Sender<Result<OpenedChat, String>>,
     },
     /// Open a sketch beside the chat, under it in the list, that starts
@@ -256,6 +258,9 @@ pub enum ChatRequest {
     /// or why it cannot open.
     StartSketch {
         sketch: Sketch,
+        /// The project's directory a sketch from the project is a
+        /// worktree of, when the project's folder is no repository.
+        directory: Option<String>,
         what: String,
         show: bool,
         answer: oneshot::Sender<Result<OpenedChat, String>>,
@@ -321,6 +326,17 @@ pub struct Whereabouts {
     pub chat: String,
     /// The number the chat is kept by, if it is kept.
     pub kept: Option<String>,
+}
+
+/// Where a chat an agent opens works, beside what its setup says.
+#[derive(Debug, Default)]
+pub struct Within {
+    /// The project's directory a sketch of the project is a worktree of,
+    /// when the project's folder is no repository.
+    pub directory: Option<String>,
+    /// The worktree Cox makes for the chat to work in, when it is to work
+    /// in one.
+    pub worktree: Option<crate::worktrees::Asked>,
 }
 
 /// What `agent_stop` stopped of a subagent.
@@ -1145,7 +1161,7 @@ mod tests {
         let cwd = Path::new("/");
         let listed = answer_now(&ask("tools/list", &json!({})), cwd, &sent).unwrap();
         // Cox's own, the Android emulator's, and the Mac's windows' on macOS.
-        let tools = 23 + 7 + if cfg!(target_os = "macos") { 6 } else { 0 };
+        let tools = 24 + 7 + if cfg!(target_os = "macos") { 6 } else { 0 };
         assert_eq!(listed["result"]["tools"].as_array().unwrap().len(), tools);
         let called = ask("tools/call", &json!({ "name": "no_such_tool" }));
         let called = answer_now(&called, cwd, &sent).unwrap();
