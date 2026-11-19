@@ -52,6 +52,10 @@
 //!   `cox://api/activity/dismiss/<plans>` hides the plans the JSON of
 //!   `<plans>` names until their chats' agents send others, and answers
 //!   what goes on then. Only a plugin's own `fetch` has them hidden.
+//!   `cox://api/activity/timeline/{"chat":<chat>}` tells, alone, the story
+//!   of the chat coxd keeps as `<chat>`: when it started, what it did
+//!   when, and when and how it ended (see
+//!   [`crate::stage::activity::timeline`]).
 //! - `cox://api/commands`: what the agents of the folder's chats run,
 //!   step by step, and what a command that ran long printed (see
 //!   [`crate::stage::commands`]).
@@ -397,6 +401,13 @@ impl Plugins {
                 "dismiss" => activity::dismiss(&asked),
                 "say" => open = Some(activity::say(&asked)?),
                 "thread" => open = Some(serde_json::from_str::<activity::Open>(&asked).ok()?),
+                // A chat's story, alone, read only for the row the human
+                // opened.
+                "timeline" => {
+                    return Some(activity::timeline(
+                        &serde_json::from_str::<activity::Of>(&asked).ok()?,
+                    ));
+                }
                 _ => return None,
             }
         }
@@ -635,6 +646,24 @@ mod tests {
         assert!(body("cox://api/triggers/tried/card", Asker::Anyone).is_some());
         assert!(body("cox://api/triggers/discussion/card", Asker::Anyone).is_some());
         assert!(body("cox://map/", Asker::Anyone).is_some());
+    }
+
+    #[test]
+    fn a_chats_story_is_told_alone_for_the_chat_asked() {
+        let root = TempDir::new();
+        coxd::storage::keep_on_this_thread(Some(root.join("data")));
+        let plugins = Plugins::new(root.to_path_buf(), Outlines::new().0, Calls::new().0);
+        let serve = plugins.serve();
+        let body = |url: &str| serve(url, Asker::Plugin).map(|resource| resource.body);
+
+        // No chat kept by that number: nothing to tell, and not what goes
+        // on in the folder either.
+        assert_eq!(
+            body(r#"cox://api/activity/timeline/{"chat":4242}"#),
+            Some(b"null".to_vec())
+        );
+        assert_eq!(body("cox://api/activity/timeline/not-a-chat"), None);
+        coxd::storage::keep_on_this_thread(None);
     }
 
     #[test]

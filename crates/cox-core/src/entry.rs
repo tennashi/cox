@@ -610,6 +610,12 @@ pub struct Step {
     /// kept, and one that was so in a plan an older Cox kept before.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub since: Option<i64>,
+    /// When coxd first saw it under way, in milliseconds since the epoch,
+    /// kept once it is done, for when the work on it started: None for a
+    /// step not started, one done without coxd seeing it under way, and
+    /// one an older Cox kept.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started: Option<i64>,
     /// What coxd knows it by in its chat, from 1, which it keeps as the
     /// agent rewords it, for what is said of it to stay with it. None
     /// for a step an older Cox kept.
