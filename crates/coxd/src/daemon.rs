@@ -5177,7 +5177,9 @@ mod tests {
                     name: "ci (macos-latest)".to_owned(),
                     state,
                     link: None,
+                    ended: None,
                 }],
+                times: crate::github::Times::default(),
             };
             for state in [CheckState::Pending, CheckState::Failed, CheckState::Failed] {
                 opener.daemon.pulled(&pull, Ok(status(state)), now);
@@ -5254,7 +5256,9 @@ mod tests {
                 name: "ci (macos-latest)".to_owned(),
                 state,
                 link: Some("https://github.com/tennashi/cox/actions/runs/1/job/2".to_owned()),
+                ended: None,
             }],
+            times: crate::github::Times::default(),
         };
         (pull, status)
     }

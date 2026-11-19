@@ -1585,6 +1585,7 @@ fn step(entry: PlanEntry) -> Step {
             PlanState::Completed => StepState::Completed,
         },
         since: None,
+        started: None,
         id: None,
     }
 }

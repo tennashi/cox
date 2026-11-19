@@ -1872,7 +1872,13 @@ impl Chat {
         let commands_changed = self.conversation.take_commands_changed();
         let spent_changed = self.conversation.take_spent_changed();
         let baseline_changed = self.conversation.take_baseline_changed();
+        let turns_ended = self.conversation.take_turns_ended();
         if let Some(record) = &self.record {
+            for &end in &turns_ended {
+                if let Err(error) = record.turn_ended(end) {
+                    tracing::error!("how the chat's turn ended is not kept: {error:#}");
+                }
+            }
             if settings_changed && let Err(error) = record.settings(self.conversation.settings()) {
                 tracing::error!("the chat's settings are not kept: {error:#}");
             }
@@ -2242,6 +2248,33 @@ mod tests {
 
             assert_eq!(talk.agent.prompts(), ["hello"]);
             assert_eq!(talk.state(), State::Busy);
+        });
+    }
+
+    #[test]
+    fn keeps_how_and_when_each_turn_ended() {
+        on_daemon(async {
+            let mut talk = Talk::new(None);
+            talk.take_a_turn("hello");
+            assert!(talk.chat.submit("again", Vec::new(), None));
+            talk.hear(AgentEvent::TurnEnded(StopReason::Cancelled));
+            talk.chat.flush();
+
+            let store = cox_core::store::Store::open(&talk.places.join("cox.db")).unwrap();
+            let chat = store.chats().unwrap()[0].id;
+            let hows: Vec<_> = store
+                .turns(chat)
+                .unwrap()
+                .iter()
+                .map(|end| end.how)
+                .collect();
+            assert_eq!(
+                hows,
+                [
+                    cox_core::store::Ended::Done,
+                    cox_core::store::Ended::Stopped
+                ]
+            );
         });
     }
 
