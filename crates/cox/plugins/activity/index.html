@@ -7,49 +7,54 @@
     <style>
       /* The colors of the window, which Cox gives every plugin as
          `cox://api/theme.css` (see `ui::theme`): the page sits on the
-         stage's card, as Cox's own tabs do. */
+         stage's card, as Cox's own tabs do. Beside them, the page keeps
+         to three sizes of type, one weight for names, a scale of space
+         and one radius, and gives color only to how a chat stands. */
       :root {
         --sans: -apple-system, "Segoe UI", "Noto Sans", "Helvetica Neue", Arial, sans-serif;
         --mono: Menlo, "DejaVu Sans Mono", monospace;
+        --small: 11px;
+        --body: 13px;
+        --title: 15px;
+        --space-1: 4px;
+        --space-2: 8px;
+        --space-3: 12px;
+        --space-4: 24px;
+        --radius: 6px;
       }
       html,
       body {
         margin: 0;
         background: var(--surface);
         color: var(--foreground);
-        font: 13px/1.5 var(--sans);
+        font: var(--body) / 1.5 var(--sans);
       }
       #app {
-        padding: 12px 16px 40px;
+        padding: var(--space-3) var(--space-4) 40px;
         box-sizing: border-box;
       }
       a {
-        color: var(--link);
+        color: inherit;
         text-decoration: none;
       }
+      button {
+        font: inherit;
+      }
       /* The heading, as Cox's own tabs have it (see `stage::heading`):
-         the title, a line on what the tab shows, and, at the right
-         edge, where it shows it from. */
+         the title and, at the right edge, where it shows it from. */
       .head {
         display: flex;
-        align-items: center;
-        gap: 12px;
-        padding: 0 4px;
+        align-items: baseline;
+        gap: var(--space-3);
         min-height: 26px;
-        margin-bottom: 4px;
+        margin-bottom: var(--space-2);
         white-space: nowrap;
       }
       .head h1 {
         flex: none;
         margin: 0;
-        font-size: 15px;
+        font-size: var(--title);
         font-weight: 600;
-      }
-      .head .summary {
-        min-width: 0;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        color: var(--dim);
       }
       .head .where {
         flex: 1;
@@ -57,385 +62,417 @@
         overflow: hidden;
         text-overflow: ellipsis;
         text-align: right;
-        font: 11.5px var(--mono);
+        font: var(--small) var(--mono);
         color: var(--faint);
       }
-      .tier {
-        font: 600 10.5px var(--sans);
-        letter-spacing: 0.08em;
-        text-transform: uppercase;
-        color: var(--faint);
-        margin: 16px 0 6px;
-        padding: 0 4px;
+      .notice {
+        color: var(--dim);
+        font-size: var(--small);
+        margin-bottom: var(--space-2);
       }
-      .tier b {
-        color: var(--asking);
-        margin-left: 4px;
-      }
-      .tier i {
-        font-style: normal;
-        color: var(--accent);
-        margin-left: 4px;
-      }
-      /* What is asked and at work on the left, what was decided on the
-         right, once the page is wide enough for both. */
-      .columns {
+      /* How it all stands, in three numbers, then every step of every
+         plan in one bar. */
+      .numbers {
         display: grid;
-        grid-template-columns: minmax(0, 1fr);
-        column-gap: 20px;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: var(--space-2);
+        margin-bottom: var(--space-3);
       }
-      @media (min-width: 760px) {
-        .columns {
-          grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-        }
+      .number {
+        background: var(--raised);
+        border-radius: var(--radius);
+        padding: var(--space-2) var(--space-3);
       }
-      .row {
-        display: flex;
-        align-items: baseline;
-        gap: 10px;
-        border-radius: 8px;
-        padding: 7px 10px;
-        color: var(--foreground);
+      .number .count {
+        font-size: var(--title);
+        font-weight: 600;
+        font-variant-numeric: tabular-nums;
       }
-      a.row:hover {
-        background: var(--hover);
-        text-decoration: none;
+      .number .what {
+        color: var(--dim);
+        font-size: var(--small);
       }
-      .waiting .row {
-        background: var(--surface);
-        border: 1px solid var(--border);
-        margin-bottom: 6px;
+      .number.yours .count {
+        color: var(--asking);
       }
-      .dot {
-        flex: none;
-        width: 8px;
-        height: 8px;
-        border-radius: 50%;
-        align-self: center;
-      }
-      .dot.asks {
-        background: var(--asking);
-      }
-      .dot.unread {
-        background: var(--accent);
-      }
-      .dot.busy {
-        border: 2px solid var(--accent);
-        border-right-color: transparent;
-        width: 6px;
-        height: 6px;
-        animation: turn 1s linear infinite;
-      }
-      .dot.idle {
-        border: 1.5px solid var(--faint);
-        width: 5px;
-        height: 5px;
-      }
-      /* A chat's plan hangs under its row, out of the link, so that each
-         subagent's chat under a step is a link of its own. */
-      .plan {
-        margin: -2px 0 8px;
-        font-size: 12px;
-      }
-      .plan .count {
-        font: 600 9.5px var(--sans);
-        letter-spacing: 0.06em;
-        text-transform: uppercase;
-        color: var(--faint);
-        margin-bottom: 2px;
-      }
-      /* Hides a plan, or every plan not at work, as a word in the line
-         it sits in. */
-      .dismiss {
-        font: inherit;
-        letter-spacing: inherit;
-        text-transform: inherit;
-        color: var(--faint);
-        background: none;
-        border: 0;
-        padding: 0;
-        margin-left: 10px;
-        cursor: pointer;
-      }
-      .dismiss:hover {
-        color: var(--link);
-      }
-      .plan .step {
-        display: flex;
-        align-items: baseline;
-        gap: 8px;
-        padding: 1px 0;
-      }
-      .plan .mark {
-        flex: none;
-        width: 12px;
-        color: var(--faint);
-      }
-      .plan .in_progress .mark {
+      .number.work .count {
         color: var(--accent);
       }
-      .plan .completed .text {
-        color: var(--dim);
-      }
-      /* What tells a chat apart from another of its name. */
-      .hint {
-        color: var(--faint);
-        font-size: 11px;
-        font-weight: normal;
-      }
-      /* A step opens its thread with a click. */
-      .plan .opens {
-        cursor: pointer;
-      }
-      .plan .opens:hover,
-      .plan .opens.opened {
-        color: var(--link);
-      }
-      .plan .on {
-        color: var(--faint);
-        font-size: 11px;
-      }
-      .plan .step > .what {
-        flex: 1;
-        min-width: 0;
-      }
-      .thread {
-        margin: 4px 0 6px;
-        padding: 6px 8px;
-        border: 1px solid var(--border);
-        border-radius: 6px;
-      }
-      .thread .said {
-        padding: 2px 0;
-      }
-      .thread .by {
-        display: block;
-        font-size: 10.5px;
-        color: var(--faint);
-      }
-      .thread .says {
-        white-space: pre-wrap;
-        overflow-wrap: anywhere;
-        color: var(--foreground);
-      }
-      .thread .waiting .says {
-        color: var(--dim);
-        font-style: italic;
-      }
-      .thread .agent .says {
-        color: var(--dim);
-      }
-      .thread .none {
-        padding: 2px 0;
-      }
-      .thread .write {
-        display: flex;
-        gap: 6px;
-        margin-top: 4px;
-      }
-      .thread textarea {
-        flex: 1;
-        font: inherit;
-        color: var(--foreground);
-        background: none;
-        border: 1px solid var(--border);
-        border-radius: 4px;
-        padding: 3px 5px;
-        resize: vertical;
-      }
-      .thread button {
-        font: inherit;
-        color: var(--link);
-        background: none;
-        border: 1px solid var(--border);
-        border-radius: 4px;
-        cursor: pointer;
-      }
-      .thread :disabled {
-        opacity: 0.5;
-        cursor: default;
-      }
-      .plan .sub {
-        display: flex;
-        align-items: baseline;
-        gap: 6px;
-        color: var(--foreground);
-      }
-      .plan .line {
-        color: var(--dim);
-        margin-left: 14px;
-        overflow-wrap: anywhere;
-      }
-      /* What moved over the window the human picked, above the plans:
-         a line of what it adds up to, then a line a chat. */
-      .summed {
-        margin: 0 0 10px;
-        padding: 6px 10px 8px;
-        border: 1px solid var(--border);
-        border-radius: 8px;
-        font-size: 12px;
-      }
-      .summed .picks {
-        display: flex;
-        align-items: baseline;
-        gap: 8px;
-        margin-bottom: 2px;
-      }
-      .summed .pick {
-        font: 600 10.5px var(--sans);
+      .pick {
+        font-size: var(--small);
         color: var(--faint);
         background: none;
         border: 0;
-        padding: 0;
+        padding: 0 2px;
         cursor: pointer;
       }
-      .summed .pick:hover {
+      .pick:hover {
         color: var(--link);
       }
-      .summed .pick.picked {
+      .pick.picked {
         color: var(--foreground);
         text-decoration: underline;
         text-underline-offset: 3px;
       }
-      .summed .told {
-        margin-left: 4px;
-        color: var(--dim);
-      }
-      .summed .said {
+      .overall {
         display: flex;
-        align-items: baseline;
-        gap: 8px;
-        padding: 1px 0;
-        overflow-wrap: anywhere;
-      }
-      .summed .text {
+        align-items: center;
+        gap: var(--space-2);
         color: var(--dim);
+        font-size: var(--small);
+        margin-bottom: var(--space-4);
+        white-space: nowrap;
       }
-      .summed .mark {
-        flex: none;
-        width: 12px;
+      .overall .bar {
+        flex: 1;
+      }
+      /* A bar of steps: one block a step. */
+      .bar {
+        display: flex;
+        gap: 2px;
+        height: 6px;
+        min-width: 0;
+      }
+      .bar i {
+        flex: 1;
+        min-width: 0;
+        border-radius: 2px;
+        background: var(--button-hover);
+      }
+      .bar i.completed {
+        background: var(--accent);
+        opacity: 0.5;
+      }
+      .bar i.in_progress {
+        background: var(--accent);
+      }
+      .yours .bar i.in_progress {
+        background: var(--asking);
+      }
+      .group {
+        margin-bottom: var(--space-4);
+      }
+      .group h2 {
+        font-size: var(--small);
+        font-weight: normal;
         color: var(--faint);
+        margin: 0 0 var(--space-1);
+        padding: 0 var(--space-2);
       }
-      .summed .mark.moved {
-        color: var(--accent);
+      .none {
+        color: var(--dim);
+        padding: var(--space-2);
       }
-      .summed .mark.waits {
-        color: var(--asking);
+      /* A chat: one line, which a click opens. */
+      .row {
+        display: grid;
+        grid-template-columns: 8px minmax(0, 1.1fr) minmax(48px, 110px) 32px minmax(0, 1.4fr);
+        align-items: center;
+        gap: var(--space-3);
+        padding: 6px var(--space-2);
+        border-radius: var(--radius);
+        cursor: pointer;
+      }
+      .row:hover {
+        background: var(--hover);
+      }
+      .row.open {
+        background: var(--raised);
+        border-radius: var(--radius) var(--radius) 0 0;
+      }
+      .row.under {
+        padding-left: calc(var(--space-2) + 16px);
+      }
+      .dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: var(--disabled);
+      }
+      .yours .dot {
+        background: var(--asking);
+      }
+      .work .dot {
+        background: var(--accent);
+        box-shadow: 0 0 0 3px var(--accent-ground);
+      }
+      .ci .dot {
+        border: 2px solid var(--accent);
+        border-right-color: transparent;
+        background: none;
+        width: 4px;
+        height: 4px;
+        animation: turn 1s linear infinite;
+      }
+      .done .dot {
+        background: none;
+        border: 1.5px solid var(--accent);
+        width: 5px;
+        height: 5px;
       }
       @keyframes turn {
         to {
           transform: rotate(360deg);
         }
       }
-      .row .line,
-      .decision .line {
-        color: var(--dim);
-        font-size: 12px;
-        overflow-wrap: anywhere;
-      }
-      .row .running {
-        font: 11.5px var(--mono);
-        color: var(--foreground);
-        overflow-wrap: anywhere;
-      }
-      .row .running .prompt {
-        color: var(--faint);
-      }
-      /* What runs in the background is named by what the agent said it
-         does, not by the command, so it reads as words, a command marked
-         as one by the cue of the stage's terminal. */
-      .row .background {
-        font-size: 12px;
-        color: var(--foreground);
-        overflow-wrap: anywhere;
-      }
-      .row .background .cue {
-        font: 600 10.5px var(--mono);
-        color: var(--faint);
-        margin-right: 6px;
-      }
-      .decision {
-        padding: 7px 10px;
-        border-bottom: 1px solid var(--border);
-        overflow-wrap: anywhere;
-      }
-      .decision .header {
-        font: 600 9.5px var(--sans);
-        letter-spacing: 0.06em;
-        text-transform: uppercase;
-        color: var(--dim);
-      }
-      .decision .arrow {
-        color: var(--faint);
-      }
-      .decision .choice {
+      .name {
         font-weight: 600;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
       }
-      .decision .other {
-        color: var(--dim);
-      }
-      .decision .meta {
-        font: 11.5px var(--mono);
-        color: var(--faint);
-      }
-      .row .name {
-        font-weight: 600;
-        overflow-wrap: anywhere;
-      }
-      .row .why {
-        color: var(--dim);
-      }
-      .row .in,
-      .spent {
-        font: 11.5px var(--mono);
-        color: var(--faint);
-      }
-      .row .goal {
-        color: var(--faint);
-        font-size: 12px;
-        overflow-wrap: anywhere;
-      }
-      .row .when {
-        flex: none;
-        width: 112px;
-        font: 11.5px var(--mono);
-        color: var(--faint);
-      }
-      .row .kind {
-        flex: none;
-        width: 62px;
-        font: 600 9.5px var(--sans);
-        letter-spacing: 0.06em;
-        text-transform: uppercase;
-        color: var(--dim);
-      }
-      .row .says {
-        color: var(--dim);
-        font-size: 12px;
-        overflow-wrap: anywhere;
-      }
-      .row .what {
-        min-width: 0;
-      }
-      .none {
-        color: var(--dim);
-        padding: 6px 10px;
-      }
-      .pull {
-        font-size: 12px;
-        color: var(--foreground);
-        overflow-wrap: anywhere;
-      }
-      .pull .number {
-        font: 11.5px var(--mono);
+      .name a:hover {
         color: var(--link);
       }
-      .pull .draft,
-      .pull .ci {
-        font: 600 9.5px var(--sans);
-        letter-spacing: 0.06em;
-        text-transform: uppercase;
+      .name .aside,
+      .hint {
         color: var(--faint);
+        font-weight: normal;
+        font-size: var(--small);
+      }
+      .steps {
+        font: var(--small) var(--mono);
+        color: var(--faint);
+        text-align: right;
+      }
+      .now {
+        color: var(--dim);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .yours .now {
+        color: var(--asking);
+      }
+      /* What is done, or stopped, steps back. */
+      .done .name,
+      .done .now,
+      .stopped .name,
+      .stopped .now {
+        color: var(--dim);
+      }
+      /* The chat opened: what it is, its story in time, how it ended, and
+         its steps. */
+      .opened {
+        background: var(--raised);
+        border-radius: 0 0 var(--radius) var(--radius);
+        padding: var(--space-1) var(--space-3) var(--space-3);
+        margin-bottom: var(--space-2);
+      }
+      .meta {
+        color: var(--faint);
+        font-size: var(--small);
+        padding-bottom: var(--space-2);
+      }
+      .dismiss {
+        font-size: var(--small);
+        color: var(--faint);
+        background: none;
+        border: 0;
+        padding: 0;
+        margin-left: var(--space-2);
+        cursor: pointer;
+      }
+      .dismiss:hover {
+        color: var(--link);
+      }
+      .event,
+      .end,
+      .step {
+        display: grid;
+        grid-template-columns: 52px 16px minmax(0, 1fr);
+        align-items: baseline;
+        column-gap: var(--space-1);
+        padding: 1px 0;
+      }
+      .event .at,
+      .end .at {
+        font: var(--small) var(--mono);
+        color: var(--faint);
+        white-space: nowrap;
+      }
+      .event .mark,
+      .end .mark,
+      .step .mark {
+        text-align: center;
+        color: var(--faint);
+        font-size: var(--small);
+      }
+      .event .text {
+        color: var(--dim);
+        overflow-wrap: anywhere;
+      }
+      .event .text b {
+        font-weight: normal;
+        color: var(--foreground);
+      }
+      .event.start .text,
+      .event.answered .text,
+      .event.running .text {
+        color: var(--foreground);
+      }
+      .event.step_started .mark,
+      .event.step_done .mark,
+      .event.running .mark {
+        color: var(--accent);
+      }
+      .event.asked .mark,
+      .event.asked .text {
+        color: var(--asking);
+      }
+      .event.said .text {
+        font-size: var(--small);
+        padding-left: var(--space-2);
+        border-left: 2px solid var(--border-strong);
+      }
+      .event.ci.failed .text,
+      .event.turn_end.failed .text {
+        color: var(--failed);
+      }
+      .event .lines,
+      .event .number {
+        font: var(--small) var(--mono);
+      }
+      .event .lines {
+        color: var(--faint);
+      }
+      .event .number {
+        color: var(--link);
+      }
+      .event .text a {
+        color: var(--link);
+      }
+      .end {
+        margin-top: var(--space-1);
+        padding-top: var(--space-2);
+        border-top: 1px solid var(--border);
+      }
+      .end .at {
+        color: var(--foreground);
+      }
+      .end .how {
+        font-weight: 600;
+      }
+      .end .how span {
+        font-weight: normal;
+        color: var(--dim);
+      }
+      .end.work .mark,
+      .end.work .how,
+      .end.done .mark,
+      .end.done .how {
+        color: var(--accent);
+      }
+      .end.yours .mark,
+      .end.yours .how {
+        color: var(--asking);
+      }
+      .end.failed .mark,
+      .end.failed .how {
+        color: var(--failed);
+      }
+      .plan {
+        margin-top: var(--space-2);
+      }
+      .plan .count {
+        font-size: var(--small);
+        color: var(--faint);
+        margin-left: 56px;
+      }
+      .step .text {
+        overflow-wrap: anywhere;
+      }
+      .step.completed .text {
+        color: var(--dim);
+      }
+      .step.in_progress .mark {
+        color: var(--accent);
+      }
+      /* A step opens its thread with a click. */
+      .opens {
+        cursor: pointer;
+      }
+      .opens:hover,
+      .opens.shown {
+        color: var(--link);
+      }
+      .on {
+        color: var(--faint);
+        font-size: var(--small);
+      }
+      .sub {
+        display: block;
+        color: var(--dim);
+        font-size: var(--small);
+      }
+      .sub:hover {
+        color: var(--link);
+      }
+      .thread {
+        margin: var(--space-1) 0 var(--space-2);
+        padding: var(--space-2);
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        font-size: var(--small);
+      }
+      .thread .said {
+        padding: 2px 0;
+      }
+      .thread .by {
+        display: block;
+        color: var(--faint);
+      }
+      .thread .says {
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+        font-size: var(--body);
+      }
+      .thread .agent .says,
+      .thread .waiting .says {
+        color: var(--dim);
+      }
+      .thread .waiting .says {
+        font-style: italic;
+      }
+      .thread .write {
+        display: flex;
+        gap: var(--space-1);
+        margin-top: var(--space-1);
+      }
+      .thread textarea {
+        flex: 1;
+        font: inherit;
+        font-size: var(--body);
+        color: var(--foreground);
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        padding: var(--space-1) var(--space-2);
+        resize: vertical;
+      }
+      .thread button {
+        color: var(--link);
+        background: none;
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        cursor: pointer;
+      }
+      .thread :disabled {
+        opacity: 0.5;
+        cursor: default;
+      }
+      .thread .why {
+        color: var(--dim);
+        margin-top: var(--space-1);
+      }
+      .pull {
+        font-size: var(--small);
+        color: var(--dim);
+        margin-left: 56px;
+      }
+      .pull .number {
+        font-family: var(--mono);
+        color: var(--link);
       }
       .pull .ci.running {
         color: var(--link);
@@ -444,12 +481,12 @@
         color: var(--accent);
       }
       .pull .ci.failed {
-        color: var(--asking);
+        color: var(--failed);
       }
-      .notice {
+      .background {
+        font-size: var(--small);
         color: var(--dim);
-        font-size: 12px;
-        padding: 0 0 8px;
+        margin-left: 56px;
       }
     </style>
   </head>
