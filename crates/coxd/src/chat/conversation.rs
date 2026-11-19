@@ -348,8 +348,9 @@ pub struct Conversation {
     /// the chat asked for, as Cox told it, if anything.
     unoffered: Option<String>,
     /// The last id a step of the agent's plans got, as [`Self::stamped`]
-    /// gave it, which a step of a plan sent in place of another keeps
-    /// once it is gone from the plan, or 0 before any did.
+    /// gave it, or as the plans kept had, which a step of a plan sent in
+    /// place of another keeps once it is gone from the plan, or 0 before
+    /// any did.
     steps_made: u64,
     /// The last receipt of how the plan changed, while coxd runs.
     revising: Option<Revising>,
@@ -412,6 +413,15 @@ impl Conversation {
     /// for the human to read.
     #[must_use]
     pub fn closed(entries: Vec<Entry>) -> Self {
+        // Read once, rather than at each plan the agent sends.
+        let steps_made = entries
+            .iter()
+            .filter_map(|entry| match entry {
+                Entry::Plan(steps) => steps.iter().filter_map(|step| step.id).max(),
+                _ => None,
+            })
+            .max()
+            .unwrap_or(0);
         Self {
             entries,
             state: State::Closed,
@@ -435,7 +445,7 @@ impl Conversation {
             told_line: BTreeSet::new(),
             raised_line: BTreeSet::new(),
             unoffered: None,
-            steps_made: 0,
+            steps_made,
             revising: None,
         }
     }
@@ -1712,13 +1722,7 @@ impl Conversation {
     /// The last id a step of the chat's plans got, or 0 before any did:
     /// of those its plans have, or had in a plan since sent in its place.
     fn last_step_id(&self) -> u64 {
-        self.entries
-            .iter()
-            .filter_map(|entry| match entry {
-                Entry::Plan(steps) => steps.iter().filter_map(|step| step.id).max(),
-                _ => None,
-            })
-            .fold(self.steps_made, u64::max)
+        self.steps_made
     }
 
     /// The title the agent gave its session, if it gave one.
