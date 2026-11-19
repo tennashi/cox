@@ -1469,6 +1469,43 @@ impl Store {
         Ok(rows.collect::<Result<_, _>>()?)
     }
 
+    /// What `chat`'s story is told by, each entry with when it was first
+    /// written, in milliseconds since the epoch, in order: the first line
+    /// the human sent, and the plans, the questions and the commits of
+    /// its agent.
+    ///
+    /// # Errors
+    ///
+    /// When the database cannot be read.
+    pub fn milestones(&self, chat: ChatId) -> anyhow::Result<Vec<(i64, Entry)>> {
+        let mut first = self.connection.prepare_cached(
+            r#"SELECT number, at, entry FROM entries
+             WHERE chat = ?1 AND entry LIKE '{"human":%' ORDER BY number LIMIT 1"#,
+        )?;
+        let mut rest = self.connection.prepare_cached(
+            r#"SELECT number, at, entry FROM entries WHERE chat = ?1
+             AND (entry LIKE '{"plan":%' OR entry LIKE '{"question":%' OR entry LIKE '{"commits":%')
+             ORDER BY number"#,
+        )?;
+        let row = |row: &rusqlite::Row<'_>| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        };
+        let mut read: Vec<(i64, i64, String)> = first
+            .query_map([chat.0], row)?
+            .chain(rest.query_map([chat.0], row)?)
+            .collect::<Result<_, _>>()?;
+        read.sort_by_key(|(number, _, _)| *number);
+        Ok(read
+            .into_iter()
+            // An entry this Cox cannot read tells nothing.
+            .filter_map(|(_, at, entry)| Some((at, serde_json::from_str(&entry).ok()?)))
+            .collect())
+    }
+
     /// How many lines the human wrote on each step of the plans of
     /// `chat`'s agent, by the step's id, for the steps they wrote on.
     ///
@@ -2575,6 +2612,43 @@ mod tests {
             )
             .unwrap();
         assert!(plan.contains("plans"), "read by the index: {plan}");
+    }
+
+    #[test]
+    fn reads_what_tells_a_chats_story_with_when_each_was_written() {
+        let store = Store::in_memory().unwrap();
+        let chat = store.add_chat(None, "Chat 1").unwrap();
+        let other = store.add_chat(None, "Chat 2").unwrap();
+        let plan = Entry::Plan(Vec::new());
+        let commits = Entry::Commits(Vec::new());
+        let entries = [
+            Entry::Note("instructions".to_owned()),
+            Entry::Human("split the parser".to_owned()),
+            plan.clone(),
+            Entry::Reply("reading".to_owned()),
+            Entry::Human("and the lexer".to_owned()),
+            commits.clone(),
+        ];
+        for (number, entry) in entries.iter().enumerate() {
+            store.keep_entry(chat, number, entry).unwrap();
+        }
+        store
+            .keep_entry(other, 0, &Entry::Human("elsewhere".to_owned()))
+            .unwrap();
+
+        let told: Vec<Entry> = store
+            .milestones(chat)
+            .unwrap()
+            .into_iter()
+            .map(|(at, entry)| {
+                assert!(at > 0, "each with when");
+                entry
+            })
+            .collect();
+        assert_eq!(
+            told,
+            [Entry::Human("split the parser".to_owned()), plan, commits]
+        );
     }
 
     #[test]
