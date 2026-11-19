@@ -35,7 +35,7 @@ use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-use cox_core::entry::{Entry, OnStep, QuestionAnswer, Step, StepState, alike};
+use cox_core::entry::{Entry, OnStep, QuestionAnswer, Step, StepsDone, alike};
 use cox_core::store::{ChatId, KeptAnswer, KeptPlan, Progress, ResolvedBy, Said, Store};
 use jiff::tz::TimeZone;
 use serde_json::{Value, json};
@@ -840,11 +840,9 @@ fn planned(
         chat.working
             || plans.done_lately(chat)
             || plans.of(chat).is_some_and(|plan| {
-                !plan.steps.is_empty()
-                    && (plan
-                        .steps
-                        .iter()
-                        .any(|step| step.state != StepState::Completed)
+                let done = StepsDone::count(&plan.steps);
+                done.of > 0
+                    && (done.left() > 0
                         || chat.asking
                         || chat.unread
                         || plans.at - plan.at < DONE_SHOWS)
@@ -907,6 +905,10 @@ fn planned(
                 })
                 .collect::<Vec<_>>(),
             "plan": steps_of(told, steps, plans.on_of(chat), &subagents, &links, now),
+            // How far the plan went, which the page tells rather than
+            // count again.
+            "progress": StepsDone::count(steps),
+            "finished": StepsDone::count(steps).finished(),
             // Only a plan that keeps a chat listed on its own is
             // dismissed: one at work shows anyway.
             "dismiss": plan
@@ -1003,17 +1005,13 @@ fn summaries(told: &Told, root: &Path, plans: &Plans<'_>, decided: &[Decided]) -
         .filter(|chat| !chat.resolved && !chat.working && !chat.asking && !chat.unread)
         .filter_map(|chat| {
             let plan = plans.of(chat)?;
-            let done = plan
-                .steps
-                .iter()
-                .filter(|step| step.state == StepState::Completed)
-                .count();
-            (done < plan.steps.len()).then(|| {
+            let done = StepsDone::count(&plan.steps);
+            (done.left() > 0).then(|| {
                 json!({
                     "key": chat.key,
                     "name": chat.name,
-                    "done": done,
-                    "of": plan.steps.len(),
+                    "done": done.done,
+                    "of": done.of,
                     "since": clock(plan.at),
                 })
             })
@@ -1512,6 +1510,7 @@ fn kept_sources(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cox_core::entry::StepState;
     use coxd::testing::TempDir;
 
     const NO_MOVED: Progress = Progress {
@@ -2230,6 +2229,72 @@ mod tests {
         assert_eq!(json["plans"][3]["waits"], "waits");
         // Only the chats at work count as at work.
         assert_eq!(json["busy"], 3);
+    }
+
+    #[test]
+    fn how_far_each_plan_went_is_told_for_the_page_not_to_count_it() {
+        let root = TempDir::new();
+        let listed = |key: u64, parent: Option<u64>| {
+            let mut listed = chat(key, &root, &root, false, false);
+            listed.working = true;
+            listed.parent = parent;
+            listed.kept = Some(kept(key));
+            listed
+        };
+        let told = Told {
+            chats: vec![listed(1, None), listed(2, Some(1)), listed(3, None)],
+            ..Told::default()
+        };
+        let plan = |chat: u64, steps: Vec<Step>| KeptPlan {
+            chat: kept(chat),
+            number: 1,
+            steps,
+            at: 0,
+        };
+        let kept_plans = [
+            plan(
+                1,
+                vec![
+                    step("Read", StepState::Completed),
+                    step("Fix", StepState::InProgress),
+                    step("Test", StepState::Pending),
+                ],
+            ),
+            plan(3, vec![step("Ship it", StepState::Completed)]),
+        ];
+        let plans = Plans {
+            kept: &kept_plans,
+            ..NO_PLANS
+        };
+        let places = Places {
+            wiki: &root.join("wiki"),
+            raw: &root.join("raw"),
+            triggers: &json!({}),
+        };
+
+        let json = told_of(&told, &root, &[], &plans, &|_| None, &places);
+
+        let told: Vec<(u64, &Value, &Value)> = json["plans"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|chat| {
+                (
+                    chat["key"].as_u64().unwrap(),
+                    &chat["progress"],
+                    &chat["finished"],
+                )
+            })
+            .collect();
+        // None, for a subagent with no plan of its own.
+        assert_eq!(
+            told,
+            [
+                (1, &json!({ "done": 1, "of": 3 }), &json!(false)),
+                (2, &json!({ "done": 0, "of": 0 }), &json!(false)),
+                (3, &json!({ "done": 1, "of": 1 }), &json!(true)),
+            ]
+        );
     }
 
     #[test]
