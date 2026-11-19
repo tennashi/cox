@@ -1354,6 +1354,11 @@ impl Workspace {
                 None => Drawing::Unable,
             },
             at_work: self.project_at_work(index),
+            busy: self
+                .chats(index)
+                .filter(|chat| !chat.is_resolved())
+                .filter_map(|chat| chat.kept().map(ChatId::number))
+                .collect(),
         }
     }
 

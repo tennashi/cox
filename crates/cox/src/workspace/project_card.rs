@@ -106,6 +106,9 @@ pub struct Standing {
     pub drawing: Drawing,
     /// What it is, as each chat's agent is told, if the human set it.
     pub about: Option<String>,
+    /// Its chats not done, by the numbers they are kept by, which Cox
+    /// leaves the worktrees made for be.
+    pub busy: Vec<i64>,
 }
 
 /// Whether an agent draws a project an icon.
@@ -668,10 +671,12 @@ impl ProjectCard {
                 ))
                 .chain(directory.worktrees.iter().map(|worktree| {
                     format!(
-                        "  Worktree {} at {}: {}",
+                        "  Worktree {} at {}{}: {}; {}",
                         worktree.label(),
                         self.where_is(worktree),
-                        self.said_of_worktree(worktree).join("; ")
+                        if worktree.outside { " (outside)" } else { "" },
+                        self.standing_of(worktree),
+                        self.why_left(worktree)
                     )
                 }))
             }))
@@ -1006,7 +1011,7 @@ impl ProjectCard {
             .worktrees
             .iter()
             .enumerate()
-            .map(|(at, worktree)| self.render_worktree(index, at, worktree))
+            .map(|(at, worktree)| self.render_worktree(index, &directory.name, at, worktree, cx))
             .collect();
         div()
             .flex()
@@ -1028,33 +1033,52 @@ impl ProjectCard {
         }
     }
 
-    /// What the card says of `worktree`, a few words each: where it is,
-    /// who made it, and how it stands.
-    fn said_of_worktree(&self, worktree: &Worktree) -> Vec<String> {
-        let mut said = Vec::new();
-        if worktree.outside {
-            said.push("outside".to_owned());
-        }
-        said.push(match worktree.made_for {
-            Some(chat) => format!("made for chat {chat}"),
-            None => "made by hand".to_owned(),
-        });
+    /// How `worktree` stands, in a few words.
+    fn standing_of(&self, worktree: &Worktree) -> String {
         if worktree.gone {
-            said.push("its folder is gone".to_owned());
-        } else {
-            said.push(match self.standings.get(&worktree.path) {
-                None => "reading…".to_owned(),
-                Some(Ok(standing)) => standing.said(),
-                Some(Err(why)) => format!("Git cannot tell: {why}"),
-            });
+            return "its folder is gone".to_owned();
         }
-        said
+        match self.standings.get(&worktree.path) {
+            None => "reading…".to_owned(),
+            Some(Ok(standing)) => standing.said(),
+            Some(Err(why)) => format!("Git cannot tell: {why}"),
+        }
+    }
+
+    /// Why Cox leaves `worktree` be, rather than take it away by itself,
+    /// as the card says it: or that it takes it away soon.
+    fn why_left(&self, worktree: &Worktree) -> String {
+        let standing = self.standings.get(&worktree.path);
+        let why = worktrees::why_left(worktree, standing, |chat| {
+            self.standing.busy.contains(&chat)
+        });
+        if why.is_empty() {
+            "Cox takes it away soon: its chat is done".to_owned()
+        } else {
+            format!("Left be: {}", why.join(", "))
+        }
+    }
+
+    /// Takes away `worktree`, of the directory `name`, as the human asks.
+    fn remove_worktree(&mut self, name: &str, worktree: Worktree, cx: &mut Context<Self>) {
+        let repository = directory::folder_of(&self.standing.folder, name);
+        let going = format!("Taking away the worktree {}…", worktree.label());
+        self.go(going, move || worktrees::remove(&repository, &worktree), cx);
     }
 
     /// The row of `worktree`, the `index`th of the directory `directory`,
-    /// under it.
-    fn render_worktree(&self, directory: usize, index: usize, worktree: &Worktree) -> gpui::Div {
+    /// named `name`, under it, with the button that takes it away.
+    fn render_worktree(
+        &self,
+        directory: usize,
+        name: &str,
+        index: usize,
+        worktree: &Worktree,
+        cx: &mut Context<Self>,
+    ) -> gpui::Div {
         let outside = worktree.outside;
+        let (name, removed) = (name.to_owned(), worktree.clone());
+        let id = SharedString::from(format!("worktree-remove-{directory}-{index}"));
         div()
             .debug_selector(move || format!("project-worktree-{directory}-{index}"))
             .min_h(px(ROW_HEIGHT))
@@ -1102,13 +1126,30 @@ impl ProjectCard {
                             .child(ellipsis(format!(
                                 "{} · {}",
                                 self.where_is(worktree),
-                                self.said_of_worktree(worktree)
-                                    .into_iter()
-                                    .filter(|said| said != "outside")
-                                    .collect::<Vec<_>>()
-                                    .join(" · ")
+                                self.standing_of(worktree)
                             ))),
+                    )
+                    .child(
+                        div()
+                            .debug_selector(move || {
+                                format!("project-worktree-why-{directory}-{index}")
+                            })
+                            .text_size(px(11.))
+                            .text_color(rgb(DIM))
+                            .child(ellipsis(self.why_left(worktree))),
                     ),
+            )
+            .child(
+                button(id.clone(), "Remove", Kind::Plain)
+                    .debug_selector(move || id.to_string())
+                    .h(px(26.))
+                    .text_size(px(12.))
+                    .tooltip(tip(
+                        "Take it away, and its branch once merged; what is not committed stays",
+                    ))
+                    .on_hint_click(cx.listener(move |card, _, _, cx| {
+                        card.remove_worktree(&name, removed.clone(), cx);
+                    })),
             )
     }
 
@@ -1283,6 +1324,7 @@ mod tests {
             icon: None,
             drawing: Drawing::Unable,
             about: None,
+            busy: Vec::new(),
         }
     }
 

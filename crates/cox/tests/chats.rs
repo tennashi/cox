@@ -2577,10 +2577,24 @@ fn a_repositorys_worktree_beside_it_is_listed_under_it_on_the_projects_card(
     let said = card.described(cx);
     assert!(
         said.contains(
-            &"  Worktree fix at directories/origin-fix: made by hand; clean, merged".to_owned()
+            &"  Worktree fix at directories/origin-fix: clean, merged; Left be: made by hand"
+                .to_owned()
         ) && !said
             .iter()
             .any(|line| line.starts_with("Directory origin-fix")),
+        "{said:?}"
+    );
+
+    // The human takes it away on its row, its branch, merged, with it.
+    click(cx, "worktree-remove-1-0");
+    cx.run_until_parked();
+    assert!(!beside.exists());
+    let said = card.described(cx);
+    assert!(
+        said.iter().any(
+            |line| line.starts_with("Under it: Took away the worktree at ")
+                && line.ends_with("/directories/origin-fix, and its branch fix, merged.")
+        ) && !said.iter().any(|line| line.starts_with("  Worktree")),
         "{said:?}"
     );
 }

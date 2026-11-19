@@ -21,6 +21,8 @@
 //! - [`main`] starts coxd, and [`process`] runs it as a process of its
 //!   own, which a window reaches on a socket, and [`client`] is how the
 //!   window does. [`launcher`] starts each chat's agent for it.
+//! - [`tidy`] takes away the worktrees Cox made for chats once they
+//!   are done.
 //! - [`phone`] serves the human's phone a page of the chats, which watches
 //!   them beside the window, and [`push`] tells the phone of the chats that
 //!   need the human while they are away from the Mac.
@@ -36,6 +38,7 @@ mod pulls;
 pub mod push;
 mod resolve;
 mod sketches;
+mod tidy;
 pub mod wire;
 
 pub use launcher::{hands_off, session_meta};
@@ -288,6 +291,11 @@ pub enum Internal {
     Pulled {
         pull: crate::github::Pull,
         read: Result<crate::github::Status, crate::github::Problem>,
+    },
+    /// Cox took away the worktrees `removed`, of chats that were done
+    /// (see [`tidy`]).
+    Tidied {
+        removed: Vec<crate::worktrees::Removed>,
     },
 }
 
@@ -624,6 +632,9 @@ pub struct Daemon {
     /// Why no chat shows its pull requests, as when `gh` is not logged
     /// in, if that is so.
     github: Option<String>,
+    /// Whether coxd looks which worktrees it may take away (see
+    /// [`tidy`]).
+    tidying: tidy::Tidying,
 }
 
 /// How the daemon is reached: what to tell it.
@@ -767,6 +778,7 @@ impl Daemon {
             scheduled: HashMap::new(),
             watches: pulls::Watches::new(),
             github: None,
+            tidying: tidy::Tidying::default(),
         };
         daemon.read_kept();
         daemon
@@ -2031,8 +2043,13 @@ impl Daemon {
             Internal::Schedules => {
                 self.run_schedules(&crate::settings::workflow(), &jiff::Zoned::now());
             }
-            Internal::Pulls => self.look_at_pulls(Instant::now()),
+            Internal::Pulls => {
+                let now = Instant::now();
+                self.look_at_pulls(now);
+                self.tidy_worktrees(now, false);
+            }
             Internal::Pulled { pull, read } => self.pulled(&pull, read, Instant::now()),
+            Internal::Tidied { removed } => self.tidied(removed),
         }
     }
 
@@ -4255,6 +4272,72 @@ mod tests {
             let listed = worktrees::of(&shop.join(crate::settings::DIRECTORIES).join("app"), &shop);
             assert_eq!(listed.len(), 1);
             assert_eq!(listed[0].made_for, Some(kept));
+        });
+    }
+
+    #[test]
+    fn the_worktree_made_for_a_subagent_goes_once_it_is_done_and_it_is_told() {
+        on_daemon(async {
+            let home = TempDir::new();
+            let agents = Rc::new(PlayedAgents::default());
+            let (mut daemon, mut heard, key) = shop_with_app(&home, &agents).await;
+            let (answer, mut opened) = oneshot::channel();
+            daemon.asked(
+                key,
+                ChatRequest::OpenChat {
+                    text: "look".to_owned(),
+                    title: Some("Look".to_owned()),
+                    setup: Setup::default(),
+                    model: None,
+                    goal: None,
+                    sketch: None,
+                    within: Box::new(Within {
+                        directory: None,
+                        worktree: Some(worktrees::Asked {
+                            directory: "app".to_owned(),
+                            branch: Some("look".to_owned()),
+                            from: None,
+                        }),
+                    }),
+                    answer,
+                },
+            );
+            let number = opened.try_recv().unwrap().unwrap().number;
+            let made = home
+                .join("shop")
+                .join(worktrees::WORKTREES)
+                .join("app")
+                .join("look");
+            assert!(made.exists());
+
+            daemon.resolve(number, ResolvedBy::Human);
+            for _ in 0..200 {
+                if !made.exists() && !daemon.tidying_now() {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+                pump(&mut daemon, &mut heard).await;
+            }
+
+            assert!(!made.exists(), "the worktree is taken away");
+            let notes: Vec<String> = daemon
+                .chat(number)
+                .unwrap()
+                .conversation()
+                .entries()
+                .iter()
+                .filter_map(|entry| match entry {
+                    Entry::Note(note) => Some(note.clone()),
+                    _ => None,
+                })
+                .collect();
+            assert!(
+                notes
+                    .iter()
+                    .any(|note| note.starts_with("Took away the worktree at ")
+                        && note.ends_with("held nothing that is not elsewhere.")),
+                "{notes:?}"
+            );
         });
     }
 

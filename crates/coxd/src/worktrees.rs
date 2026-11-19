@@ -11,9 +11,11 @@
 //! folder of Git's, which Git leaves be and moves with the worktree, so
 //! that one moved with `git worktree move` is still Cox's, and one made
 //! by hand never is. Once the chat is done with it, and it holds nothing
-//! that is not elsewhere, Cox takes it away (see [`removable`]).
+//! that is not elsewhere, Cox takes it away (see [`tidy`]); the rest the
+//! human sees listed, each with why it is left, to take away themselves.
 
 use std::ffi::OsStr;
+use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -420,6 +422,175 @@ pub fn repositories(project: &Path) -> Vec<(String, PathBuf)> {
     found
 }
 
+/// Why Cox leaves `worktree`, which stands as `standing` says, be, rather
+/// than take it away by itself, each in a few words, or nothing when it
+/// may: it made it, in the project, for a chat that is done, as `busy`
+/// tells of the chat it was made for, and it holds nothing that is not
+/// elsewhere, no change left uncommitted, and its commits merged or
+/// pushed.
+#[must_use]
+pub fn why_left(
+    worktree: &Worktree,
+    standing: Option<&Result<Standing, String>>,
+    busy: impl Fn(i64) -> bool,
+) -> Vec<String> {
+    let mut why = Vec::new();
+    match worktree.made_for {
+        None => why.push("made by hand".to_owned()),
+        Some(chat) if busy(chat) => why.push(format!("chat {chat} is not done")),
+        Some(_) => {}
+    }
+    if worktree.outside {
+        why.push("outside the project".to_owned());
+    }
+    if worktree.gone {
+        why.push("its folder is gone".to_owned());
+        return why;
+    }
+    match standing {
+        None => why.push("not read yet".to_owned()),
+        Some(Err(_)) => why.push("Git cannot tell how it stands".to_owned()),
+        Some(Ok(standing)) => {
+            match standing.changed {
+                0 => {}
+                1 => why.push("1 file changed".to_owned()),
+                changed => why.push(format!("{changed} files changed")),
+            }
+            match standing.kept {
+                Kept::Merged | Kept::Pushed => {}
+                Kept::Only(1) => why.push("1 commit only here".to_owned()),
+                Kept::Only(commits) => why.push(format!("{commits} commits only here")),
+            }
+        }
+    }
+    why
+}
+
+/// Takes away the worktree at `path` of the repository whose main
+/// worktree is at `repository`, as the human or Cox does: its folder,
+/// and, once merged, its branch, unless it holds what would be lost, and
+/// answers what was taken away. One whose folder is gone, Git forgets.
+///
+/// # Errors
+///
+/// When it has changes not committed, or its detached head commits that
+/// are nowhere else, or Git cannot take it away, with why.
+pub fn remove(repository: &Path, worktree: &Worktree) -> Result<String, String> {
+    if worktree.gone {
+        git(repository, &["worktree", "prune"])?;
+        return Ok(format!(
+            "Git forgot the worktree at {}, whose folder was gone.",
+            worktree.path.display()
+        ));
+    }
+    let standing = standing(repository, &worktree.path)?;
+    if standing.changed > 0 {
+        return Err(format!(
+            "The worktree at {} has {} not committed: commit or drop them first.",
+            worktree.path.display(),
+            match standing.changed {
+                1 => "1 file changed".to_owned(),
+                changed => format!("{changed} files changed"),
+            }
+        ));
+    }
+    if let (None, Kept::Only(commits)) = (&worktree.branch, standing.kept) {
+        return Err(format!(
+            "The worktree at {} has its head detached at {commits} commits that are nowhere \
+             else, which would be lost: put them on a branch first.",
+            worktree.path.display()
+        ));
+    }
+    let path = worktree.path.to_string_lossy();
+    git(repository, &["worktree", "remove", &path])?;
+    let mut said = format!("Took away the worktree at {}", worktree.path.display());
+    match (&worktree.branch, standing.kept) {
+        (Some(branch), Kept::Merged) => match git(repository, &["branch", "-d", branch]) {
+            Ok(_) => {
+                let _ = write!(said, ", and its branch {branch}, merged");
+            }
+            Err(why) => {
+                let _ = write!(said, "; its branch {branch} is kept: {why}");
+            }
+        },
+        (Some(branch), _) => {
+            let _ = write!(said, "; its branch {branch} is kept, not merged yet");
+        }
+        (None, _) => {}
+    }
+    // A folder of the worktrees left empty goes too.
+    if let Some(parent) = worktree.path.parent()
+        && parent.parent().and_then(Path::file_name) == Some(OsStr::new(WORKTREES))
+    {
+        let _ = std::fs::remove_dir(parent);
+    }
+    said.push('.');
+    Ok(said)
+}
+
+/// A worktree Cox took away by itself.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Removed {
+    /// The chat it was made for, by the number the chat is kept by.
+    pub chat: i64,
+    /// What was taken away.
+    pub said: String,
+}
+
+/// Takes away each worktree of the repositories of the project in
+/// `project` that Cox may take away by itself (see [`why_left`]), as
+/// `busy` tells of a chat, by the number it is kept by, and of a folder a
+/// chat works in, and answers those taken away.
+pub fn tidy(project: &Path, busy: &Busy) -> Vec<Removed> {
+    let mut removed = Vec::new();
+    for (_, repository) in repositories(project) {
+        for worktree in of(&repository, project) {
+            let Some(chat) = worktree.made_for else {
+                continue;
+            };
+            if worktree.gone || busy.works_in(&worktree.path) {
+                continue;
+            }
+            let standing = standing(&repository, &worktree.path);
+            if !why_left(&worktree, Some(&standing), |chat| {
+                busy.chats.contains(&chat)
+            })
+            .is_empty()
+            {
+                continue;
+            }
+            match remove(&repository, &worktree) {
+                Ok(said) => removed.push(Removed { chat, said }),
+                Err(why) => tracing::warn!(
+                    path = %worktree.path.display(),
+                    "the worktree is not taken away: {why}"
+                ),
+            }
+        }
+    }
+    removed
+}
+
+/// What Cox's chats that are not done hold on to, as [`tidy`] leaves be.
+#[derive(Clone, Debug, Default)]
+pub struct Busy {
+    /// The chats not done, by the numbers they are kept by.
+    pub chats: Vec<i64>,
+    /// The folders they work in.
+    pub folders: Vec<PathBuf>,
+}
+
+impl Busy {
+    /// Whether a chat not done works in the worktree at `path`, or in a
+    /// folder in it.
+    fn works_in(&self, path: &Path) -> bool {
+        let path = canonical(path);
+        self.folders
+            .iter()
+            .any(|folder| canonical(folder).starts_with(&path))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -625,5 +796,141 @@ mod tests {
             refused,
             Err("the project has no repository notes in its directories; it has app".to_owned())
         );
+    }
+
+    /// A worktree Cox made of `app` in `project` for the chat `chat`, on
+    /// the branch `branch`.
+    fn made(project: &Path, branch: &str, chat: i64) -> PathBuf {
+        let asked = Asked {
+            directory: "app".to_owned(),
+            branch: Some(branch.to_owned()),
+            from: None,
+        };
+        make(project, &asked, Some(chat)).unwrap()
+    }
+
+    #[test]
+    fn cox_takes_away_a_worktree_of_a_chat_done_that_holds_nothing_not_elsewhere() {
+        let project = TempDir::new();
+        let main = directory_of(&project, "app");
+        repository(&main);
+        // Merged: taken away, its branch too.
+        let merged = made(&project, "merged", 1);
+        commit(&merged, "m.txt");
+        run_git(&main, &["merge", "--quiet", "merged"]).unwrap();
+        // Its chat is not done.
+        let busy_one = made(&project, "busy", 2);
+        // Changes left, and commits only there.
+        let dirty = made(&project, "dirty", 3);
+        std::fs::write(dirty.join("d.txt"), "d\n").unwrap();
+        let ahead = made(&project, "ahead", 4);
+        commit(&ahead, "a.txt");
+        // Made by hand.
+        let by_hand = project.join("by-hand");
+        run_git(
+            &main,
+            &[
+                "worktree",
+                "add",
+                "--quiet",
+                "-b",
+                "hand",
+                &by_hand.to_string_lossy(),
+            ],
+        )
+        .unwrap();
+        // A chat not done works in it.
+        let worked_in = made(&project, "worked-in", 5);
+
+        let busy = Busy {
+            chats: vec![2],
+            folders: vec![worked_in.join("src")],
+        };
+        let removed = tidy(&project, &busy);
+
+        assert_eq!(
+            removed,
+            [Removed {
+                chat: 1,
+                said: format!(
+                    "Took away the worktree at {}, and its branch merged, merged.",
+                    merged.display()
+                ),
+            }]
+        );
+        assert!(!merged.exists());
+        assert!(
+            run_git(
+                &main,
+                &["rev-parse", "--verify", "--quiet", "refs/heads/merged"]
+            )
+            .is_err()
+        );
+        for left in [&busy_one, &dirty, &ahead, &by_hand, &worked_in] {
+            assert!(left.exists(), "{}", left.display());
+        }
+        let listed = of(&main, &project);
+        let why = |path: &Path| {
+            let worktree = listed.iter().find(|w| canonical(&w.path) == *path).unwrap();
+            let standing = standing(&main, path);
+            why_left(worktree, Some(&standing), |chat| chat == 2)
+        };
+        assert_eq!(why(&busy_one), ["chat 2 is not done"]);
+        assert_eq!(why(&dirty), ["1 file changed"]);
+        assert_eq!(why(&ahead), ["1 commit only here"]);
+        assert_eq!(why(&by_hand), ["made by hand"]);
+    }
+
+    #[test]
+    fn the_human_takes_away_a_worktree_keeping_a_branch_not_merged() {
+        let project = TempDir::new();
+        let main = directory_of(&project, "app");
+        repository(&main);
+        let ahead = made(&project, "ahead", 1);
+        commit(&ahead, "a.txt");
+        let worktree = of(&main, &project).remove(0);
+
+        let said = remove(&main, &worktree).unwrap();
+
+        assert!(
+            said.ends_with("; its branch ahead is kept, not merged yet."),
+            "{said}"
+        );
+        assert!(!ahead.exists());
+        assert!(
+            !project.join(WORKTREES).join("app").exists(),
+            "its empty folder goes too"
+        );
+        assert!(
+            run_git(
+                &main,
+                &["rev-parse", "--verify", "--quiet", "refs/heads/ahead"]
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn a_worktree_is_not_taken_away_with_what_would_be_lost() {
+        let project = TempDir::new();
+        let main = directory_of(&project, "app");
+        repository(&main);
+        let dirty = made(&project, "dirty", 1);
+        std::fs::write(dirty.join("d.txt"), "d\n").unwrap();
+        let detached = make(
+            &project,
+            &Asked {
+                directory: "app".to_owned(),
+                ..Asked::default()
+            },
+            Some(2),
+        )
+        .unwrap();
+        commit(&detached, "x.txt");
+
+        for worktree in of(&main, &project) {
+            assert!(remove(&main, &worktree).is_err(), "{worktree:?}");
+            assert!(worktree.path.exists());
+        }
     }
 }
