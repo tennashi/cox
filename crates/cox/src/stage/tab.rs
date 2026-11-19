@@ -1,7 +1,7 @@
 //! A tab of the stage, and what it shows: a page of the browser, a
 //! Markdown file, a file as it is written, a file not chosen yet, what
 //! changed in the project's files, the map of the project, the flow of a tool call, a
-//! terminal, or an Android emulator. What the stage asks of every kind alike, the name the tab
+//! terminal, an Android emulator, or a diagram of a reply. What the stage asks of every kind alike, the name the tab
 //! goes by, how it is kept for a closed chat's stage to open again, the
 //! keyboard's place in it and the view drawn, each kind answers as
 //! [`Shows`], and [`TabContent`] turns to that in one place. What the stage
@@ -21,6 +21,7 @@ use super::android::Android;
 use super::changes::Changes;
 use super::code::Code;
 use super::devices::Devices;
+use super::diagram::Diagram;
 use super::document::Document;
 use super::flow::Flow;
 use super::mac_window::MacWindow;
@@ -100,6 +101,7 @@ pub(super) enum TabContent {
     MacWindow(Entity<MacWindow>),
     Windows(Entity<Windows>),
     Playground(Entity<Playground>),
+    Diagram(Entity<Diagram>),
 }
 
 /// An entity that [`Shows`], asked as the stage asks of every kind alike.
@@ -144,6 +146,7 @@ impl TabContent {
             Self::MacWindow(window) => window,
             Self::Windows(windows) => windows,
             Self::Playground(playground) => playground,
+            Self::Diagram(diagram) => diagram,
         }
     }
 
@@ -188,7 +191,8 @@ impl TabContent {
             | Self::Devices(_)
             | Self::MacWindow(_)
             | Self::Windows(_)
-            | Self::Playground(_) => None,
+            | Self::Playground(_)
+            | Self::Diagram(_) => None,
         }
     }
 
@@ -206,7 +210,8 @@ impl TabContent {
             | Self::Devices(_)
             | Self::MacWindow(_)
             | Self::Windows(_)
-            | Self::Playground(_) => None,
+            | Self::Playground(_)
+            | Self::Diagram(_) => None,
         }
     }
 
@@ -233,7 +238,8 @@ impl TabContent {
             | Self::Devices(_)
             | Self::MacWindow(_)
             | Self::Windows(_)
-            | Self::Playground(_) => false,
+            | Self::Playground(_)
+            | Self::Diagram(_) => false,
         }
     }
 }

@@ -80,6 +80,7 @@ pub mod code;
 mod column;
 pub mod commands;
 pub mod devices;
+pub mod diagram;
 pub mod document;
 pub mod flow;
 pub mod follow;
@@ -123,6 +124,7 @@ use crate::stage::android::Android;
 use crate::stage::calls::Calls;
 use crate::stage::code::Code;
 use crate::stage::devices::{Devices, OpenDevice};
+use crate::stage::diagram::Diagram;
 use crate::stage::document::Document;
 use crate::stage::mac_window::MacWindow;
 use crate::stage::outline::Outlines;
@@ -423,6 +425,9 @@ impl Stage {
                 KeptTab::MacWindows => {
                     stage.push_windows(show, window, cx);
                 }
+                KeptTab::Diagram { source } => {
+                    stage.push_diagram(source, show, cx);
+                }
                 // A terminal does not start again.
                 KeptTab::Terminal { .. } => {}
             }
@@ -569,6 +574,30 @@ impl Stage {
         playground.update(cx, Playground::run);
         self.focus_shown(window, cx);
         None
+    }
+
+    /// Shows the Mermaid diagram `source`, which the human clicked in a
+    /// reply, to zoom and pan: on the tab showing it already, or a new
+    /// one, with the keyboard in it.
+    pub fn show_diagram(&mut self, source: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let showing = self.tabs.iter().position(|tab| {
+            matches!(&tab.content, TabContent::Diagram(diagram)
+                if diagram.read(cx).source() == source)
+        });
+        if let Some(index) = showing {
+            self.show(index, window, cx);
+        } else {
+            self.push_diagram(source.to_owned(), true, cx);
+        }
+        self.focus_shown(window, cx);
+    }
+
+    /// Puts a tab showing the Mermaid diagram `source` after the others,
+    /// shown if `show` is.
+    fn push_diagram(&mut self, source: String, show: bool, cx: &mut Context<Self>) {
+        let diagram = cx.new(|cx| Diagram::new(source, cx));
+        let changes = cx.observe(&diagram, |stage, _, cx| stage.changed(cx));
+        self.push(TabContent::Diagram(diagram), changes, None, show, cx);
     }
 
     /// A terminal running `program`, which the human started, with the
@@ -808,7 +837,8 @@ impl Stage {
             | TabContent::Devices(_)
             | TabContent::MacWindow(_)
             | TabContent::Windows(_)
-            | TabContent::Playground(_) => false,
+            | TabContent::Playground(_)
+            | TabContent::Diagram(_) => false,
         })
     }
 

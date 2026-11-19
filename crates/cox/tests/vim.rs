@@ -796,6 +796,7 @@ fn open_session<'a>(
                 stage.update(cx, |stage, cx| stage.by_keys(&tabs, window, cx));
             }),
             shows_files: Rc::new(|_| false),
+            diagrams: Rc::new(|_, _, _| {}),
             runs: Rc::new(|_, _, _| None),
         }
     });
@@ -1976,6 +1977,7 @@ fn t_on_a_page_and_open_with_words_ask_the_stage_to_search(cx: &mut TestAppConte
                 asked.borrow_mut().push(tabs);
             }),
             shows_files: Rc::new(|_| false),
+            diagrams: Rc::new(|_, _, _| {}),
             runs: Rc::new(|_, _, _| None),
         }
     });
@@ -2723,6 +2725,7 @@ fn the_part_with_the_keyboard_has_a_lighter_edge(cx: &mut TestAppContext) {
                 }
             }),
             shows_files: Rc::new(|_| false),
+            diagrams: Rc::new(|_, _, _| {}),
             runs: Rc::new(|_, _, _| None),
         }
     });
@@ -2819,6 +2822,7 @@ fn control_w_stops_at_the_tree_of_files_as_at_a_window(cx: &mut TestAppContext) 
                 _ => {}
             }),
             shows_files: Rc::new(|_| true),
+            diagrams: Rc::new(|_, _, _| {}),
             runs: Rc::new(|_, _, _| None),
         }
     });

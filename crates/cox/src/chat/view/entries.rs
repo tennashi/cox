@@ -865,6 +865,11 @@ impl ChatView {
                 .into_any_element(),
             Entry::Reply(text) => writer
                 .running(self.runs(cx))
+                .showing(
+                    self.stage
+                        .as_ref()
+                        .map(|stage| std::rc::Rc::clone(&stage.diagrams)),
+                )
                 .markdown(text)
                 .debug_selector(|| format!("reply-{index}"))
                 .into_any_element(),

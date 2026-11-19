@@ -925,6 +925,8 @@ pub struct Writer {
     painted: Painted,
     /// What runs the code blocks that are snippets, where they run.
     runs: Option<Runs>,
+    /// What shows a diagram clicked, larger.
+    diagrams: Option<ShowsDiagram>,
     selection: Option<Selection>,
     /// Where the cursor of Vim's keys is drawn, if it is.
     cursor: Option<Spot>,
@@ -939,6 +941,7 @@ impl Writer {
         Self {
             painted: painted.clone(),
             runs: None,
+            diagrams: None,
             selection,
             cursor: None,
             entry,
@@ -950,6 +953,14 @@ impl Writer {
     #[must_use]
     pub fn running(mut self, runs: Runs) -> Self {
         self.runs = Some(runs);
+        self
+    }
+
+    /// Has a click on a diagram show it with `diagrams`, if there is
+    /// what shows them.
+    #[must_use]
+    pub fn showing(mut self, diagrams: Option<ShowsDiagram>) -> Self {
+        self.diagrams = diagrams;
         self
     }
 
@@ -1092,7 +1103,8 @@ impl Writer {
     }
 
     /// A Mermaid diagram, drawn at its size, or less where there is less
-    /// room, or its source as a code block when it cannot be drawn.
+    /// room, or its source as a code block when it cannot be drawn. Where
+    /// the writer shows diagrams, a click on it shows it larger.
     fn diagram(&mut self, source: &str) -> gpui::Div {
         let Some(picture) = diagram::of(source) else {
             return self.code(&markdown::Text::plain(source), None);
@@ -1100,11 +1112,36 @@ impl Writer {
         let size = picture.size(0);
         #[expect(clippy::cast_precision_loss, reason = "a picture's pixels")]
         let width = size.width.0 as f32 / diagram::SCALE;
-        div().max_w_full().p_2().rounded_sm().bg(rgb(RAISED)).child(
-            img(ImageSource::Render(picture))
-                .w(px(width))
+        let at = (self.entry, self.part);
+        // The piece it takes, as a code block does, so that the next
+        // diagram of the entry is told apart from it.
+        self.part += 1;
+        let picture = img(ImageSource::Render(picture))
+            .w(px(width))
+            .max_w_full()
+            .object_fit(ObjectFit::Contain);
+        let Some(diagrams) = self.diagrams.clone() else {
+            return div()
                 .max_w_full()
-                .object_fit(ObjectFit::Contain),
+                .p_2()
+                .rounded_sm()
+                .bg(rgb(RAISED))
+                .child(picture);
+        };
+        let source = source.to_owned();
+        let name = format!("diagram-{}-{}", at.0, at.1);
+        div().max_w_full().child(
+            div()
+                .id(ElementId::Name(name.clone().into()))
+                .debug_selector(move || name.clone())
+                .max_w_full()
+                .p_2()
+                .rounded_sm()
+                .bg(rgb(RAISED))
+                .cursor(CursorStyle::PointingHand)
+                .hover(|style| style.bg(rgb(BUTTON_HOVER)))
+                .on_hint_click(move |_, window, cx| diagrams(&source, window, cx))
+                .child(picture),
         )
     }
 
@@ -1237,6 +1274,9 @@ pub enum RunClick {
     /// Hands what it printed to the chat, to go with the next line.
     Attach,
 }
+
+/// Shows a Mermaid diagram, by its source, larger, as on the stage.
+pub type ShowsDiagram = Rc<dyn Fn(&str, &mut Window, &mut App)>;
 
 /// Where a code block is in the text: its entry, and its piece in it.
 pub type CodeAt = (usize, usize);

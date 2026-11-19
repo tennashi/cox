@@ -241,7 +241,8 @@ impl ShowsFile for Document {
             | TabContent::Devices(_)
             | TabContent::MacWindow(_)
             | TabContent::Windows(_)
-            | TabContent::Playground(_) => None,
+            | TabContent::Playground(_)
+            | TabContent::Diagram(_) => None,
         }
     }
 }

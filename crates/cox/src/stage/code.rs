@@ -1286,7 +1286,8 @@ impl ShowsFile for Code {
             | tab::TabContent::Devices(_)
             | tab::TabContent::MacWindow(_)
             | tab::TabContent::Windows(_)
-            | tab::TabContent::Playground(_) => None,
+            | tab::TabContent::Playground(_)
+            | tab::TabContent::Diagram(_) => None,
         }
     }
 }
