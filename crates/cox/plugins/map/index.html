@@ -94,10 +94,12 @@
       .mapchip {
         font: 12.5px var(--sans);
         color: var(--dim);
-        border: 1px solid var(--border);
+        border: 1px solid var(--control-edge);
         border-radius: 6px;
         padding: 2px 10px;
         cursor: pointer;
+        background: var(--button);
+        box-shadow: var(--control-shadow);
       }
       .mapchip:hover,
       .mapchip:focus-visible {
@@ -107,8 +109,9 @@
       .mapchip.on {
         color: var(--foreground);
         font-weight: 600;
-        background: var(--hover);
-        border-color: var(--dim);
+        background: var(--accent-tint);
+        border-color: var(--accent-tint-edge);
+        box-shadow: none;
       }
       .crumbs {
         display: flex;
@@ -159,6 +162,8 @@
         border-radius: 8px;
         padding: 0 10px;
         cursor: pointer;
+        border: 1px solid var(--control-edge);
+        box-shadow: var(--control-shadow);
       }
       .wayto b {
         font-weight: 600;
@@ -291,10 +296,10 @@
       .flowchip:hover,
       .flowchip.on {
         color: var(--foreground);
-        border-color: var(--dim);
+        border-color: var(--accent-tint-edge);
       }
       .flowchip.on {
-        background: var(--surface);
+        background: var(--accent-tint);
       }
       .steps {
         display: flex;
@@ -378,9 +383,11 @@
       .views {
         display: inline-flex;
         margin-left: auto;
-        border: 1px solid var(--border);
+        border: 1px solid var(--inset-edge);
         border-radius: 999px;
         overflow: hidden;
+        background: var(--inset-ground);
+        box-shadow: var(--inset-shadow);
       }
       .view {
         display: inline-block;
@@ -393,8 +400,9 @@
         color: var(--foreground);
       }
       .view.on {
-        background: var(--surface);
+        background: var(--accent-tint);
         color: var(--foreground);
+        box-shadow: inset 0 0 0 1px var(--accent-tint-edge);
       }
       /* A flow in order: the boxes as columns with lifelines, the steps as rows. */
       .seq {
@@ -485,11 +493,11 @@
         z-index: 20;
         max-width: min(620px, calc(100vw - 16px));
         padding: 7px 10px 8px;
-        border: 1px solid var(--border);
+        border: 1px solid var(--overlay-edge);
         border-radius: 8px;
-        background: var(--surface);
+        background: var(--raised);
         color: var(--foreground);
-        box-shadow: 0 6px 24px rgba(0, 0, 0, 0.25);
+        box-shadow: var(--overlay-shadow);
         font-size: 11.5px;
       }
       .peek .head {
@@ -728,12 +736,12 @@
         min-width: 120px;
       }
       .focus {
-        border: 1px solid var(--dim);
+        border: 1px solid var(--card-edge);
         border-radius: 12px;
         padding: 10px 10px 12px;
         display: grid;
         gap: 14px;
-        background: var(--raised);
+        background: var(--pane);
         min-width: 0;
       }
       .noframe .focus {
@@ -798,7 +806,7 @@
         background: var(--surface);
       }
       .focus:not(.noframe .focus) .rowname {
-        background: var(--raised);
+        background: var(--pane);
       }
       .line {
         position: relative;
@@ -837,9 +845,10 @@
         max-width: 210px;
         padding: 12px 14px;
         border-radius: 14px;
-        background: var(--surface);
-        border: 1px solid var(--border);
+        background: var(--raised);
+        border: 1px solid var(--control-edge);
         color: inherit;
+        box-shadow: var(--control-shadow);
       }
       .part.goes {
         cursor: pointer;
@@ -964,10 +973,10 @@
       .hold {
         display: grid;
         gap: 8px;
-        border: 1px solid var(--border);
+        border: 1px solid var(--card-edge);
         border-radius: 8px;
         padding: 9px 11px;
-        background: var(--surface);
+        background: var(--pane);
         color: inherit;
         min-width: 0;
       }
