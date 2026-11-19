@@ -10,6 +10,8 @@
 //! page's address back, closing the list, and gives the keyboard back to
 //! the page.
 
+use crate::ui::depth::Stand as _;
+use coxd::theme::OVERLAY;
 use std::net::{Ipv4Addr, Ipv6Addr};
 
 use gpui::{
@@ -25,7 +27,7 @@ use crate::vim::hints::Hinted as _;
 use crate::vim::{self, Leave, Region};
 use coxd::daemon::phone::relay::on_the_mac;
 use coxd::settings::SearchEngine;
-use coxd::theme::{BORDER_STRONG, DIM, FAINT, FOREGROUND, RAISED, SELECTED};
+use coxd::theme::{DIM, FAINT, FOREGROUND, RAISED, SELECTED};
 
 actions!(address, [Revert, Next, Previous]);
 
@@ -545,10 +547,8 @@ impl AddressLine {
                 .mt(px(4.))
                 .p(px(4.))
                 .bg(rgb(RAISED))
-                .border_1()
-                .border_color(rgb(BORDER_STRONG))
                 .rounded(px(10.))
-                .shadow_lg()
+                .stand(OVERLAY)
                 .flex()
                 .flex_col()
                 .child(said)

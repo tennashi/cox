@@ -13,6 +13,8 @@
 
 mod directory;
 
+use crate::ui::depth::Stand as _;
+use coxd::theme::OVERLAY;
 use directory::Directory;
 
 use std::collections::HashMap;
@@ -1268,7 +1270,7 @@ impl Render for ProjectCard {
             .max_h_full()
             .flex()
             .flex_col()
-            .shadow_lg()
+            .stand(OVERLAY)
             // A click on the card stays there, not closing it.
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .on_action(cx.listener(|_, _: &CloseProjectCard, _, cx| cx.emit(Dismissed)))

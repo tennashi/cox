@@ -28,6 +28,8 @@ mod servers;
 mod translation;
 mod words;
 
+use crate::ui::depth::Stand as _;
+use coxd::theme::OVERLAY;
 use std::path::PathBuf;
 
 use gpui::{
@@ -443,7 +445,7 @@ impl Render for SettingsView {
             .max_h_full()
             .flex()
             .flex_col()
-            .shadow_lg()
+            .stand(OVERLAY)
             // A click on the card stays there, not closing it.
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .on_action(cx.listener(|_, _: &CloseSettings, _, cx| cx.emit(Dismissed)))

@@ -7,6 +7,8 @@
 //! each virtual device the SDK has. The button of what changed counts the
 //! files that did, while the stage is open.
 
+use crate::ui::depth::Stand as _;
+use coxd::theme::OVERLAY;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -26,9 +28,7 @@ use crate::ui::tip;
 use crate::vim::hints::Hinted as _;
 use crate::vim::keymap::Follow;
 use coxd::terminal::Program;
-use coxd::theme::{
-    ACCENT, ASKING, BORDER_STRONG, DIM, FAINT, FOREGROUND, HOVER, RAISED, SELECTED, SURFACE,
-};
+use coxd::theme::{ACCENT, ASKING, DIM, FAINT, FOREGROUND, HOVER, RAISED, SELECTED, SURFACE};
 
 /// How tall a view's button is, and the +, and how round each is.
 const VIEW_HEIGHT: f32 = 28.;
@@ -476,10 +476,8 @@ impl Stage {
                 .flex()
                 .flex_col()
                 .bg(rgb(RAISED))
-                .border_1()
-                .border_color(rgb(BORDER_STRONG))
                 .rounded(px(14.))
-                .shadow_lg()
+                .stand(OVERLAY)
                 .text_color(rgb(FOREGROUND))
                 .on_mouse_down_out(cx.listener(move |stage, _, _, cx| close(stage, cx)))
                 .on_action(cx.listener(move |stage, _: &CloseMenu, window, cx| {

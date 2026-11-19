@@ -34,6 +34,8 @@
 //! each as it is set, and a click on it opens a list of them, from which
 //! each opens its choices (see [`settings`]).
 
+use crate::ui::depth::Stand as _;
+use coxd::theme::OVERLAY;
 use std::cell::Cell;
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -1420,10 +1422,8 @@ impl ChatView {
                 .flex_col()
                 .gap_1()
                 .rounded_md()
-                .border_1()
-                .border_color(rgb(BORDER))
                 .bg(rgb(RAISED))
-                .shadow_md()
+                .stand(OVERLAY)
                 .text_size(px(12.))
                 // The conversation under the card hears none of the mouse.
                 .occlude()

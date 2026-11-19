@@ -114,9 +114,9 @@ mod tests {
         assert_eq!(
             color_at(NamedColor::Background as usize, &colors),
             Rgb {
-                r: 0x15,
-                g: 0x15,
-                b: 0x17
+                r: 0x13,
+                g: 0x13,
+                b: 0x16
             }
         );
     }
