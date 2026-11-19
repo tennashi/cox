@@ -43,6 +43,10 @@ pub enum Entry {
         added: Vec<String>,
         removed: Vec<String>,
     },
+    /// How the plan the agent sent differs from the one it sent before,
+    /// in this turn or one before: a receipt of the change, written where
+    /// it came, which tells why how far the plan has gone moved as it did.
+    PlanRevised(Revision),
     /// A picture or a video shown in the conversation, as a screenshot of
     /// what the agent made, for the human to see on the Mac or the phone:
     /// the copy Cox keeps of it, by the name of its `file`, of the `kind`
@@ -656,12 +660,177 @@ impl StepsDone {
     pub fn left(self) -> usize {
         self.of - self.done
     }
+
+    /// How much of the plan is done, in whole percents, rounded down, as
+    /// 62 for 5 of 8: none for a plan with no steps.
+    #[must_use]
+    pub fn percent(self) -> Option<usize> {
+        (self.of > 0).then(|| self.done * 100 / self.of)
+    }
+
+    /// How much of the plan is done, as "62%", or "–" for one with no
+    /// steps.
+    #[must_use]
+    pub fn percent_text(self) -> String {
+        self.percent()
+            .map_or_else(|| "–".to_owned(), |percent| format!("{percent}%"))
+    }
 }
 
 impl std::fmt::Display for StepsDone {
     /// As "2/3".
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}/{}", self.done, self.of)
+    }
+}
+
+/// How a plan differs from the one before it, as [`Entry::PlanRevised`]
+/// keeps it: how far each had gone, and the steps that tell why it moved
+/// as it did. A step is the one before it was when coxd knows it by the
+/// same id (see [`Step::id`]), as it does when it reads the same, or
+/// alike enough to be the step reworded.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Revision {
+    /// How far the plan before had gone.
+    pub before: StepsDone,
+    /// How far the plan has gone now.
+    pub after: StepsDone,
+    /// The steps the plan gained, as they read.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub added: Vec<String>,
+    /// The steps it lost, as they read before.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub removed: Vec<String>,
+    /// The steps the agent reworded.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub reworded: Vec<Reworded>,
+    /// The steps done before that are not now, as they read now.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub undone: Vec<String>,
+    /// How many times the plan changed so between `before` and `after`:
+    /// once, unless the turn kept as many receipts as it keeps, when its
+    /// last takes in each change after it.
+    #[serde(default = "once", skip_serializing_if = "is_once")]
+    pub changes: usize,
+}
+
+/// A step of a plan the agent reworded: as it read `from`, and reads
+/// now, `to`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Reworded {
+    pub from: String,
+    pub to: String,
+}
+
+fn once() -> usize {
+    1
+}
+
+#[expect(
+    clippy::trivially_copy_pass_by_ref,
+    reason = "serde's `skip_serializing_if` passes the field by reference"
+)]
+fn is_once(changes: &usize) -> bool {
+    *changes == 1
+}
+
+impl Revision {
+    /// How `after` differs from `before`, each step of `after` the one of
+    /// `before` that `matched` names by its place there, if any: empty
+    /// when no step came, went, was reworded or was undone, as when steps
+    /// only went further, or moved.
+    #[must_use]
+    pub fn between(before: &[Step], after: &[Step], matched: &[Option<usize>]) -> Self {
+        let mut revision = Self {
+            before: StepsDone::count(before),
+            after: StepsDone::count(after),
+            added: Vec::new(),
+            removed: Vec::new(),
+            reworded: Vec::new(),
+            undone: Vec::new(),
+            changes: 1,
+        };
+        let mut kept = vec![false; before.len()];
+        for (step, matched) in after.iter().zip(matched) {
+            let Some(was) = matched.and_then(|at| before.get(at)) else {
+                revision.added.push(step.text.clone());
+                continue;
+            };
+            kept[matched.unwrap_or_default()] = true;
+            if was.text != step.text {
+                revision.reworded.push(Reworded {
+                    from: was.text.clone(),
+                    to: step.text.clone(),
+                });
+            }
+            if was.state == StepState::Completed && step.state != StepState::Completed {
+                revision.undone.push(step.text.clone());
+            }
+        }
+        revision.removed = before
+            .iter()
+            .zip(kept)
+            .filter(|(_, kept)| !kept)
+            .map(|(step, _)| step.text.clone())
+            .collect();
+        revision
+    }
+
+    /// Whether it tells no step that came, went, was reworded or undone,
+    /// as one that takes in changes that undid each other.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.added.is_empty()
+            && self.removed.is_empty()
+            && self.reworded.is_empty()
+            && self.undone.is_empty()
+    }
+
+    /// Whether less of the plan is done after than before, as the
+    /// percents of [`Self::headline`] read.
+    #[must_use]
+    pub fn dropped(&self) -> bool {
+        matches!(
+            (self.before.percent(), self.after.percent()),
+            (Some(before), Some(after)) if after < before
+        )
+    }
+
+    /// What it tells, in a line: the steps that came and went, how many
+    /// were reworded and undone, and how much of the plan was done before
+    /// and is now, as "+3 steps · 80% → 62%".
+    #[must_use]
+    pub fn headline(&self) -> String {
+        let counted = |count: usize, one: &str, more: &str| {
+            format!("{count} {}", if count == 1 { one } else { more })
+        };
+        let mut told: Vec<String> = Vec::new();
+        if !self.added.is_empty() {
+            told.push(format!("+{}", counted(self.added.len(), "step", "steps")));
+        }
+        if !self.removed.is_empty() {
+            told.push(format!("−{}", counted(self.removed.len(), "step", "steps")));
+        }
+        if !self.reworded.is_empty() {
+            told.push(format!("{} reworded", self.reworded.len()));
+        }
+        if !self.undone.is_empty() {
+            told.push(format!("{} undone", self.undone.len()));
+        }
+        if told.is_empty() {
+            told.push("back as it was".to_owned());
+        }
+        let over = if self.changes > 1 {
+            format!(" · over {} changes", self.changes)
+        } else {
+            String::new()
+        };
+        format!(
+            "{} · {} → {}{over}",
+            told.join(", "),
+            self.before.percent_text(),
+            self.after.percent_text()
+        )
     }
 }
 
@@ -819,6 +988,96 @@ mod tests {
             serde_json::to_value(done).unwrap(),
             serde_json::json!({ "done": 1, "of": 3 })
         );
+    }
+
+    #[test]
+    fn a_revision_tells_the_steps_that_came_went_were_reworded_or_undone() {
+        let before = [
+            step("Read the code", StepState::Completed),
+            step("Fix", StepState::Completed),
+            step("Test", StepState::Completed),
+            step("Lint", StepState::Completed),
+            step("Commit", StepState::Pending),
+        ];
+        let after = [
+            step("Read all the code", StepState::Completed),
+            step("Fix", StepState::InProgress),
+            step("Test", StepState::Completed),
+            step("Lint", StepState::Completed),
+            step("Write the docs", StepState::Pending),
+            step("Push", StepState::Pending),
+            step("Open a pull request", StepState::Pending),
+        ];
+        let matched = [Some(0), Some(1), Some(2), Some(3), None, None, None];
+        let revision = Revision::between(&before, &after, &matched);
+        assert_eq!(
+            revision,
+            Revision {
+                before: StepsDone { done: 4, of: 5 },
+                after: StepsDone { done: 3, of: 7 },
+                added: vec![
+                    "Write the docs".to_owned(),
+                    "Push".to_owned(),
+                    "Open a pull request".to_owned(),
+                ],
+                removed: vec!["Commit".to_owned()],
+                reworded: vec![Reworded {
+                    from: "Read the code".to_owned(),
+                    to: "Read all the code".to_owned(),
+                }],
+                undone: vec!["Fix".to_owned()],
+                changes: 1,
+            }
+        );
+        assert!(revision.dropped());
+        assert_eq!(
+            revision.headline(),
+            "+3 steps, −1 step, 1 reworded, 1 undone · 80% → 42%"
+        );
+        // Kept as it reads, with no list it has nothing in.
+        let kept = serde_json::to_value(Entry::PlanRevised(Revision {
+            reworded: Vec::new(),
+            undone: Vec::new(),
+            ..revision
+        }))
+        .unwrap();
+        assert_eq!(
+            kept,
+            serde_json::json!({ "plan_revised": {
+                "before": { "done": 4, "of": 5 },
+                "after": { "done": 3, "of": 7 },
+                "added": ["Write the docs", "Push", "Open a pull request"],
+                "removed": ["Commit"],
+            } })
+        );
+        assert_eq!(
+            serde_json::from_value::<Entry>(kept.clone())
+                .map(|entry| serde_json::to_value(entry).unwrap())
+                .unwrap(),
+            kept
+        );
+    }
+
+    #[test]
+    fn a_plan_whose_steps_only_went_further_or_moved_is_not_revised() {
+        let before = [
+            step("Read", StepState::InProgress),
+            step("Fix", StepState::Pending),
+        ];
+        let after = [
+            step("Fix", StepState::InProgress),
+            step("Read", StepState::Completed),
+        ];
+        assert!(Revision::between(&before, &after, &[Some(1), Some(0)]).is_empty());
+        // Taking steps out raises how much is done, which is no drop.
+        let fewer = Revision::between(&before, &after[1..], &[Some(0)]);
+        assert!(!fewer.dropped());
+        assert_eq!(fewer.headline(), "−1 step · 0% → 100%");
+        let empty = Revision {
+            changes: 4,
+            ..Revision::between(&[], &before, &[None, None])
+        };
+        assert_eq!(empty.headline(), "+2 steps · – → 0% · over 4 changes");
     }
 
     #[test]

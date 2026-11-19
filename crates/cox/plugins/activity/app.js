@@ -179,6 +179,7 @@ const MARKS = {
   start: "▶",
   step_started: "◐",
   step_done: "✓",
+  plan_revised: "≡",
   asked: "?",
   answered: "→",
   declined: "×",
@@ -218,6 +219,8 @@ function says(event, chat) {
       return `Started <b>${esc(event.text)}</b>`;
     case "step_done":
       return `Done <b>${esc(event.text)}</b>`;
+    case "plan_revised":
+      return `Plan <b>${esc(event.text)}</b>${revised(event)}`;
     case "asked":
       return `Asked you: ${esc(event.text)}`;
     case "answered":
@@ -245,6 +248,21 @@ function says(event, chat) {
     default:
       return esc(event.text);
   }
+}
+
+/// The steps a change of the plan, `event`, tells, as Cox told them: each
+/// that came, went, was reworded and was undone, a line each, then how
+/// far the plan went before and after.
+function revised(event) {
+  const line = (as, mark, text) => `<span class="${as}">${mark} ${esc(text)}</span><br>`;
+  const lines = [
+    ...(event.added ?? []).map((text) => line("added", "+", text)),
+    ...(event.removed ?? []).map((text) => line("removed", "−", text)),
+    ...(event.reworded ?? []).map((step) => line("reworded", "~", `${step.from} → ${step.to}`)),
+    ...(event.undone ?? []).map((text) => line("added", "↺", `${text} (no longer done)`)),
+  ];
+  const far = event.before && event.after ? `${counted(event.before)} → ${counted(event.after)} steps done` : "";
+  return `<span class="revised">${lines.join("")}<span class="lines">${esc(far)}</span></span>`;
 }
 
 /// Whether `event` tells of something that failed: CI, or a turn.
@@ -301,7 +319,7 @@ function opening(chat) {
         : story.events
             .map(
               (event) =>
-                `<div class="event ${esc(event.kind)}${failed(event) ? " failed" : ""}"><span class="at">${esc(event.when)}</span>` +
+                `<div class="event ${esc(event.kind)}${failed(event) ? " failed" : ""}${event.dropped ? " dropped" : ""}"><span class="at">${esc(event.when)}</span>` +
                 `<span class="mark">${MARKS[event.kind] ?? "·"}</span><span class="text">${says(event, chat)}</span></div>`,
             )
             .join("") +

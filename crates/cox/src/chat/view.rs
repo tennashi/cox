@@ -1437,11 +1437,22 @@ impl ChatView {
                         .id("plan-line")
                         .debug_selector(|| "plan-line".to_owned())
                         .flex()
-                        .gap_2()
+                        // Why how far it went moved goes under, once the
+                        // card is too narrow for it beside.
+                        .flex_wrap()
+                        .gap_x_2()
                         .text_color(rgb(DIM))
                         .cursor_pointer()
                         .child(disclosure(Some(open)))
                         .child(format!("Plan {}", StepsDone::count(steps)))
+                        // Why how far it went moved as it did, last.
+                        .children(self.conversation.last_revision().map(|revision| {
+                            div()
+                                .debug_selector(|| "plan-revision".to_owned())
+                                .min_w_0()
+                                .text_color(rgb(entries::revision_color(revision)))
+                                .child(revision.headline())
+                        }))
                         .on_hint_click(cx.listener(|view, _, _, cx| {
                             view.plan_folded = !view.plan_folded;
                             cx.notify();

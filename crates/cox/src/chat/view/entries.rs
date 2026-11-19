@@ -22,7 +22,7 @@ use std::ops::Range;
 use cox_core::diff::Line;
 use gpui::{AnyElement, Context, FontWeight, SharedString, Stateful, div, prelude::*, px, rgb};
 
-use cox_core::entry::{MediaKind, StepsDone};
+use cox_core::entry::{MediaKind, Revision, StepsDone};
 use cox_core::goal::Goal;
 
 use crate::chat::view::ChatView;
@@ -910,6 +910,7 @@ impl ChatView {
             Entry::PlanChanged { added, removed } => {
                 render_drift(index, added, removed, &mut writer)
             }
+            Entry::PlanRevised(revision) => self.render_revision(index, revision, &mut writer, cx),
             Entry::Proposal(proposal) => render_proposal(index, proposal, &mut writer, cx),
             Entry::Keep { why, kept, .. } => render_keep(index, why, *kept, &mut writer, cx),
             Entry::Media {
@@ -1137,6 +1138,51 @@ impl ChatView {
             .into_any_element()
     }
 
+    /// A receipt of how the plan changed from the one before it, on a
+    /// line that tells how many steps came and went and how much of the
+    /// plan was done before and after, in amber once less is, opening to
+    /// the steps.
+    fn render_revision(
+        &self,
+        index: usize,
+        revision: &Revision,
+        writer: &mut Writer,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let fold = Fold::Content(index);
+        let open = self.folds.is_open(fold, false);
+        let line = div()
+            .id(("line", index))
+            .debug_selector(move || format!("line-{index}"))
+            .flex()
+            .gap_2()
+            .text_color(rgb(DIM))
+            .child(disclosure(Some(open)))
+            .child(div().flex_shrink_0().child("≡"))
+            .child(
+                div()
+                    .debug_selector(move || format!("plan-revised-{index}"))
+                    .text_color(rgb(revision_color(revision)))
+                    .child(format!("Plan {}", revision.headline())),
+            );
+        div()
+            .flex()
+            .flex_col()
+            .gap_1()
+            .child(folding(line, Some(fold), cx))
+            .when(open, |plan| {
+                plan.child(
+                    div()
+                        .pl(px(INDENT))
+                        .flex()
+                        .flex_col()
+                        .gap_1()
+                        .children(revision_steps(revision, writer)),
+                )
+            })
+            .into_any_element()
+    }
+
     /// The plan the agent worked to, on a line that tells how far it went,
     /// opening to its steps.
     fn render_plan_entry(
@@ -1164,6 +1210,58 @@ impl ChatView {
             .when(open, |plan| plan.child(render_steps(steps).pl(px(INDENT))))
             .into_any_element()
     }
+}
+
+/// The color a receipt of how the plan changed tells it in: amber once
+/// less of the plan is done than before, as what the human would ask
+/// about, and dim otherwise.
+pub(super) fn revision_color(revision: &Revision) -> u32 {
+    if revision.dropped() { ASKING } else { DIM }
+}
+
+/// The steps a receipt of how the plan changed tells, as
+/// [`ChatView::render_revision`] shows them: each that came, in amber,
+/// went, reworded, and was undone, then how far the plan went before and
+/// after.
+fn revision_steps(revision: &Revision, writer: &mut Writer) -> Vec<gpui::Div> {
+    let step = |mark: &'static str, color: u32, text: &str, writer: &mut Writer| {
+        div()
+            .flex()
+            .gap_2()
+            .text_size(px(13.))
+            .text_color(rgb(color))
+            .child(div().flex_shrink_0().w(px(10.)).child(mark))
+            .child(div().flex_1().min_w_0().child(writer.plain(text, "\n")))
+    };
+    let mut steps: Vec<gpui::Div> = Vec::new();
+    for text in &revision.added {
+        steps.push(step("+", ASKING, text, writer));
+    }
+    for text in &revision.removed {
+        steps.push(step("−", DIM, text, writer));
+    }
+    for reworded in &revision.reworded {
+        let text = format!("{} → {}", reworded.from, reworded.to);
+        steps.push(step("~", DIM, &text, writer));
+    }
+    for text in &revision.undone {
+        steps.push(step(
+            "↺",
+            ASKING,
+            &format!("{text} (no longer done)"),
+            writer,
+        ));
+    }
+    steps.push(
+        div()
+            .text_size(px(12.))
+            .text_color(rgb(FAINT))
+            .child(format!(
+                "{} → {} steps done",
+                revision.before, revision.after
+            )),
+    );
+    steps
 }
 
 /// How the plan differs from the one the human left the agent to: each

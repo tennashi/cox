@@ -13,8 +13,8 @@ use cox_acp::{Compaction, CompactionTrigger, PermissionAnswer, SlashCommand, Sto
 use cox_core::diff::Line;
 pub use cox_core::entry::{
     Answer, Attachment, Check, CheckState, Committed, Content, Entry, LoginOption, Picked,
-    Proposal, Proposed, Question, QuestionAnswer, QuestionOption, Step, StepState, TerminalLogin,
-    ToolCallResult,
+    Proposal, Proposed, Question, QuestionAnswer, QuestionOption, Revision, Reworded, Step,
+    StepState, StepsDone, TerminalLogin, ToolCallResult,
 };
 use cox_core::entry::{OnStep, alike};
 use cox_core::goal;
@@ -115,6 +115,10 @@ pub const GOAL_TURNS: usize = 10;
 /// [`alike`] measures it, to be that step reworded, which keeps what it
 /// was known by and when it came to its state.
 const REWORDED: f64 = 0.5;
+
+/// How many receipts of how the plan changed a turn keeps, at most (see
+/// [`Entry::PlanRevised`]): its last takes in each change after it.
+const REVISIONS: usize = 10;
 
 /// The most of what the goal's command printed, or its judge said, that
 /// the agent is told, in characters, from the end.
@@ -231,6 +235,15 @@ pub struct Patch {
     pub steers: bool,
 }
 
+/// The last receipt of how the plan changed, which a change after it
+/// may be taken into: the entry it is, by its place, and the plan it
+/// tells the change from.
+#[derive(Debug)]
+struct Revising {
+    at: usize,
+    from: Vec<Step>,
+}
+
 /// How the agent's plan stands against the one the human left it to: the
 /// first it sent after the human's last line.
 #[derive(Debug, Default)]
@@ -338,6 +351,8 @@ pub struct Conversation {
     /// gave it, which a step of a plan sent in place of another keeps
     /// once it is gone from the plan, or 0 before any did.
     steps_made: u64,
+    /// The last receipt of how the plan changed, while coxd runs.
+    revising: Option<Revising>,
 }
 
 impl Default for Conversation {
@@ -373,6 +388,7 @@ impl Conversation {
             raised_line: BTreeSet::new(),
             unoffered: None,
             steps_made: 0,
+            revising: None,
         }
     }
 
@@ -420,6 +436,7 @@ impl Conversation {
             raised_line: BTreeSet::new(),
             unoffered: None,
             steps_made: 0,
+            revising: None,
         }
     }
 
@@ -1537,7 +1554,8 @@ impl Conversation {
             .duration_since(std::time::UNIX_EPOCH)
             .ok()
             .and_then(|since| i64::try_from(since.as_millis()).ok());
-        let steps = self.stamped(steps, now);
+        let was = self.last_steps();
+        let (steps, matched) = self.stamped(was.as_deref().unwrap_or_default(), steps, now);
         let texts = texts(&steps);
         let turn = self
             .entries
@@ -1549,30 +1567,92 @@ impl Conversation {
             .rposition(|entry| matches!(entry, Entry::Plan(_)));
         match planned {
             Some(index) => {
-                self.entries[turn + index] = Entry::Plan(steps);
+                self.entries[turn + index] = Entry::Plan(steps.clone());
                 self.changed.insert(turn + index);
             }
-            None => self.push(Entry::Plan(steps)),
+            None => self.push(Entry::Plan(steps.clone())),
+        }
+        if let Some(was) = was {
+            self.revise(was, &steps, &matched);
         }
         self.follow_plan(texts);
     }
 
-    /// `steps`, each with when it came to its state and what the chat
-    /// knows it by, as the step of the plan the agent sent last it is
-    /// has them: the one by the same text, or else the one it reads most
-    /// like, as reworded, once alike enough. A step keeps when it came to
-    /// its state if it was so there, and is stamped `now` otherwise; one
-    /// that is new, or that an older Cox kept, is known by the next id.
-    fn stamped(&mut self, steps: Vec<Step>, now: Option<i64>) -> Vec<Step> {
-        let was: Vec<Step> = self
+    /// The steps of the plan the agent sent last, in this turn or one
+    /// before, if it sent one.
+    fn last_steps(&self) -> Option<Vec<Step>> {
+        self.entries.iter().rev().find_map(|entry| match entry {
+            Entry::Plan(steps) => Some(steps.clone()),
+            _ => None,
+        })
+    }
+
+    /// Writes a receipt of how `steps`, the plan the agent sent, differ
+    /// from `was`, the one it sent before, each step of `steps` the one
+    /// of `was` that `matched` names, if any, when a step came, went, was
+    /// reworded or was undone: as an entry of its own after what came
+    /// before it, or, once the turn has [`REVISIONS`] of them, in place
+    /// of its last, which then takes in the change.
+    fn revise(&mut self, was: Vec<Step>, steps: &[Step], matched: &[Option<usize>]) {
+        let revision = Revision::between(&was, steps, matched);
+        if revision.is_empty() {
+            return;
+        }
+        let turn = self
             .entries
             .iter()
-            .rev()
-            .find_map(|entry| match entry {
-                Entry::Plan(steps) => Some(steps.clone()),
-                _ => None,
-            })
-            .unwrap_or_default();
+            .rposition(is_turn_start)
+            .map_or(0, |start| start + 1);
+        let receipts: Vec<usize> = (turn..self.entries.len())
+            .filter(|&at| matches!(self.entries[at], Entry::PlanRevised(_)))
+            .collect();
+        if receipts.len() >= REVISIONS
+            && let Some(&last) = receipts.last()
+            && let Some(revising) = self
+                .revising
+                .as_ref()
+                .filter(|revising| revising.at == last)
+            && let Entry::PlanRevised(kept) = &self.entries[last]
+        {
+            // The step of the plan before the last receipt each step is,
+            // by what coxd knows it by, which a reworded step keeps.
+            let from = &revising.from;
+            let matched: Vec<Option<usize>> = steps
+                .iter()
+                .map(|step| {
+                    step.id
+                        .and_then(|id| from.iter().position(|was| was.id == Some(id)))
+                })
+                .collect();
+            let changes = kept.changes + 1;
+            self.entries[last] = Entry::PlanRevised(Revision {
+                changes,
+                ..Revision::between(from, steps, &matched)
+            });
+            self.changed.insert(last);
+            return;
+        }
+        self.revising = Some(Revising {
+            at: self.entries.len(),
+            from: was,
+        });
+        self.push(Entry::PlanRevised(revision));
+    }
+
+    /// `steps`, each with when it came to its state and what the chat
+    /// knows it by, as the step of `was`, the plan the agent sent last,
+    /// it is has them: the one by the same text, or else the one it reads
+    /// most like, as reworded, once alike enough. A step keeps when it
+    /// came to its state if it was so there, and is stamped `now`
+    /// otherwise; one that is new, or that an older Cox kept, is known by
+    /// the next id. With them, the step of `was` each is, by its place
+    /// there, if any.
+    fn stamped(
+        &mut self,
+        was: &[Step],
+        steps: Vec<Step>,
+        now: Option<i64>,
+    ) -> (Vec<Step>, Vec<Option<usize>>) {
         let mut taken = vec![false; was.len()];
         let mut matched: Vec<Option<usize>> = Vec::with_capacity(steps.len());
         for step in &steps {
@@ -1600,8 +1680,8 @@ impl Conversation {
         let mut last = self.last_step_id();
         let steps = steps
             .into_iter()
-            .zip(matched)
-            .map(|(step, matched)| {
+            .zip(&matched)
+            .map(|(step, &matched)| {
                 let before = matched.map(|at| &was[at]);
                 let since = before
                     .filter(|before| before.state == step.state)
@@ -1626,7 +1706,7 @@ impl Conversation {
             })
             .collect();
         self.steps_made = last;
-        steps
+        (steps, matched)
     }
 
     /// The last id a step of the chat's plans got, or 0 before any did:
@@ -1760,6 +1840,21 @@ impl Conversation {
             .take_while(|entry| !is_turn_start(entry))
             .find_map(|entry| match entry {
                 Entry::Plan(steps) => Some(steps.as_slice()),
+                _ => None,
+            })
+    }
+
+    /// The last receipt of how the plan changed in the last turn, if it
+    /// changed: what tells why how far the plan [`Self::last_plan`] went
+    /// moved as it did.
+    #[must_use]
+    pub fn last_revision(&self) -> Option<&Revision> {
+        self.entries
+            .iter()
+            .rev()
+            .take_while(|entry| !is_turn_start(entry))
+            .find_map(|entry| match entry {
+                Entry::PlanRevised(revision) => Some(revision),
                 _ => None,
             })
     }
@@ -2670,14 +2765,17 @@ mod tests {
         // A step that went further is stamped anew; one as it was keeps
         // its stamp.
         let later = Some(i64::MAX);
+        let was = conversation.last_plan().unwrap().to_vec();
         let then: Vec<Option<i64>> = conversation
             .stamped(
+                &was,
                 vec![
                     step("Read", StepState::Completed),
                     step("Fix", StepState::Pending),
                 ],
                 later,
             )
+            .0
             .iter()
             .map(|step| step.since)
             .collect();
@@ -2718,7 +2816,9 @@ mod tests {
         // Done later: it keeps when it started, its `since` is when it
         // was done.
         let later = Some(i64::MAX);
-        let then = conversation.stamped(
+        let was = conversation.last_plan().unwrap().to_vec();
+        let (then, _) = conversation.stamped(
+            &was,
             vec![
                 step("Read", StepState::Completed),
                 step("Fix", StepState::InProgress),
@@ -2881,8 +2981,173 @@ mod tests {
         conversation.submit("again");
         assert_eq!(conversation.last_plan(), None);
         conversation.apply(AgentEvent::Plan(first.clone()));
-        assert_eq!(conversation.entries().len(), 5);
+        assert_eq!(conversation.entries().len(), 6);
         assert_eq!(unstamped(&conversation.entries()[1]), Entry::Plan(then));
+        // Its step done before, and not now, is told after it.
+        assert!(matches!(
+            &conversation.entries()[5],
+            Entry::PlanRevised(revision) if revision.undone == ["Read"]
+        ));
+    }
+
+    /// The receipts of how the plan changed in `conversation`, in order.
+    fn revisions(conversation: &Conversation) -> Vec<&Revision> {
+        conversation
+            .entries()
+            .iter()
+            .filter_map(|entry| match entry {
+                Entry::PlanRevised(revision) => Some(revision),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn writes_a_receipt_of_each_change_of_the_plan_where_it_came() {
+        let mut conversation = Conversation::new();
+        conversation.submit("ship it");
+        let done = |text: &str| step(text, StepState::Completed);
+        let pending = |text: &str| step(text, StepState::Pending);
+        conversation.apply(AgentEvent::Plan(vec![
+            done("Read"),
+            done("Fix"),
+            done("Test"),
+            done("Lint"),
+            pending("Commit"),
+        ]));
+        // The first plan is told against none.
+        assert_eq!(revisions(&conversation), Vec::<&Revision>::new());
+        conversation.apply(AgentEvent::ReplyText("working".to_owned()));
+        // A step only going further changes nothing.
+        conversation.apply(AgentEvent::Plan(vec![
+            done("Read"),
+            done("Fix"),
+            done("Test"),
+            done("Lint"),
+            step("Commit", StepState::InProgress),
+        ]));
+        assert_eq!(revisions(&conversation), Vec::<&Revision>::new());
+
+        // In the turn, steps the agent adds are told after what came
+        // before them, with how far the plan went before and after.
+        conversation.apply(AgentEvent::Plan(vec![
+            done("Read"),
+            done("Fix"),
+            done("Test"),
+            done("Lint"),
+            done("Commit"),
+            pending("Write the docs"),
+            pending("Push"),
+            pending("Open a pull request"),
+        ]));
+        let revised = conversation
+            .entries()
+            .iter()
+            .position(|entry| matches!(entry, Entry::PlanRevised(_)));
+        assert_eq!(revised, Some(3), "after the reply");
+        let [revision] = revisions(&conversation)[..] else {
+            panic!("one receipt");
+        };
+        assert_eq!(
+            (revision.before, revision.after),
+            (StepsDone { done: 4, of: 5 }, StepsDone { done: 5, of: 8 })
+        );
+        assert_eq!(revision.headline(), "+3 steps · 80% → 62%");
+        // The turn still shows one plan.
+        assert_eq!(
+            conversation
+                .entries()
+                .iter()
+                .filter(|entry| matches!(entry, Entry::Plan(_)))
+                .count(),
+            1
+        );
+
+        // A step reworded is told as it read and reads.
+        conversation.apply(AgentEvent::Plan(vec![
+            done("Read"),
+            done("Fix"),
+            done("Test"),
+            done("Lint"),
+            done("Commit"),
+            pending("Write the docs for --shout"),
+            pending("Push"),
+            pending("Open a pull request"),
+        ]));
+        assert_eq!(
+            revisions(&conversation)[1].reworded,
+            [Reworded {
+                from: "Write the docs".to_owned(),
+                to: "Write the docs for --shout".to_owned(),
+            }]
+        );
+
+        // The next turn's plan is told against the last turn's.
+        conversation.apply(AgentEvent::TurnEnded(StopReason::EndTurn));
+        conversation.told("go on");
+        conversation.apply(AgentEvent::Plan(vec![
+            pending("Push"),
+            pending("Open a pull request"),
+        ]));
+        let last = revisions(&conversation)[2];
+        assert_eq!(last.removed.len(), 6);
+        assert_eq!(
+            (last.before, last.after),
+            (StepsDone { done: 5, of: 8 }, StepsDone { done: 0, of: 2 })
+        );
+    }
+
+    #[test]
+    fn a_turn_keeps_so_many_receipts_and_its_last_takes_in_the_changes_after() {
+        let mut conversation = Conversation::new();
+        conversation.submit("plan");
+        let planned = |count: usize| -> Vec<Step> {
+            (0..count)
+                .map(|at| step(&format!("Step number {at}"), StepState::Pending))
+                .collect()
+        };
+        conversation.apply(AgentEvent::Plan(planned(1)));
+        for count in 2..=REVISIONS + 1 {
+            conversation.apply(AgentEvent::Plan(planned(count)));
+        }
+        assert_eq!(revisions(&conversation).len(), REVISIONS);
+        let last = revisions(&conversation)[REVISIONS - 1].clone();
+        assert_eq!(last.before.of, REVISIONS);
+
+        // Past them, the last takes in each change, from the plan before
+        // it.
+        conversation.take_changed();
+        conversation.apply(AgentEvent::Plan(planned(REVISIONS + 3)));
+        let [.., merged] = revisions(&conversation)[..] else {
+            panic!("receipts");
+        };
+        assert_eq!(revisions(&conversation).len(), REVISIONS);
+        assert_eq!(
+            (merged.before.of, merged.after.of, merged.added.len()),
+            (REVISIONS, REVISIONS + 3, 3)
+        );
+        assert_eq!(merged.changes, 2);
+        assert!(
+            merged.headline().ends_with("over 2 changes"),
+            "{}",
+            merged.headline()
+        );
+        assert!(
+            conversation.take_changed().contains(
+                &conversation
+                    .entries()
+                    .iter()
+                    .rposition(|entry| matches!(entry, Entry::PlanRevised(_)))
+                    .unwrap()
+            ),
+            "kept again"
+        );
+
+        // The next turn keeps its own.
+        conversation.apply(AgentEvent::TurnEnded(StopReason::EndTurn));
+        conversation.told("go on");
+        conversation.apply(AgentEvent::Plan(planned(REVISIONS + 4)));
+        assert_eq!(revisions(&conversation).len(), REVISIONS + 1);
     }
 
     #[test]

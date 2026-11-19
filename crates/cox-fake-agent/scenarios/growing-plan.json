@@ -1,0 +1,226 @@
+{
+  "turns": [
+    {
+      "steps": [
+        {
+          "think": "Five steps should do it."
+        },
+        {
+          "update": {
+            "sessionUpdate": "plan",
+            "entries": [
+              {
+                "content": "Read the code",
+                "priority": "medium",
+                "status": "in_progress"
+              },
+              {
+                "content": "Add the --shout flag",
+                "priority": "medium",
+                "status": "pending"
+              },
+              {
+                "content": "Test it",
+                "priority": "medium",
+                "status": "pending"
+              },
+              {
+                "content": "Lint",
+                "priority": "medium",
+                "status": "pending"
+              },
+              {
+                "content": "Commit",
+                "priority": "medium",
+                "status": "pending"
+              }
+            ]
+          }
+        },
+        {
+          "sleep": 1200
+        },
+        {
+          "update": {
+            "sessionUpdate": "plan",
+            "entries": [
+              {
+                "content": "Read the code",
+                "priority": "medium",
+                "status": "completed"
+              },
+              {
+                "content": "Add the --shout flag",
+                "priority": "medium",
+                "status": "completed"
+              },
+              {
+                "content": "Test it",
+                "priority": "medium",
+                "status": "completed"
+              },
+              {
+                "content": "Lint",
+                "priority": "medium",
+                "status": "completed"
+              },
+              {
+                "content": "Commit",
+                "priority": "medium",
+                "status": "in_progress"
+              }
+            ]
+          }
+        },
+        {
+          "say": "The flag works. Committing, then I see what else it needs."
+        },
+        {
+          "sleep": 1500
+        },
+        {
+          "update": {
+            "sessionUpdate": "plan",
+            "entries": [
+              {
+                "content": "Read the code",
+                "priority": "medium",
+                "status": "completed"
+              },
+              {
+                "content": "Add the --shout flag",
+                "priority": "medium",
+                "status": "completed"
+              },
+              {
+                "content": "Test it",
+                "priority": "medium",
+                "status": "completed"
+              },
+              {
+                "content": "Lint",
+                "priority": "medium",
+                "status": "completed"
+              },
+              {
+                "content": "Commit",
+                "priority": "medium",
+                "status": "completed"
+              },
+              {
+                "content": "Write the docs",
+                "priority": "medium",
+                "status": "pending"
+              },
+              {
+                "content": "Push",
+                "priority": "medium",
+                "status": "pending"
+              },
+              {
+                "content": "Open a pull request",
+                "priority": "medium",
+                "status": "pending"
+              }
+            ]
+          }
+        },
+        {
+          "say": "It needs docs too, and a pull request: three more steps."
+        },
+        {
+          "sleep": 1500
+        },
+        {
+          "update": {
+            "sessionUpdate": "plan",
+            "entries": [
+              {
+                "content": "Read the code",
+                "priority": "medium",
+                "status": "completed"
+              },
+              {
+                "content": "Add the --shout flag",
+                "priority": "medium",
+                "status": "completed"
+              },
+              {
+                "content": "Test it",
+                "priority": "medium",
+                "status": "in_progress"
+              },
+              {
+                "content": "Lint",
+                "priority": "medium",
+                "status": "completed"
+              },
+              {
+                "content": "Commit",
+                "priority": "medium",
+                "status": "completed"
+              },
+              {
+                "content": "Write the docs for --shout",
+                "priority": "medium",
+                "status": "in_progress"
+              },
+              {
+                "content": "Push",
+                "priority": "medium",
+                "status": "pending"
+              },
+              {
+                "content": "Open a pull request",
+                "priority": "medium",
+                "status": "pending"
+              }
+            ]
+          }
+        },
+        {
+          "say": "A test fails with the docs' example, so testing again."
+        }
+      ]
+    },
+    {
+      "steps": [
+        {
+          "update": {
+            "sessionUpdate": "plan",
+            "entries": [
+              {
+                "content": "Test it",
+                "priority": "medium",
+                "status": "completed"
+              },
+              {
+                "content": "Write the docs for --shout",
+                "priority": "medium",
+                "status": "completed"
+              },
+              {
+                "content": "Push",
+                "priority": "medium",
+                "status": "in_progress"
+              },
+              {
+                "content": "Open a pull request",
+                "priority": "medium",
+                "status": "pending"
+              },
+              {
+                "content": "Wait for CI",
+                "priority": "medium",
+                "status": "pending"
+              }
+            ]
+          }
+        },
+        {
+          "say": "Pushing. CI comes after the pull request."
+        }
+      ]
+    }
+  ]
+}

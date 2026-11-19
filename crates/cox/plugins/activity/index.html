@@ -352,6 +352,23 @@
       .event.asked .text {
         color: var(--asking);
       }
+      .event.plan_revised.dropped .mark,
+      .event.plan_revised.dropped .text b {
+        color: var(--asking);
+      }
+      .event .revised {
+        display: block;
+        font-size: var(--small);
+        padding-left: var(--space-2);
+        border-left: 2px solid var(--border-strong);
+      }
+      .event .revised .added {
+        color: var(--asking);
+      }
+      .event .revised .removed {
+        color: var(--faint);
+        text-decoration: line-through;
+      }
       .event.said .text {
         font-size: var(--small);
         padding-left: var(--space-2);

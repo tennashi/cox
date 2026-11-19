@@ -565,6 +565,7 @@ fn describe_entry(entry: &Entry) -> String {
             )
         }
         Entry::PlanChanged { added, removed } => describe_drift(added, removed),
+        Entry::PlanRevised(revision) => describe_revision(revision),
         Entry::Media {
             kind,
             from,
@@ -693,6 +694,31 @@ fn describe_drift(added: &[String], removed: &[String]) -> String {
         .chain(removed.iter().map(|step| format!("- {step}")))
         .collect();
     format!("plan changed: {}", steps.join("; "))
+}
+
+/// How the plan changed from the one before it, in a line, then each
+/// step that came, went, was reworded or undone.
+fn describe_revision(revision: &cox_core::entry::Revision) -> String {
+    let steps: Vec<String> = revision
+        .added
+        .iter()
+        .map(|step| format!("+ {step}"))
+        .chain(revision.removed.iter().map(|step| format!("- {step}")))
+        .chain(
+            revision
+                .reworded
+                .iter()
+                .map(|step| format!("~ {} -> {}", step.from, step.to)),
+        )
+        .chain(revision.undone.iter().map(|step| format!("undone {step}")))
+        .collect();
+    format!(
+        "plan revised: {} ({} -> {}): {}",
+        revision.headline(),
+        revision.before,
+        revision.after,
+        steps.join("; ")
+    )
 }
 
 /// What ran as a turn ended, or as `on` happened, each with how it went.
