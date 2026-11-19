@@ -5666,6 +5666,7 @@ fn running_stages(ran: &Ran) -> FakeStages {
             panel: cx.new(|_| cox::ui::Panel::default()),
             by_keys: Rc::new(|_, _, _| {}),
             shows_files: Rc::new(|_| false),
+            diagrams: Rc::new(|_, _, _| {}),
             runs: Rc::new(move |snippet, _, cx| {
                 if snippet.lang.plays() {
                     let playground = cx.new(|cx| {
@@ -5778,6 +5779,69 @@ async fn a_snippet_of_a_reply_runs_in_the_chats_folder_and_hands_back_its_output
         })
         .count();
     assert_eq!(runs, 3, "a block of text has no Run");
+}
+
+/// A stage that keeps the source of each diagram the human clicks to
+/// show, in `shown`.
+fn showing_stages(shown: &Rc<RefCell<Vec<String>>>) -> FakeStages {
+    use gpui::AppContext as _;
+
+    let shown = Rc::clone(shown);
+    let built: fake_daemon::Built = Rc::new(move |_, _, cx| {
+        let shown = Rc::clone(&shown);
+        cox::chat::view::StageView {
+            view: cx.new(|_| fake_daemon::FakeStage).into(),
+            panel: cx.new(|_| cox::ui::Panel::default()),
+            by_keys: Rc::new(|_, _, _| {}),
+            shows_files: Rc::new(|_| false),
+            diagrams: Rc::new(move |source, _, _| shown.borrow_mut().push(source.to_owned())),
+            runs: Rc::new(|_, _, _| None),
+        }
+    });
+    FakeStages {
+        built: Some(built),
+        ..FakeStages::default()
+    }
+}
+
+#[gpui::test]
+async fn a_click_on_a_diagram_of_a_reply_shows_it_on_the_stage(cx: &mut TestAppContext) {
+    let home = scratch::folder("diagram-home");
+    std::fs::create_dir_all(&home).unwrap();
+    let clicked = Rc::new(RefCell::new(Vec::new()));
+    let (workspace, cx) = fake_daemon::open_window(
+        cx,
+        home,
+        Kept::Memory,
+        Fakes::default(),
+        showing_stages(&clicked),
+    );
+    settled(cx, &workspace);
+    cx.simulate_keystrokes("secondary-n");
+    let view = shown(cx, &workspace);
+    view.update(cx, |view, cx| {
+        view.input().update(cx, |input, cx| {
+            input.set_text(
+                "two\n```mermaid\nflowchart LR\n  A --> B\n```\n\
+                 ```mermaid\nsequenceDiagram\n  A->>B: hi\n```",
+                cx,
+            );
+        });
+    });
+    cx.simulate_keystrokes("enter");
+    wait_for_turn(cx, &view).await;
+    let entry = view.read_with(cx, |view, _| view.conversation().entries().len() - 1);
+    let diagrams: Vec<_> = (0..20)
+        .filter_map(|part| cx.debug_bounds(format!("diagram-{entry}-{part}").leak()))
+        .collect();
+    assert_eq!(diagrams.len(), 2, "each diagram of the reply is drawn");
+
+    cx.simulate_click(diagrams[1].center(), Modifiers::none());
+    cx.run_until_parked();
+    assert_eq!(*clicked.borrow(), ["sequenceDiagram\n  A->>B: hi"]);
+    cx.simulate_click(diagrams[0].center(), Modifiers::none());
+    cx.run_until_parked();
+    assert_eq!(clicked.borrow()[1], "flowchart LR\n  A --> B");
 }
 
 /// Whether `terminal` is there and its program ended.

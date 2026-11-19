@@ -182,7 +182,8 @@ pub type RunsSnippets = Rc<
 
 /// A chat's stage, as the window shows it: the view, whether it is in
 /// sight, what does what Vim's keys ask of its tabs, whether it shows the
-/// tree of files, and what runs the snippets the human clicks Run on.
+/// tree of files, what runs the snippets the human clicks Run on, and
+/// what shows the diagrams they click.
 #[derive(Clone)]
 pub struct StageView {
     pub view: AnyView,
@@ -190,6 +191,7 @@ pub struct StageView {
     pub by_keys: ByKeys,
     pub shows_files: ShowsFiles,
     pub runs: RunsSnippets,
+    pub diagrams: crate::ui::text::ShowsDiagram,
 }
 
 /// How a chat stands in the list, as far as its view shows it.

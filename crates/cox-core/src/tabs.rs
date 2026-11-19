@@ -96,6 +96,8 @@ pub enum KeptTab {
     MacWindow { app: String, title: String },
     /// The windows of the Mac's other apps, listed.
     MacWindows,
+    /// A Mermaid diagram of a reply, by its source.
+    Diagram { source: String },
 }
 
 /// Lines of a file, as people number them: from 1, the last included.

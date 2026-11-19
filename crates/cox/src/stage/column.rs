@@ -275,6 +275,7 @@ fn glyph(content: &TabContent) -> Icon {
         TabContent::Files(_) => Icon::Files,
         TabContent::Changes(_) => Icon::Changes,
         TabContent::Flow(_) => Icon::Flow,
+        TabContent::Diagram(_) => Icon::Map,
         TabContent::Terminal(_) => Icon::Terminal,
         TabContent::Android(_) | TabContent::Devices(_) => Icon::Phone,
         TabContent::MacWindow(_) | TabContent::Windows(_) => Icon::Window,

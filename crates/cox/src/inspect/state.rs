@@ -453,6 +453,9 @@ fn tabs(told: &mut String, view: &ChatView, cx: &App) {
             KeptTab::MacWindow { app, title } => format!("mac window {app} {title:?}"),
             KeptTab::MacWindows => "mac windows".to_owned(),
             KeptTab::Terminal { title } => format!("terminal {title:?}"),
+            KeptTab::Diagram { source } => {
+                format!("diagram {:?}", source.lines().next().unwrap_or_default())
+            }
         };
         let _ = write!(told, " {}. {what}", index + 1);
         match tabs.owner(index) {

@@ -313,6 +313,7 @@ impl Stages for FakeStages {
             panel: cx.new(|_| Panel::default()),
             by_keys: Rc::new(move |tabs, _, _| keyed.borrow_mut().push(tabs)),
             shows_files: Rc::new(|_| false),
+            diagrams: Rc::new(|_, _, _| {}),
             runs: Rc::new(|_, _, _| None),
         };
         let open_link: OpenLink =
