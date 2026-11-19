@@ -1411,6 +1411,108 @@ async fn the_human_answers_the_agent_after_setting_a_goal_as_it_asks(cx: &mut Te
     );
 }
 
+/// Has the agent of a new chat ask its two questions, and waits until it
+/// does, answering the index of the question's entry.
+async fn asked_questions(
+    cx: &mut VisualTestContext,
+    workspace: &Entity<Workspace>,
+) -> (Entity<ChatView>, usize) {
+    cx.simulate_keystrokes("secondary-n");
+    let view = shown(cx, workspace);
+    cx.simulate_input("questions");
+    cx.simulate_keystrokes("enter");
+    wait_until(cx, &view, |conversation| {
+        conversation.state() == State::Asking
+    })
+    .await;
+    let at = view.read_with(cx, |view, _| view.conversation().asked_at().unwrap());
+    (view, at)
+}
+
+/// Opens the input of the human's own answer to the question at
+/// `question` of the entry at `at`, and writes `words` in it.
+fn write_other(
+    cx: &mut VisualTestContext,
+    view: &Entity<ChatView>,
+    at: usize,
+    question: usize,
+    words: &str,
+) {
+    click(cx, format!("question-{at}-{question}-other").leak());
+    cx.simulate_input(words);
+    assert!(
+        view.read_with(cx, |view, _| view.writes_own_answer()),
+        "the input of the human's own answer opens"
+    );
+    assert_eq!(input_text(cx, view), "", "the words went in that input");
+}
+
+/// Whether the input of the human's own answer to a question closed, and
+/// left the keyboard to the chat's input: what the human types goes there.
+fn other_closed(cx: &mut VisualTestContext, view: &Entity<ChatView>) -> bool {
+    let workspace = root(cx);
+    settled(cx, &workspace);
+    let open = view.read_with(cx, |view, _| view.writes_own_answer());
+    cx.simulate_input("next");
+    !open && input_text(cx, view) == "next"
+}
+
+#[gpui::test]
+async fn sending_answers_takes_the_words_written_and_closes_their_input(cx: &mut TestAppContext) {
+    let (_, workspace, cx) = open_window(cx, scratch::folder("questions-send"));
+    let (view, at) = asked_questions(cx, &workspace).await;
+
+    click(cx, format!("question-{at}-0-option-1").leak());
+    write_other(cx, &view, at, 0, "a note");
+    // The human sends the answers without Enter in the input.
+    click(cx, format!("question-send-{at}").leak());
+    wait_for_turn(cx, &view).await;
+
+    assert!(
+        other_closed(cx, &view),
+        "the input closed with the answers sent"
+    );
+    let entries = entries(cx, &view);
+    assert!(
+        entries.iter().any(|entry| matches!(
+            entry,
+            Entry::Reply(reply) if reply.contains(r#""question_0":"Rust""#)
+                && reply.contains(r#""question_0_custom":"a note""#)
+        )),
+        "the words went with the option picked: {entries:?}"
+    );
+}
+
+#[gpui::test]
+async fn the_input_of_an_answer_closes_once_its_question_is_not_asked(cx: &mut TestAppContext) {
+    let (_, workspace, cx) = open_window(cx, scratch::folder("questions-stopped"));
+    let (view, at) = asked_questions(cx, &workspace).await;
+
+    write_other(cx, &view, at, 1, "half written");
+    click(cx, "stop");
+    wait_for_turn(cx, &view).await;
+
+    assert!(
+        other_closed(cx, &view),
+        "the input closed with its question"
+    );
+}
+
+#[gpui::test]
+async fn declining_questions_closes_the_input_of_an_answer(cx: &mut TestAppContext) {
+    let (_, workspace, cx) = open_window(cx, scratch::folder("questions-declined"));
+    let (view, at) = asked_questions(cx, &workspace).await;
+
+    write_other(cx, &view, at, 0, "never sent");
+    click(cx, format!("question-decline-{at}").leak());
+    wait_for_turn(cx, &view).await;
+
+    assert!(
+        other_closed(cx, &view),
+        "the input closed with the questions declined"
+    );
+}
+
 #[gpui::test]
 async fn the_human_stops_what_the_agent_asks_after_its_turn_ended(cx: &mut TestAppContext) {
     let (agents, workspace, cx) = open_window(cx, scratch::folder("went-on-stops"));

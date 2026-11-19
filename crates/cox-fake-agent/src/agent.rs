@@ -18,7 +18,7 @@ use std::time::{Duration, Instant};
 use serde_json::{Map, Value, json};
 
 use crate::mcp::Server;
-use crate::scenario::{Ask, AuthRequired, Call, Event, Scenario, Step, fill, put_in};
+use crate::scenario::{Ask, AuthRequired, Call, Event, Question, Scenario, Step, fill, put_in};
 
 /// How long the agent takes between the words it says.
 const WORD: Duration = Duration::from_millis(30);
@@ -399,6 +399,7 @@ impl<W: Write> Agent<W> {
             }
             Step::Update(update) => self.update(session, &fill(update, &cwd, &result)),
             Step::Ask(ask) => return self.ask(session, ask),
+            Step::Question(question) => return self.question(session, question),
             Step::Call(call) => self.call(session, call),
             Step::Sleep(milliseconds) => return self.pause(Duration::from_millis(*milliseconds)),
             Step::WaitFor(Event::Steer) => return self.wait_for_steer(),
@@ -435,31 +436,14 @@ impl<W: Write> Agent<W> {
         };
         params.insert("sessionId".to_owned(), session.clone());
         self.send(&json!({ "jsonrpc": "2.0", "id": id, "method": "session/request_permission", "params": params }));
+        let Some(message) = self.answer_to(&id) else {
+            return Went::Gone;
+        };
         // What Cox chose, by its option's id, or `cancelled`.
-        let chosen = loop {
-            let answered = self
-                .held
-                .iter()
-                .position(|message| message.get("method").is_none() && message["id"] == id);
-            let message = match answered {
-                Some(at) => self.held.remove(at).expect("found above"),
-                None => match self.input.recv() {
-                    Ok(message) => message,
-                    Err(_) => return Went::Gone,
-                },
-            };
-            if message.get("method").is_some() || message["id"] != id {
-                // A cancel comes with Cox's answer to this request too.
-                if message["method"] != "session/cancel" {
-                    self.hold(message);
-                }
-                continue;
-            }
-            let outcome = &message["result"]["outcome"];
-            break match outcome["outcome"].as_str() {
-                Some("selected") => outcome["optionId"].as_str().unwrap_or_default().to_owned(),
-                _ => "cancelled".to_owned(),
-            };
+        let outcome = &message["result"]["outcome"];
+        let chosen = match outcome["outcome"].as_str() {
+            Some("selected") => outcome["optionId"].as_str().unwrap_or_default().to_owned(),
+            _ => "cancelled".to_owned(),
         };
         let went = match ask.then.get(&chosen) {
             Some(steps) => self.steps(session, steps),
@@ -468,6 +452,64 @@ impl<W: Write> Agent<W> {
         match went {
             Went::On if chosen == "cancelled" => Went::Cancelled,
             went => went,
+        }
+    }
+
+    /// Asks the questions of `question` as a form, and takes the steps
+    /// for how Cox answered, with what it filled the form in with as
+    /// `{result}`.
+    fn question(&mut self, session: &Value, question: &Question) -> Went {
+        self.asked += 1;
+        let id = Value::from(format!("fake-ask-{}", self.asked));
+        let mut params = match fill(
+            &Value::Object(question.request.clone()),
+            &self.cwd,
+            &self.result,
+        ) {
+            Value::Object(params) => params,
+            _ => Map::new(),
+        };
+        params.insert("sessionId".to_owned(), session.clone());
+        params.insert("mode".to_owned(), Value::from("form"));
+        self.send(&json!({ "jsonrpc": "2.0", "id": id, "method": "elicitation/create", "params": params }));
+        let Some(message) = self.answer_to(&id) else {
+            return Went::Gone;
+        };
+        let action = message["result"]["action"]
+            .as_str()
+            .unwrap_or("cancel")
+            .to_owned();
+        self.result = message["result"]["content"].to_string();
+        let went = match question.then.get(&action) {
+            Some(steps) => self.steps(session, steps),
+            None => Went::On,
+        };
+        match went {
+            Went::On if action == "cancel" => Went::Cancelled,
+            went => went,
+        }
+    }
+
+    /// Waits for Cox's answer to the request the agent sent as `id`,
+    /// holding what else it sends meanwhile, or `None` once Cox went.
+    fn answer_to(&mut self, id: &Value) -> Option<Value> {
+        loop {
+            let answered = self
+                .held
+                .iter()
+                .position(|message| message.get("method").is_none() && message["id"] == *id);
+            let message = match answered {
+                Some(at) => self.held.remove(at).expect("found above"),
+                None => self.input.recv().ok()?,
+            };
+            if message.get("method").is_some() || message["id"] != *id {
+                // A cancel comes with Cox's answer to this request too.
+                if message["method"] != "session/cancel" {
+                    self.hold(message);
+                }
+                continue;
+            }
+            return Some(message);
         }
     }
 

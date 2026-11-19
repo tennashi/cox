@@ -23,7 +23,11 @@
 //! ends it, telling the tokens before and after ([`COMPACTED_FROM`],
 //! [`COMPACTED_TO`]). When the prompt mentions "wait", it replies
 //! `waiting` and goes on until Cox cancels the turn, or steers a line into
-//! it, which it echoes, ending the turn. A turn cancelled, or whose
+//! it, which it echoes, ending the turn. When the prompt mentions
+//! "questions", it first asks the human two questions, as
+//! `claude-agent-acp` asks Claude's `AskUserQuestion`, each with room for
+//! the human's own words, and says what Cox answered ([`answered`]). A
+//! turn cancelled, or whose
 //! permission request Cox answers as cancelled, ends as cancelled. A
 //! prompt mentions a word when one of its words starts with it: "slowly"
 //! mentions "slow", and "task" does not mention "ask". Its sessions have
@@ -41,17 +45,17 @@ use std::sync::{Arc, Mutex};
 use agent_client_protocol::schema::v1::{
     AgentCapabilities, AuthMethod, AuthMethodAgent, AuthMethodTerminal, AuthenticateRequest,
     AuthenticateResponse, AvailableCommand, AvailableCommandsUpdate, CancelNotification,
-    ConfigOptionUpdate, ContentBlock, ContentChunk, Diff, EmbeddedResourceResource,
-    InitializeRequest, InitializeResponse, LoadSessionRequest, LoadSessionResponse, McpServer,
-    NewSessionRequest, NewSessionResponse, PermissionOption, PermissionOptionKind, Plan, PlanEntry,
-    PlanEntryPriority, PlanEntryStatus, PromptCapabilities, PromptRequest, PromptResponse,
-    RequestPermissionOutcome, RequestPermissionRequest, ResumeSessionRequest,
-    ResumeSessionResponse, SessionAdditionalDirectoriesCapabilities, SessionCapabilities,
-    SessionConfigOption, SessionConfigOptionCategory, SessionConfigSelectOption, SessionId,
-    SessionInfoUpdate, SessionNotification, SessionResumeCapabilities, SessionUpdate,
-    SetSessionConfigOptionRequest, SetSessionConfigOptionResponse, StopReason, TextContent,
-    ToolCall, ToolCallContent, ToolCallLocation, ToolCallStatus, ToolCallUpdate,
-    ToolCallUpdateFields, ToolKind,
+    ConfigOptionUpdate, ContentBlock, ContentChunk, CreateElicitationRequest,
+    CreateElicitationResponse, Diff, EmbeddedResourceResource, InitializeRequest,
+    InitializeResponse, LoadSessionRequest, LoadSessionResponse, McpServer, NewSessionRequest,
+    NewSessionResponse, PermissionOption, PermissionOptionKind, Plan, PlanEntry, PlanEntryPriority,
+    PlanEntryStatus, PromptCapabilities, PromptRequest, PromptResponse, RequestPermissionOutcome,
+    RequestPermissionRequest, ResumeSessionRequest, ResumeSessionResponse,
+    SessionAdditionalDirectoriesCapabilities, SessionCapabilities, SessionConfigOption,
+    SessionConfigOptionCategory, SessionConfigSelectOption, SessionId, SessionInfoUpdate,
+    SessionNotification, SessionResumeCapabilities, SessionUpdate, SetSessionConfigOptionRequest,
+    SetSessionConfigOptionResponse, StopReason, TextContent, ToolCall, ToolCallContent,
+    ToolCallLocation, ToolCallStatus, ToolCallUpdate, ToolCallUpdateFields, ToolKind,
 };
 use agent_client_protocol::{
     Agent, Channel, Client, ConnectionTo, Error, Responder, Result, UntypedMessage,
@@ -794,6 +798,10 @@ async fn take_turn(
         say(turn, session, &format!("echo: {steered}"))?;
         return Ok(Ended::Turn(StopReason::EndTurn));
     }
+    if mentions(text, "questions") {
+        let answer = ask_questions(turn, session).await?;
+        say(turn, session, &answered(&answer))?;
+    }
     if mentions(text, "permission") {
         let answer = ask_permission(turn, session, turns).await?;
         answers.lock().unwrap().push(answer.clone());
@@ -1024,6 +1032,58 @@ async fn ask_permission(
     turns.note(Event::Asked);
     let response = response.await?;
     Ok(response.outcome)
+}
+
+/// Asks Cox two questions in a form, as `claude-agent-acp` asks an
+/// `AskUserQuestion` of two: of options, with a field beside each for
+/// the human's own words.
+async fn ask_questions(
+    cx: &ConnectionTo<Client>,
+    session: &SessionId,
+) -> Result<CreateElicitationResponse> {
+    let request: CreateElicitationRequest = serde_json::from_value(serde_json::json!({
+        "mode": "form",
+        "sessionId": session.to_string(),
+        "message": "Please answer the following questions.",
+        "requestedSchema": {
+            "type": "object",
+            "properties": {
+                "question_0": {
+                    "type": "string",
+                    "title": "Language",
+                    "description": "Which language?",
+                    "oneOf": [
+                        { "const": "Rust", "title": "Rust" },
+                        { "const": "Go", "title": "Go" }
+                    ]
+                },
+                "question_0_custom": { "type": "string", "title": "Other" },
+                "question_1": {
+                    "type": "string",
+                    "title": "Fruit",
+                    "description": "Which fruit?",
+                    "oneOf": [
+                        { "const": "Apple", "title": "Apple" },
+                        { "const": "Pear", "title": "Pear" }
+                    ]
+                },
+                "question_1_custom": { "type": "string", "title": "Other" }
+            }
+        }
+    }))
+    .map_err(|error| Error::new(-32603, error.to_string()))?;
+    cx.send_request(request).block_task().await
+}
+
+/// What the agent says of Cox's `answer` to its questions: `answered:`
+/// and the form's fields as Cox filled them in, or how Cox turned the
+/// form down.
+#[must_use]
+pub fn answered(answer: &CreateElicitationResponse) -> String {
+    format!(
+        "answered: {}",
+        serde_json::to_string(&answer.action).unwrap_or_default()
+    )
 }
 
 /// Reports the tool call `id` done.

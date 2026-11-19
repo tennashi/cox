@@ -1,0 +1,1476 @@
+{
+  "turns": [
+    {
+      "when": "two",
+      "steps": [
+        {
+          "say": "Two questions, then."
+        },
+        {
+          "question": {
+            "message": "Please answer the following questions.",
+            "requestedSchema": {
+              "type": "object",
+              "properties": {
+                "question_0": {
+                  "type": "string",
+                  "title": "Language",
+                  "description": "Which language?",
+                  "oneOf": [
+                    {
+                      "const": "Rust",
+                      "title": "Rust"
+                    },
+                    {
+                      "const": "Go",
+                      "title": "Go"
+                    }
+                  ]
+                },
+                "question_0_custom": {
+                  "type": "string",
+                  "title": "Other",
+                  "description": "Type your own answer, or add a note to the option you chose above (optional)."
+                },
+                "question_1": {
+                  "type": "string",
+                  "title": "Fruit",
+                  "description": "Which fruit?",
+                  "oneOf": [
+                    {
+                      "const": "Apple",
+                      "title": "Apple"
+                    },
+                    {
+                      "const": "Pear",
+                      "title": "Pear"
+                    }
+                  ]
+                },
+                "question_1_custom": {
+                  "type": "string",
+                  "title": "Other",
+                  "description": "Type your own answer, or add a note to the option you chose above (optional)."
+                }
+              }
+            },
+            "then": {
+              "accept": [
+                {
+                  "say": "Answered: {result}"
+                }
+              ],
+              "decline": [
+                {
+                  "say": "You declined."
+                }
+              ],
+              "cancel": [
+                {
+                  "say": "Withdrawn."
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "when": "three",
+      "steps": [
+        {
+          "say": "Three questions, then."
+        },
+        {
+          "question": {
+            "message": "Please answer the following questions.",
+            "requestedSchema": {
+              "type": "object",
+              "properties": {
+                "question_0": {
+                  "type": "string",
+                  "title": "Language",
+                  "description": "Which language?",
+                  "oneOf": [
+                    {
+                      "const": "Rust",
+                      "title": "Rust"
+                    },
+                    {
+                      "const": "Go",
+                      "title": "Go"
+                    }
+                  ]
+                },
+                "question_0_custom": {
+                  "type": "string",
+                  "title": "Other",
+                  "description": "Type your own answer, or add a note to the option you chose above (optional)."
+                },
+                "question_1": {
+                  "type": "string",
+                  "title": "Fruit",
+                  "description": "Which fruit?",
+                  "oneOf": [
+                    {
+                      "const": "Apple",
+                      "title": "Apple"
+                    },
+                    {
+                      "const": "Pear",
+                      "title": "Pear"
+                    }
+                  ]
+                },
+                "question_1_custom": {
+                  "type": "string",
+                  "title": "Other",
+                  "description": "Type your own answer, or add a note to the option you chose above (optional)."
+                },
+                "question_2": {
+                  "type": "string",
+                  "title": "Color",
+                  "description": "Which color?",
+                  "oneOf": [
+                    {
+                      "const": "Red",
+                      "title": "Red"
+                    },
+                    {
+                      "const": "Blue",
+                      "title": "Blue"
+                    }
+                  ]
+                },
+                "question_2_custom": {
+                  "type": "string",
+                  "title": "Other",
+                  "description": "Type your own answer, or add a note to the option you chose above (optional)."
+                }
+              }
+            },
+            "then": {
+              "accept": [
+                {
+                  "say": "Answered: {result}"
+                }
+              ],
+              "decline": [
+                {
+                  "say": "You declined."
+                }
+              ],
+              "cancel": [
+                {
+                  "say": "Withdrawn."
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "when": "one",
+      "steps": [
+        {
+          "question": {
+            "message": "Which way?",
+            "requestedSchema": {
+              "type": "object",
+              "properties": {
+                "question_0": {
+                  "type": "string",
+                  "title": "Approach",
+                  "description": "Which way?",
+                  "oneOf": [
+                    {
+                      "const": "Fix at the root",
+                      "title": "Fix at the root"
+                    },
+                    {
+                      "const": "Patch the view",
+                      "title": "Patch the view"
+                    }
+                  ]
+                },
+                "question_0_custom": {
+                  "type": "string",
+                  "title": "Other",
+                  "description": "Type your own answer, or add a note to the option you chose above (optional)."
+                }
+              }
+            },
+            "then": {
+              "accept": [
+                {
+                  "say": "Answered: {result}"
+                }
+              ],
+              "decline": [
+                {
+                  "say": "You declined."
+                }
+              ],
+              "cancel": [
+                {
+                  "say": "Withdrawn."
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "when": "two",
+      "steps": [
+        {
+          "say": "Two questions, then."
+        },
+        {
+          "question": {
+            "message": "Please answer the following questions.",
+            "requestedSchema": {
+              "type": "object",
+              "properties": {
+                "question_0": {
+                  "type": "string",
+                  "title": "Language",
+                  "description": "Which language?",
+                  "oneOf": [
+                    {
+                      "const": "Rust",
+                      "title": "Rust"
+                    },
+                    {
+                      "const": "Go",
+                      "title": "Go"
+                    }
+                  ]
+                },
+                "question_0_custom": {
+                  "type": "string",
+                  "title": "Other",
+                  "description": "Type your own answer, or add a note to the option you chose above (optional)."
+                },
+                "question_1": {
+                  "type": "string",
+                  "title": "Fruit",
+                  "description": "Which fruit?",
+                  "oneOf": [
+                    {
+                      "const": "Apple",
+                      "title": "Apple"
+                    },
+                    {
+                      "const": "Pear",
+                      "title": "Pear"
+                    }
+                  ]
+                },
+                "question_1_custom": {
+                  "type": "string",
+                  "title": "Other",
+                  "description": "Type your own answer, or add a note to the option you chose above (optional)."
+                }
+              }
+            },
+            "then": {
+              "accept": [
+                {
+                  "say": "Answered: {result}"
+                }
+              ],
+              "decline": [
+                {
+                  "say": "You declined."
+                }
+              ],
+              "cancel": [
+                {
+                  "say": "Withdrawn."
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "when": "three",
+      "steps": [
+        {
+          "say": "Three questions, then."
+        },
+        {
+          "question": {
+            "message": "Please answer the following questions.",
+            "requestedSchema": {
+              "type": "object",
+              "properties": {
+                "question_0": {
+                  "type": "string",
+                  "title": "Language",
+                  "description": "Which language?",
+                  "oneOf": [
+                    {
+                      "const": "Rust",
+                      "title": "Rust"
+                    },
+                    {
+                      "const": "Go",
+                      "title": "Go"
+                    }
+                  ]
+                },
+                "question_0_custom": {
+                  "type": "string",
+                  "title": "Other",
+                  "description": "Type your own answer, or add a note to the option you chose above (optional)."
+                },
+                "question_1": {
+                  "type": "string",
+                  "title": "Fruit",
+                  "description": "Which fruit?",
+                  "oneOf": [
+                    {
+                      "const": "Apple",
+                      "title": "Apple"
+                    },
+                    {
+                      "const": "Pear",
+                      "title": "Pear"
+                    }
+                  ]
+                },
+                "question_1_custom": {
+                  "type": "string",
+                  "title": "Other",
+                  "description": "Type your own answer, or add a note to the option you chose above (optional)."
+                },
+                "question_2": {
+                  "type": "string",
+                  "title": "Color",
+                  "description": "Which color?",
+                  "oneOf": [
+                    {
+                      "const": "Red",
+                      "title": "Red"
+                    },
+                    {
+                      "const": "Blue",
+                      "title": "Blue"
+                    }
+                  ]
+                },
+                "question_2_custom": {
+                  "type": "string",
+                  "title": "Other",
+                  "description": "Type your own answer, or add a note to the option you chose above (optional)."
+                }
+              }
+            },
+            "then": {
+              "accept": [
+                {
+                  "say": "Answered: {result}"
+                }
+              ],
+              "decline": [
+                {
+                  "say": "You declined."
+                }
+              ],
+              "cancel": [
+                {
+                  "say": "Withdrawn."
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "when": "one",
+      "steps": [
+        {
+          "question": {
+            "message": "Which way?",
+            "requestedSchema": {
+              "type": "object",
+              "properties": {
+                "question_0": {
+                  "type": "string",
+                  "title": "Approach",
+                  "description": "Which way?",
+                  "oneOf": [
+                    {
+                      "const": "Fix at the root",
+                      "title": "Fix at the root"
+                    },
+                    {
+                      "const": "Patch the view",
+                      "title": "Patch the view"
+                    }
+                  ]
+                },
+                "question_0_custom": {
+                  "type": "string",
+                  "title": "Other",
+                  "description": "Type your own answer, or add a note to the option you chose above (optional)."
+                }
+              }
+            },
+            "then": {
+              "accept": [
+                {
+                  "say": "Answered: {result}"
+                }
+              ],
+              "decline": [
+                {
+                  "say": "You declined."
+                }
+              ],
+              "cancel": [
+                {
+                  "say": "Withdrawn."
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "when": "two",
+      "steps": [
+        {
+          "say": "Two questions, then."
+        },
+        {
+          "question": {
+            "message": "Please answer the following questions.",
+            "requestedSchema": {
+              "type": "object",
+              "properties": {
+                "question_0": {
+                  "type": "string",
+                  "title": "Language",
+                  "description": "Which language?",
+                  "oneOf": [
+                    {
+                      "const": "Rust",
+                      "title": "Rust"
+                    },
+                    {
+                      "const": "Go",
+                      "title": "Go"
+                    }
+                  ]
+                },
+                "question_0_custom": {
+                  "type": "string",
+                  "title": "Other",
+                  "description": "Type your own answer, or add a note to the option you chose above (optional)."
+                },
+                "question_1": {
+                  "type": "string",
+                  "title": "Fruit",
+                  "description": "Which fruit?",
+                  "oneOf": [
+                    {
+                      "const": "Apple",
+                      "title": "Apple"
+                    },
+                    {
+                      "const": "Pear",
+                      "title": "Pear"
+                    }
+                  ]
+                },
+                "question_1_custom": {
+                  "type": "string",
+                  "title": "Other",
+                  "description": "Type your own answer, or add a note to the option you chose above (optional)."
+                }
+              }
+            },
+            "then": {
+              "accept": [
+                {
+                  "say": "Answered: {result}"
+                }
+              ],
+              "decline": [
+                {
+                  "say": "You declined."
+                }
+              ],
+              "cancel": [
+                {
+                  "say": "Withdrawn."
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "when": "three",
+      "steps": [
+        {
+          "say": "Three questions, then."
+        },
+        {
+          "question": {
+            "message": "Please answer the following questions.",
+            "requestedSchema": {
+              "type": "object",
+              "properties": {
+                "question_0": {
+                  "type": "string",
+                  "title": "Language",
+                  "description": "Which language?",
+                  "oneOf": [
+                    {
+                      "const": "Rust",
+                      "title": "Rust"
+                    },
+                    {
+                      "const": "Go",
+                      "title": "Go"
+                    }
+                  ]
+                },
+                "question_0_custom": {
+                  "type": "string",
+                  "title": "Other",
+                  "description": "Type your own answer, or add a note to the option you chose above (optional)."
+                },
+                "question_1": {
+                  "type": "string",
+                  "title": "Fruit",
+                  "description": "Which fruit?",
+                  "oneOf": [
+                    {
+                      "const": "Apple",
+                      "title": "Apple"
+                    },
+                    {
+                      "const": "Pear",
+                      "title": "Pear"
+                    }
+                  ]
+                },
+                "question_1_custom": {
+                  "type": "string",
+                  "title": "Other",
+                  "description": "Type your own answer, or add a note to the option you chose above (optional)."
+                },
+                "question_2": {
+                  "type": "string",
+                  "title": "Color",
+                  "description": "Which color?",
+                  "oneOf": [
+                    {
+                      "const": "Red",
+                      "title": "Red"
+                    },
+                    {
+                      "const": "Blue",
+                      "title": "Blue"
+                    }
+                  ]
+                },
+                "question_2_custom": {
+                  "type": "string",
+                  "title": "Other",
+                  "description": "Type your own answer, or add a note to the option you chose above (optional)."
+                }
+              }
+            },
+            "then": {
+              "accept": [
+                {
+                  "say": "Answered: {result}"
+                }
+              ],
+              "decline": [
+                {
+                  "say": "You declined."
+                }
+              ],
+              "cancel": [
+                {
+                  "say": "Withdrawn."
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "when": "one",
+      "steps": [
+        {
+          "question": {
+            "message": "Which way?",
+            "requestedSchema": {
+              "type": "object",
+              "properties": {
+                "question_0": {
+                  "type": "string",
+                  "title": "Approach",
+                  "description": "Which way?",
+                  "oneOf": [
+                    {
+                      "const": "Fix at the root",
+                      "title": "Fix at the root"
+                    },
+                    {
+                      "const": "Patch the view",
+                      "title": "Patch the view"
+                    }
+                  ]
+                },
+                "question_0_custom": {
+                  "type": "string",
+                  "title": "Other",
+                  "description": "Type your own answer, or add a note to the option you chose above (optional)."
+                }
+              }
+            },
+            "then": {
+              "accept": [
+                {
+                  "say": "Answered: {result}"
+                }
+              ],
+              "decline": [
+                {
+                  "say": "You declined."
+                }
+              ],
+              "cancel": [
+                {
+                  "say": "Withdrawn."
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "when": "two",
+      "steps": [
+        {
+          "say": "Two questions, then."
+        },
+        {
+          "question": {
+            "message": "Please answer the following questions.",
+            "requestedSchema": {
+              "type": "object",
+              "properties": {
+                "question_0": {
+                  "type": "string",
+                  "title": "Language",
+                  "description": "Which language?",
+                  "oneOf": [
+                    {
+                      "const": "Rust",
+                      "title": "Rust"
+                    },
+                    {
+                      "const": "Go",
+                      "title": "Go"
+                    }
+                  ]
+                },
+                "question_0_custom": {
+                  "type": "string",
+                  "title": "Other",
+                  "description": "Type your own answer, or add a note to the option you chose above (optional)."
+                },
+                "question_1": {
+                  "type": "string",
+                  "title": "Fruit",
+                  "description": "Which fruit?",
+                  "oneOf": [
+                    {
+                      "const": "Apple",
+                      "title": "Apple"
+                    },
+                    {
+                      "const": "Pear",
+                      "title": "Pear"
+                    }
+                  ]
+                },
+                "question_1_custom": {
+                  "type": "string",
+                  "title": "Other",
+                  "description": "Type your own answer, or add a note to the option you chose above (optional)."
+                }
+              }
+            },
+            "then": {
+              "accept": [
+                {
+                  "say": "Answered: {result}"
+                }
+              ],
+              "decline": [
+                {
+                  "say": "You declined."
+                }
+              ],
+              "cancel": [
+                {
+                  "say": "Withdrawn."
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "when": "three",
+      "steps": [
+        {
+          "say": "Three questions, then."
+        },
+        {
+          "question": {
+            "message": "Please answer the following questions.",
+            "requestedSchema": {
+              "type": "object",
+              "properties": {
+                "question_0": {
+                  "type": "string",
+                  "title": "Language",
+                  "description": "Which language?",
+                  "oneOf": [
+                    {
+                      "const": "Rust",
+                      "title": "Rust"
+                    },
+                    {
+                      "const": "Go",
+                      "title": "Go"
+                    }
+                  ]
+                },
+                "question_0_custom": {
+                  "type": "string",
+                  "title": "Other",
+                  "description": "Type your own answer, or add a note to the option you chose above (optional)."
+                },
+                "question_1": {
+                  "type": "string",
+                  "title": "Fruit",
+                  "description": "Which fruit?",
+                  "oneOf": [
+                    {
+                      "const": "Apple",
+                      "title": "Apple"
+                    },
+                    {
+                      "const": "Pear",
+                      "title": "Pear"
+                    }
+                  ]
+                },
+                "question_1_custom": {
+                  "type": "string",
+                  "title": "Other",
+                  "description": "Type your own answer, or add a note to the option you chose above (optional)."
+                },
+                "question_2": {
+                  "type": "string",
+                  "title": "Color",
+                  "description": "Which color?",
+                  "oneOf": [
+                    {
+                      "const": "Red",
+                      "title": "Red"
+                    },
+                    {
+                      "const": "Blue",
+                      "title": "Blue"
+                    }
+                  ]
+                },
+                "question_2_custom": {
+                  "type": "string",
+                  "title": "Other",
+                  "description": "Type your own answer, or add a note to the option you chose above (optional)."
+                }
+              }
+            },
+            "then": {
+              "accept": [
+                {
+                  "say": "Answered: {result}"
+                }
+              ],
+              "decline": [
+                {
+                  "say": "You declined."
+                }
+              ],
+              "cancel": [
+                {
+                  "say": "Withdrawn."
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "when": "one",
+      "steps": [
+        {
+          "question": {
+            "message": "Which way?",
+            "requestedSchema": {
+              "type": "object",
+              "properties": {
+                "question_0": {
+                  "type": "string",
+                  "title": "Approach",
+                  "description": "Which way?",
+                  "oneOf": [
+                    {
+                      "const": "Fix at the root",
+                      "title": "Fix at the root"
+                    },
+                    {
+                      "const": "Patch the view",
+                      "title": "Patch the view"
+                    }
+                  ]
+                },
+                "question_0_custom": {
+                  "type": "string",
+                  "title": "Other",
+                  "description": "Type your own answer, or add a note to the option you chose above (optional)."
+                }
+              }
+            },
+            "then": {
+              "accept": [
+                {
+                  "say": "Answered: {result}"
+                }
+              ],
+              "decline": [
+                {
+                  "say": "You declined."
+                }
+              ],
+              "cancel": [
+                {
+                  "say": "Withdrawn."
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "when": "two",
+      "steps": [
+        {
+          "say": "Two questions, then."
+        },
+        {
+          "question": {
+            "message": "Please answer the following questions.",
+            "requestedSchema": {
+              "type": "object",
+              "properties": {
+                "question_0": {
+                  "type": "string",
+                  "title": "Language",
+                  "description": "Which language?",
+                  "oneOf": [
+                    {
+                      "const": "Rust",
+                      "title": "Rust"
+                    },
+                    {
+                      "const": "Go",
+                      "title": "Go"
+                    }
+                  ]
+                },
+                "question_0_custom": {
+                  "type": "string",
+                  "title": "Other",
+                  "description": "Type your own answer, or add a note to the option you chose above (optional)."
+                },
+                "question_1": {
+                  "type": "string",
+                  "title": "Fruit",
+                  "description": "Which fruit?",
+                  "oneOf": [
+                    {
+                      "const": "Apple",
+                      "title": "Apple"
+                    },
+                    {
+                      "const": "Pear",
+                      "title": "Pear"
+                    }
+                  ]
+                },
+                "question_1_custom": {
+                  "type": "string",
+                  "title": "Other",
+                  "description": "Type your own answer, or add a note to the option you chose above (optional)."
+                }
+              }
+            },
+            "then": {
+              "accept": [
+                {
+                  "say": "Answered: {result}"
+                }
+              ],
+              "decline": [
+                {
+                  "say": "You declined."
+                }
+              ],
+              "cancel": [
+                {
+                  "say": "Withdrawn."
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "when": "three",
+      "steps": [
+        {
+          "say": "Three questions, then."
+        },
+        {
+          "question": {
+            "message": "Please answer the following questions.",
+            "requestedSchema": {
+              "type": "object",
+              "properties": {
+                "question_0": {
+                  "type": "string",
+                  "title": "Language",
+                  "description": "Which language?",
+                  "oneOf": [
+                    {
+                      "const": "Rust",
+                      "title": "Rust"
+                    },
+                    {
+                      "const": "Go",
+                      "title": "Go"
+                    }
+                  ]
+                },
+                "question_0_custom": {
+                  "type": "string",
+                  "title": "Other",
+                  "description": "Type your own answer, or add a note to the option you chose above (optional)."
+                },
+                "question_1": {
+                  "type": "string",
+                  "title": "Fruit",
+                  "description": "Which fruit?",
+                  "oneOf": [
+                    {
+                      "const": "Apple",
+                      "title": "Apple"
+                    },
+                    {
+                      "const": "Pear",
+                      "title": "Pear"
+                    }
+                  ]
+                },
+                "question_1_custom": {
+                  "type": "string",
+                  "title": "Other",
+                  "description": "Type your own answer, or add a note to the option you chose above (optional)."
+                },
+                "question_2": {
+                  "type": "string",
+                  "title": "Color",
+                  "description": "Which color?",
+                  "oneOf": [
+                    {
+                      "const": "Red",
+                      "title": "Red"
+                    },
+                    {
+                      "const": "Blue",
+                      "title": "Blue"
+                    }
+                  ]
+                },
+                "question_2_custom": {
+                  "type": "string",
+                  "title": "Other",
+                  "description": "Type your own answer, or add a note to the option you chose above (optional)."
+                }
+              }
+            },
+            "then": {
+              "accept": [
+                {
+                  "say": "Answered: {result}"
+                }
+              ],
+              "decline": [
+                {
+                  "say": "You declined."
+                }
+              ],
+              "cancel": [
+                {
+                  "say": "Withdrawn."
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "when": "one",
+      "steps": [
+        {
+          "question": {
+            "message": "Which way?",
+            "requestedSchema": {
+              "type": "object",
+              "properties": {
+                "question_0": {
+                  "type": "string",
+                  "title": "Approach",
+                  "description": "Which way?",
+                  "oneOf": [
+                    {
+                      "const": "Fix at the root",
+                      "title": "Fix at the root"
+                    },
+                    {
+                      "const": "Patch the view",
+                      "title": "Patch the view"
+                    }
+                  ]
+                },
+                "question_0_custom": {
+                  "type": "string",
+                  "title": "Other",
+                  "description": "Type your own answer, or add a note to the option you chose above (optional)."
+                }
+              }
+            },
+            "then": {
+              "accept": [
+                {
+                  "say": "Answered: {result}"
+                }
+              ],
+              "decline": [
+                {
+                  "say": "You declined."
+                }
+              ],
+              "cancel": [
+                {
+                  "say": "Withdrawn."
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "when": "two",
+      "steps": [
+        {
+          "say": "Two questions, then."
+        },
+        {
+          "question": {
+            "message": "Please answer the following questions.",
+            "requestedSchema": {
+              "type": "object",
+              "properties": {
+                "question_0": {
+                  "type": "string",
+                  "title": "Language",
+                  "description": "Which language?",
+                  "oneOf": [
+                    {
+                      "const": "Rust",
+                      "title": "Rust"
+                    },
+                    {
+                      "const": "Go",
+                      "title": "Go"
+                    }
+                  ]
+                },
+                "question_0_custom": {
+                  "type": "string",
+                  "title": "Other",
+                  "description": "Type your own answer, or add a note to the option you chose above (optional)."
+                },
+                "question_1": {
+                  "type": "string",
+                  "title": "Fruit",
+                  "description": "Which fruit?",
+                  "oneOf": [
+                    {
+                      "const": "Apple",
+                      "title": "Apple"
+                    },
+                    {
+                      "const": "Pear",
+                      "title": "Pear"
+                    }
+                  ]
+                },
+                "question_1_custom": {
+                  "type": "string",
+                  "title": "Other",
+                  "description": "Type your own answer, or add a note to the option you chose above (optional)."
+                }
+              }
+            },
+            "then": {
+              "accept": [
+                {
+                  "say": "Answered: {result}"
+                }
+              ],
+              "decline": [
+                {
+                  "say": "You declined."
+                }
+              ],
+              "cancel": [
+                {
+                  "say": "Withdrawn."
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "when": "three",
+      "steps": [
+        {
+          "say": "Three questions, then."
+        },
+        {
+          "question": {
+            "message": "Please answer the following questions.",
+            "requestedSchema": {
+              "type": "object",
+              "properties": {
+                "question_0": {
+                  "type": "string",
+                  "title": "Language",
+                  "description": "Which language?",
+                  "oneOf": [
+                    {
+                      "const": "Rust",
+                      "title": "Rust"
+                    },
+                    {
+                      "const": "Go",
+                      "title": "Go"
+                    }
+                  ]
+                },
+                "question_0_custom": {
+                  "type": "string",
+                  "title": "Other",
+                  "description": "Type your own answer, or add a note to the option you chose above (optional)."
+                },
+                "question_1": {
+                  "type": "string",
+                  "title": "Fruit",
+                  "description": "Which fruit?",
+                  "oneOf": [
+                    {
+                      "const": "Apple",
+                      "title": "Apple"
+                    },
+                    {
+                      "const": "Pear",
+                      "title": "Pear"
+                    }
+                  ]
+                },
+                "question_1_custom": {
+                  "type": "string",
+                  "title": "Other",
+                  "description": "Type your own answer, or add a note to the option you chose above (optional)."
+                },
+                "question_2": {
+                  "type": "string",
+                  "title": "Color",
+                  "description": "Which color?",
+                  "oneOf": [
+                    {
+                      "const": "Red",
+                      "title": "Red"
+                    },
+                    {
+                      "const": "Blue",
+                      "title": "Blue"
+                    }
+                  ]
+                },
+                "question_2_custom": {
+                  "type": "string",
+                  "title": "Other",
+                  "description": "Type your own answer, or add a note to the option you chose above (optional)."
+                }
+              }
+            },
+            "then": {
+              "accept": [
+                {
+                  "say": "Answered: {result}"
+                }
+              ],
+              "decline": [
+                {
+                  "say": "You declined."
+                }
+              ],
+              "cancel": [
+                {
+                  "say": "Withdrawn."
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "when": "one",
+      "steps": [
+        {
+          "question": {
+            "message": "Which way?",
+            "requestedSchema": {
+              "type": "object",
+              "properties": {
+                "question_0": {
+                  "type": "string",
+                  "title": "Approach",
+                  "description": "Which way?",
+                  "oneOf": [
+                    {
+                      "const": "Fix at the root",
+                      "title": "Fix at the root"
+                    },
+                    {
+                      "const": "Patch the view",
+                      "title": "Patch the view"
+                    }
+                  ]
+                },
+                "question_0_custom": {
+                  "type": "string",
+                  "title": "Other",
+                  "description": "Type your own answer, or add a note to the option you chose above (optional)."
+                }
+              }
+            },
+            "then": {
+              "accept": [
+                {
+                  "say": "Answered: {result}"
+                }
+              ],
+              "decline": [
+                {
+                  "say": "You declined."
+                }
+              ],
+              "cancel": [
+                {
+                  "say": "Withdrawn."
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "steps": [
+        {
+          "say": "Say one, two or three for a card of that many questions."
+        }
+      ]
+    },
+    {
+      "steps": [
+        {
+          "say": "Say one, two or three for a card of that many questions."
+        }
+      ]
+    },
+    {
+      "steps": [
+        {
+          "say": "Say one, two or three for a card of that many questions."
+        }
+      ]
+    },
+    {
+      "steps": [
+        {
+          "say": "Say one, two or three for a card of that many questions."
+        }
+      ]
+    },
+    {
+      "steps": [
+        {
+          "say": "Say one, two or three for a card of that many questions."
+        }
+      ]
+    },
+    {
+      "steps": [
+        {
+          "say": "Say one, two or three for a card of that many questions."
+        }
+      ]
+    },
+    {
+      "steps": [
+        {
+          "say": "Say one, two or three for a card of that many questions."
+        }
+      ]
+    },
+    {
+      "steps": [
+        {
+          "say": "Say one, two or three for a card of that many questions."
+        }
+      ]
+    },
+    {
+      "steps": [
+        {
+          "say": "Say one, two or three for a card of that many questions."
+        }
+      ]
+    },
+    {
+      "steps": [
+        {
+          "say": "Say one, two or three for a card of that many questions."
+        }
+      ]
+    },
+    {
+      "steps": [
+        {
+          "say": "Say one, two or three for a card of that many questions."
+        }
+      ]
+    },
+    {
+      "steps": [
+        {
+          "say": "Say one, two or three for a card of that many questions."
+        }
+      ]
+    },
+    {
+      "steps": [
+        {
+          "say": "Say one, two or three for a card of that many questions."
+        }
+      ]
+    },
+    {
+      "steps": [
+        {
+          "say": "Say one, two or three for a card of that many questions."
+        }
+      ]
+    },
+    {
+      "steps": [
+        {
+          "say": "Say one, two or three for a card of that many questions."
+        }
+      ]
+    },
+    {
+      "steps": [
+        {
+          "say": "Say one, two or three for a card of that many questions."
+        }
+      ]
+    },
+    {
+      "steps": [
+        {
+          "say": "Say one, two or three for a card of that many questions."
+        }
+      ]
+    },
+    {
+      "steps": [
+        {
+          "say": "Say one, two or three for a card of that many questions."
+        }
+      ]
+    },
+    {
+      "steps": [
+        {
+          "say": "Say one, two or three for a card of that many questions."
+        }
+      ]
+    },
+    {
+      "steps": [
+        {
+          "say": "Say one, two or three for a card of that many questions."
+        }
+      ]
+    }
+  ]
+}

@@ -227,6 +227,37 @@ fn an_ask_goes_on_as_cox_answers() {
 }
 
 #[test]
+fn a_question_goes_on_as_cox_answers_it() {
+    let question = json!({ "question": {
+        "message": "Which language?",
+        "requestedSchema": { "type": "object", "properties": {
+            "question_0": { "type": "string", "oneOf": [{ "const": "Rust", "title": "Rust" }] },
+        } },
+        "then": { "accept": [{ "say": "Answered: {result}" }], "decline": [{ "say": "Declined." }] },
+    } });
+    let scenario = json!({ "turns": [{ "steps": [question] }, { "steps": [question] }] });
+    let mut agent = Agent::session(&scenario, &json!([]));
+
+    for (result, said) in [
+        (json!({ "action": "decline" }), "Declined."),
+        (
+            json!({ "action": "accept", "content": { "question_0": "Rust" } }),
+            r#"Answered: {"question_0":"Rust"}"#,
+        ),
+    ] {
+        let id = agent.prompt("ask me");
+        let (_, request) = agent.until(|message| message["method"] == "elicitation/create");
+        assert_eq!(request["params"]["mode"], "form");
+        assert_eq!(request["params"]["message"], "Which language?");
+        assert_eq!(request["params"]["sessionId"], "fake-1");
+        agent.send(&json!({ "jsonrpc": "2.0", "id": request["id"], "result": result }));
+        let (sent, answer) = agent.until(|message| message["id"] == id);
+        assert_eq!(replied(&sent), said);
+        assert_eq!(answer["result"]["stopReason"], "end_turn");
+    }
+}
+
+#[test]
 fn cancelling_ends_the_turn() {
     let scenario = json!({ "turns": [
         { "steps": [{ "say": "Working." }, { "sleep": 60_000 }, { "say": "Never said." }] },

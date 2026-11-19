@@ -1023,7 +1023,9 @@ impl ChatView {
                 true,
                 ASKING_TONE,
             )
-            .on_hint_click(cx.listener(move |view, _, _, cx| view.send_answer(index, cx)))
+            .on_hint_click(cx.listener(move |view, _, window, cx| {
+                view.send_answer(index, window, cx);
+            }))
         });
         let decline = answer_button(
             ("question-decline", index),
@@ -1032,7 +1034,9 @@ impl ChatView {
             false,
             ASKING_TONE,
         )
-        .on_hint_click(cx.listener(|view, _, _, cx| view.decline_questions(cx)));
+        .on_hint_click(cx.listener(|view, _, window, cx| {
+            view.decline_questions(window, cx);
+        }));
         answer_card(
             ASKING_TONE,
             head,
