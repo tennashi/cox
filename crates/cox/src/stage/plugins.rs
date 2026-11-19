@@ -631,6 +631,35 @@ mod tests {
     }
 
     #[test]
+    fn each_built_in_page_draws_with_what_the_theme_or_its_plugin_names() {
+        let theme = coxd::theme::css();
+        for (name, files) in BUILT_IN {
+            // Its own names, in its style or set by its script.
+            let own: String = files
+                .iter()
+                .map(|(_, bytes)| String::from_utf8_lossy(bytes))
+                .collect();
+            for (file, bytes) in *files {
+                if !(file.ends_with(".html") || file.ends_with(".css")) {
+                    continue;
+                }
+                let text = String::from_utf8_lossy(bytes);
+                for used in text.split("var(--").skip(1) {
+                    let name_of = used
+                        .split(|c: char| !(c.is_ascii_alphanumeric() || c == '-'))
+                        .next()
+                        .unwrap_or_default();
+                    let defined = format!("--{name_of}:");
+                    assert!(
+                        theme.contains(&defined) || own.contains(&defined),
+                        "{name}/{file} draws with --{name_of}, which neither the theme nor its plugin names"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
     fn only_a_plugin_has_the_triggers_tab_do_what_it_asks() {
         let root = TempDir::new();
         let plugins = Plugins::new(root.to_path_buf(), Outlines::new().0, Calls::new().0);

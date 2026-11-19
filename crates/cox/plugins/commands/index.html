@@ -123,7 +123,7 @@
       }
       .small:hover,
       .small.open {
-        background: var(--hover);
+        background: var(--accent-tint);
       }
       .small .line {
         flex: 1;
@@ -148,7 +148,7 @@
       }
       .under {
         margin: 2px 0 6px 16px;
-        border: 1px solid var(--border);
+        border: 1px solid var(--card-edge);
         border-radius: 6px;
         overflow: hidden;
       }
@@ -173,12 +173,13 @@
       }
       .big {
         margin: 6px 0 8px 16px;
-        border: 1px solid var(--border);
+        border: 1px solid var(--card-edge);
         border-radius: 8px;
         overflow: hidden;
+        box-shadow: var(--control-shadow);
       }
       .big.running {
-        border-color: var(--border-strong);
+        border-color: var(--accent-tint-edge);
       }
       .big .top {
         display: flex;
@@ -202,7 +203,7 @@
         padding: 8px 10px;
         font: 11.5px/1.5 var(--mono);
         color: var(--dim);
-        background: var(--ground);
+        background: var(--inset-ground);
         white-space: pre-wrap;
         overflow-wrap: anywhere;
       }
@@ -245,11 +246,12 @@
         margin: 0 0.5ch;
         padding: 0 6px;
         border-radius: 4px;
-        background: var(--raised);
+        background: var(--button);
         color: var(--dim);
         font: 11px/1.6 var(--sans);
         cursor: pointer;
         user-select: none;
+        box-shadow: 0 0 0 1px var(--control-edge);
       }
       .fold:hover {
         color: var(--foreground);
@@ -267,13 +269,14 @@
         top: 4px;
         right: 6px;
         padding: 1px 8px;
-        border: 1px solid var(--border);
+        border: 1px solid var(--control-edge);
         border-radius: 4px;
-        background: var(--surface);
+        background: var(--button);
         color: var(--dim);
         font: 11px var(--sans);
         cursor: pointer;
         opacity: 0;
+        box-shadow: var(--control-shadow);
       }
       .laid:hover .copy {
         opacity: 1;

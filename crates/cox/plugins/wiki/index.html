@@ -73,9 +73,10 @@
         flex: none;
         gap: 2px;
         padding: 2px;
-        background: var(--surface);
-        border: 1px solid var(--border);
+        background: var(--inset-ground);
+        border: 1px solid var(--inset-edge);
         border-radius: 10px;
+        box-shadow: var(--inset-shadow);
       }
       .shelf {
         color: var(--dim);
@@ -88,7 +89,8 @@
       }
       .shelf.on {
         color: var(--foreground);
-        background: var(--hover);
+        background: var(--accent-tint);
+        box-shadow: 0 0 0 1px var(--accent-tint-edge);
       }
       .shelf b {
         margin-left: 6px;
@@ -107,32 +109,36 @@
         flex: 1 1 220px;
         font: 13px var(--sans);
         color: var(--foreground);
-        background: var(--surface);
-        border: 1px solid var(--border);
-        border-radius: 8px;
+        background: var(--inset-ground);
+        border: 1px solid var(--inset-edge);
+        border-radius: var(--radius-input);
         padding: 6px 10px;
         outline: none;
+        box-shadow: var(--inset-shadow);
       }
       .find input:focus {
-        border-color: var(--dim);
+        border-color: var(--inset-edge);
+        box-shadow: var(--inset-shadow), var(--focus-ring);
       }
       .chip {
         font: 11.5px var(--sans);
         color: var(--dim);
-        background: var(--surface);
-        border: 1px solid var(--border);
+        background: var(--button);
+        border: 1px solid var(--control-edge);
         border-radius: 999px;
         padding: 2px 9px;
         cursor: pointer;
         user-select: none;
+        box-shadow: var(--control-shadow);
       }
       .chip:hover {
         color: var(--foreground);
       }
       .chip.on {
         color: var(--foreground);
-        border-color: var(--dim);
-        background: var(--hover);
+        border-color: var(--accent-tint-edge);
+        background: var(--accent-tint);
+        box-shadow: none;
       }
       .chip b {
         font-weight: 600;
@@ -142,9 +148,10 @@
         flex-direction: column;
       }
       .pages.card {
-        border: 1px solid var(--border);
+        border: 1px solid var(--card-edge);
         border-radius: 12px;
         overflow: hidden;
+        background: var(--pane);
       }
       .entry {
         display: block;
@@ -152,7 +159,7 @@
         padding: 8px 12px;
       }
       .entry + .entry {
-        border-top: 1px solid var(--border);
+        border-top: 1px solid var(--card-edge);
       }
       .entry:hover {
         background: var(--hover);
