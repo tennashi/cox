@@ -7,10 +7,11 @@
 //! the plans, of the chats whose agents take a turn, or work in the
 //! background once it ended, or wait on CI, or whose plan, as the agent
 //! last sent it over ACP, is not done, or done while the human did not
-//! look yet, each with what it does now, or runs in the background, its
-//! open pull requests, and the steps of its plan, each with the
-//! subagents' chats whose names read alike it (see [`linked`]), the other
-//! subagents at work under it; what was decided, the questions agents
+//! look yet, or lately, or that were marked done lately, each with what
+//! it does now, or runs in the background, its open pull requests, and
+//! the steps of its plan, each with the subagents' chats whose names
+//! read alike it (see [`linked`]), the other subagents at work under
+//! it; what was decided, the questions agents
 //! asked there that the human answered, each with what they chose and
 //! why, the last first; and what happened without them, the schedules
 //! that ran there, the pages of the wiki written from there, and the
@@ -52,9 +53,6 @@ pub use timeline::{Of, timeline};
 const HAPPENED: usize = 50;
 /// How many of what was decided the page is told of, the last first.
 const DECIDED: usize = 20;
-/// How long, in milliseconds, a chat whose plan is done shows it after
-/// its agent last did anything, for the human to see what came of it.
-const DONE_SHOWS: i64 = 30 * 60 * 1000;
 /// The windows the Plans tier sums up what moved in, each by its name
 /// and its length in milliseconds, the shortest first.
 const WINDOWS: [(&str, i64); 3] = [
@@ -62,6 +60,12 @@ const WINDOWS: [(&str, i64); 3] = [
     ("1 h", 60 * 60 * 1000),
     ("4 h", 4 * 60 * 60 * 1000),
 ];
+/// How long, in milliseconds, a chat that is done shows as done: one
+/// whose plan is done, after its agent last did anything, and one marked
+/// done, after it was, for the human to see what came of it. As long as
+/// the longest of [`WINDOWS`], so that what the page sums up as done
+/// there is on the page too.
+const DONE_SHOWS: i64 = WINDOWS[WINDOWS.len() - 1].1;
 /// How many steps done a chat's line in a summary names, the last done
 /// first, before it says how many more.
 const NAMED: usize = 3;
@@ -409,7 +413,7 @@ pub fn told(root: &Path, wiki: &Path, raw: &Path, triggers: &Value) -> Value {
             opened: &opened,
             kept: &kept,
             dismissed: &Dismissed::read(),
-            moved: &progress(at - WINDOWS[WINDOWS.len() - 1].1),
+            moved: &progress(at - DONE_SHOWS),
             at,
         },
         &commands::now,
@@ -721,6 +725,33 @@ impl Plans<'_> {
         (!self.dismissed.iter().any(|dismissed| dismissed.hides(plan))).then_some(plan)
     }
 
+    /// Whether the human dismissed the plan `chat`'s agent sent last.
+    fn dismissed(&self, chat: &Chat) -> bool {
+        self.kept
+            .iter()
+            .find(|plan| Some(plan.chat) == chat.kept)
+            .is_some_and(|plan| self.dismissed.iter().any(|dismissed| dismissed.hides(plan)))
+    }
+
+    /// Whether `chat` is marked done, and was [`DONE_SHOWS`] ago or
+    /// less, so that it shows as done, unless the human dismissed its
+    /// plan.
+    fn done_lately(&self, chat: &Chat) -> bool {
+        chat.resolved
+            && !self.dismissed(chat)
+            && self
+                .moved
+                .resolved
+                .iter()
+                .any(|(id, resolved)| Some(*id) == chat.kept && self.at - resolved.at < DONE_SHOWS)
+    }
+
+    /// Whether `chat` shows on the page though it may be marked done: it
+    /// is not, or it was lately.
+    fn stays(&self, chat: &Chat) -> bool {
+        !chat.resolved || self.done_lately(chat)
+    }
+
     /// How many lines the human wrote on each step of `chat`'s plans.
     fn on_of(&self, chat: &Chat) -> &[(u64, usize)] {
         self.on
@@ -794,7 +825,8 @@ fn waiting_in(told: &Told, root: &Path, now: &dyn Fn(u64) -> Option<commands::No
 
 /// The chats of the folder `root`, or of every folder in the home, at
 /// work, or with a plan not done, or done not [`DONE_SHOWS`] ago, or
-/// while it asks the human or they did not look, as JSON: each with what
+/// marked done not as long ago, or while it asks the human or they did
+/// not look, as JSON: each with what
 /// it does now, as `now` says, and the steps of its plan, of `plans`,
 /// each with the subagents' chats that work on it, and after it its
 /// other subagents, all of them under a plan, those at work otherwise.
@@ -806,6 +838,7 @@ fn planned(
 ) -> Vec<Value> {
     let shown = |chat: &Chat| {
         chat.working
+            || plans.done_lately(chat)
             || plans.of(chat).is_some_and(|plan| {
                 !plan.steps.is_empty()
                     && (plan
@@ -821,7 +854,7 @@ fn planned(
         .chats
         .iter()
         .filter(|chat| {
-            !chat.resolved && of_folder(told, chat, root) && (shown(chat) || chat.waits_on_ci())
+            plans.stays(chat) && of_folder(told, chat, root) && (shown(chat) || chat.waits_on_ci())
         })
         .collect();
     let mut listed = Vec::new();
@@ -856,19 +889,7 @@ fn planned(
             "goal": chat.goal,
             "depth": depth,
             "working": chat.working,
-            "waits": if chat.working {
-                None
-            } else if chat.asking {
-                Some("asks you")
-            } else if chat.unread {
-                Some("finished a turn")
-            } else if chat.waits_on_ci() {
-                Some("waits on CI")
-            } else if depth > 0 {
-                Some("finished")
-            } else {
-                Some("waits")
-            },
+            "waits": waits_of(chat, depth),
             "sketch": chat.cwd != chat.project,
             "where": where_of(told, &chat.project),
             "said": does.said,
@@ -899,13 +920,33 @@ fn planned(
                 .rev()
                 .filter(|(other, link)| {
                     link.is_none()
-                        && !other.resolved
+                        && plans.stays(other)
                         && (!steps.is_empty() || listed_chats.contains(other))
                 })
                 .map(|(other, _)| (*other, depth + 1)),
         );
     }
     listed
+}
+
+/// What `chat`, listed `depth` under the chat at the top of its, waits
+/// on, in words, or `None` while it is at work: marked done, it is done.
+fn waits_of(chat: &Chat, depth: usize) -> Option<&'static str> {
+    if chat.resolved {
+        Some("done")
+    } else if chat.working {
+        None
+    } else if chat.asking {
+        Some("asks you")
+    } else if chat.unread {
+        Some("finished a turn")
+    } else if chat.waits_on_ci() {
+        Some("waits on CI")
+    } else if depth > 0 {
+        Some("finished")
+    } else {
+        Some("waits")
+    }
 }
 
 /// The chat of `told` at the top of `chat`'s: the one whose agent opened
@@ -2192,7 +2233,8 @@ mod tests {
     }
 
     #[test]
-    fn a_chat_marked_done_leaves_the_plans_and_what_waits_and_one_archived_waits_only_asking() {
+    fn a_chat_marked_done_long_ago_leaves_the_plans_and_what_waits_and_one_archived_waits_only_asking()
+     {
         let root = TempDir::new();
         let listed = |key: u64, parent: Option<u64>| {
             let mut listed = chat(key, &root, &root, false, false);
@@ -2255,6 +2297,89 @@ mod tests {
         };
         assert_eq!(keys("plans"), [1], "neither 2 nor 3 under 1");
         assert_eq!(keys("waiting"), [5]);
+    }
+
+    #[test]
+    fn a_chat_marked_done_shows_as_done_with_its_subagents_as_long_as_the_longest_window() {
+        let root = TempDir::new();
+        let listed = |key: u64, parent: Option<u64>| {
+            let mut listed = chat(key, &root, &root, false, false);
+            listed.parent = parent;
+            listed.kept = Some(kept(key));
+            listed.resolved = true;
+            listed
+        };
+        let at = 10 * DONE_SHOWS;
+        let resolved = |key: u64, ago: i64| {
+            (
+                kept(key),
+                cox_core::store::Resolved {
+                    at: at - ago,
+                    by: ResolvedBy::Human,
+                },
+            )
+        };
+        let told = Told {
+            // 1 has no plan; 2, its subagent, reported; 3 was marked done
+            // long ago; 4's plan the human dismissed.
+            chats: vec![
+                listed(1, None),
+                listed(2, Some(1)),
+                listed(3, None),
+                listed(4, None),
+            ],
+            home: root.join("home"),
+            ..Told::default()
+        };
+        let kept_plans = [KeptPlan {
+            chat: kept(4),
+            number: 1,
+            steps: vec![step("Later", StepState::Pending)],
+            at: at - DONE_SHOWS / 2,
+        }];
+        let moved = Progress {
+            resolved: vec![
+                resolved(1, DONE_SHOWS - 1),
+                resolved(2, DONE_SHOWS / 2),
+                resolved(3, DONE_SHOWS),
+                resolved(4, 0),
+            ],
+            ..NO_MOVED
+        };
+        let dismissed = [Dismissed {
+            chat: kept(4),
+            number: 1,
+            steps: kept_plans[0].steps.clone(),
+        }];
+        let plans = Plans {
+            kept: &kept_plans,
+            dismissed: &dismissed,
+            moved: &moved,
+            at,
+            ..NO_PLANS
+        };
+        let places = Places {
+            wiki: &root.join("wiki"),
+            raw: &root.join("raw"),
+            triggers: &json!({}),
+        };
+
+        let json = told_of(&told, &root, &[], &plans, &|_| None, &places);
+
+        let rows: Vec<(u64, u64, &str)> = json["plans"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|chat| {
+                (
+                    chat["key"].as_u64().unwrap(),
+                    chat["depth"].as_u64().unwrap(),
+                    chat["waits"].as_str().unwrap(),
+                )
+            })
+            .collect();
+        assert_eq!(rows, [(1, 0, "done"), (2, 1, "done")]);
+        assert_eq!(json["waiting"], json!([]), "none of them waits");
     }
 
     #[test]

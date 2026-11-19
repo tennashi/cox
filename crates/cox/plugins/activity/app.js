@@ -111,7 +111,8 @@ function standing(chat) {
   if (waits === "waits on CI") return { as: "ci", says: waits };
   // A chat only waiting, whose CI ended while the human did not look.
   if (!chat.plans && chat.why) return { as: "yours", says: chat.why };
-  if (done || waits === "finished") return { as: "done", says: "done" };
+  // Its plan done, a subagent that finished, or a chat marked done.
+  if (done || waits === "finished" || waits === "done") return { as: "done", says: "done" };
   return { as: "stopped", says: "stopped" };
 }
 
