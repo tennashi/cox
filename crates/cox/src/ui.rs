@@ -8,7 +8,8 @@
 //!   that run as the [`snippet`]s the human clicks Run on; [`selection`]
 //!   is what the human selected.
 //! - [`icons`] is the icons drawn; how things look is
-//!   [`coxd::theme`], which the page coxd serves a phone shares.
+//!   [`coxd::theme`], which the page coxd serves a phone shares, and
+//!   [`depth`] draws how far a part stands up from what it sits on.
 //! - The [`Copy`] action and the [`LinkClicked`] event are what the parts
 //!   tell the window alike, and a [`Panel`] is what the window and a
 //!   stage share: whether the stage is in sight.
@@ -22,6 +23,7 @@
 
 pub mod button;
 pub mod composing;
+pub mod depth;
 pub mod diagram;
 pub mod drag;
 pub mod ellipsis;
