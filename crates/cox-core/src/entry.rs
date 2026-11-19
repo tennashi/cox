@@ -17,6 +17,10 @@ pub enum Entry {
     /// What the human handed the chat with the line before it, from
     /// elsewhere on the screen, as text selected in a tab.
     Attached(Vec<Attachment>),
+    /// The human wrote the line before it, and what they handed with it,
+    /// on a step of the agent's plan, from the Activity page: the step's
+    /// thread there is of the line, and of what the agent replied to it.
+    OnStep(OnStep),
     /// A line Cox sent the agent in the human's place, as the agent's
     /// next turn: what the chat's goal asks while it is not met.
     Cox(String),
@@ -606,6 +610,57 @@ pub struct Step {
     /// kept, and one that was so in a plan an older Cox kept before.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub since: Option<i64>,
+    /// What coxd knows it by in its chat, from 1, which it keeps as the
+    /// agent rewords it, for what is said of it to stay with it. None
+    /// for a step an older Cox kept.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<u64>,
+}
+
+/// A step of the agent's plan a line of the human's is on: the step the
+/// chat knows by `id` (see [`Step::id`]), as it read as they wrote.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OnStep {
+    pub id: u64,
+    pub text: String,
+}
+
+/// How alike `one` and `other` read, from 0 to 1: the Dice coefficient of
+/// the pairs of letters in each of their words, which holds for words
+/// written without spaces between them, as Japanese is, too.
+#[must_use]
+pub fn alike(one: &str, other: &str) -> f64 {
+    let pairs = |text: &str| -> Vec<(char, char)> {
+        let mut pairs: Vec<(char, char)> = text
+            .split(|c: char| !c.is_alphanumeric())
+            .flat_map(|word| {
+                let letters: Vec<char> = word.chars().flat_map(char::to_lowercase).collect();
+                match letters.as_slice() {
+                    [] => Vec::new(),
+                    [only] => vec![(*only, ' ')],
+                    _ => letters.windows(2).map(|pair| (pair[0], pair[1])).collect(),
+                }
+            })
+            .collect();
+        pairs.sort_unstable();
+        pairs
+    };
+    let (one, other) = (pairs(one), pairs(other));
+    if one.is_empty() || other.is_empty() {
+        return 0.0;
+    }
+    let (mut both, mut at) = (0_u32, 0);
+    for pair in &one {
+        while at < other.len() && other[at] < *pair {
+            at += 1;
+        }
+        if at < other.len() && other[at] == *pair {
+            both += 1;
+            at += 1;
+        }
+    }
+    let all = u32::try_from(one.len() + other.len()).unwrap_or(u32::MAX);
+    f64::from(2 * both) / f64::from(all)
 }
 
 /// How far a step of the plan has gone.

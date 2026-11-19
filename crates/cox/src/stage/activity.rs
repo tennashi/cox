@@ -34,15 +34,15 @@ use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-use cox_core::entry::{Entry, QuestionAnswer, Step, StepState};
-use cox_core::store::{ChatId, KeptAnswer, KeptPlan, Progress, ResolvedBy, Store};
+use cox_core::entry::{Entry, OnStep, QuestionAnswer, Step, StepState, alike};
+use cox_core::store::{ChatId, KeptAnswer, KeptPlan, Progress, ResolvedBy, Said, Store};
 use jiff::tz::TimeZone;
 use serde_json::{Value, json};
 
 use crate::stage::commands;
 use cox_acp::Microdollars;
 use coxd::chat::spent::Spent;
-use coxd::daemon::wire::PullRow;
+use coxd::daemon::wire::{OnStepLine, PullRow};
 use coxd::github::CheckState;
 
 /// How many of what happened the page is told of, the last first.
@@ -106,6 +106,12 @@ pub struct Chat {
     /// Whether the human archived it: it waits for them only while it
     /// asks.
     pub archived: bool,
+    /// Whether a line sent now goes into the turn its agent takes, as it
+    /// asks the human something too, if it does.
+    pub steers: bool,
+    /// The lines written on steps of its plan that wait for its turn to
+    /// end, the first first.
+    pub on_steps: Vec<OnStepLine>,
 }
 
 impl Chat {
@@ -389,12 +395,16 @@ pub fn waiting(root: &Path) -> usize {
 #[must_use]
 pub fn told(root: &Path, wiki: &Path, raw: &Path, triggers: &Value) -> Value {
     let at = jiff::Timestamp::now().as_millisecond();
+    let kept = plans();
+    let opened = opened();
     told_of(
         &now(),
         root,
         &decided(),
         &Plans {
-            kept: &plans(),
+            on: &on_steps(&kept),
+            opened: &opened,
+            kept: &kept,
             dismissed: &Dismissed::read(),
             moved: &progress(at - WINDOWS[WINDOWS.len() - 1].1),
             at,
@@ -416,6 +426,170 @@ fn plans() -> Vec<KeptPlan> {
     plans.unwrap_or_else(|error| {
         tracing::warn!("the plans of the chats are not read: {error:#}");
         Vec::new()
+    })
+}
+
+/// When each chat coxd keeps was opened, in milliseconds since the epoch.
+fn opened() -> Vec<(ChatId, i64)> {
+    let opened = coxd::storage::path(coxd::storage::Kept::Chats)
+        .ok_or_else(|| anyhow::anyhow!("no place keeps the chats"))
+        .and_then(|path| Store::read(&path)?.opened());
+    opened.unwrap_or_else(|error| {
+        tracing::warn!("when the chats were opened is not read: {error:#}");
+        Vec::new()
+    })
+}
+
+/// How many lines the human wrote on each step of the plans of the chats
+/// of `kept`, by the chat, as coxd keeps them.
+fn on_steps(kept: &[KeptPlan]) -> Vec<(ChatId, Vec<(u64, usize)>)> {
+    let read = coxd::storage::path(coxd::storage::Kept::Chats)
+        .ok_or_else(|| anyhow::anyhow!("no place keeps the chats"))
+        .and_then(|path| {
+            let store = Store::read(&path)?;
+            kept.iter()
+                .map(|plan| Ok((plan.chat, store.on_steps(plan.chat)?)))
+                .collect::<anyhow::Result<Vec<_>>>()
+        });
+    read.unwrap_or_else(|error| {
+        tracing::warn!("the lines on the steps of the plans are not read: {error:#}");
+        Vec::new()
+    })
+}
+
+/// A step of a chat's plan whose thread the page shows: the chat, as
+/// coxd keeps it, and the step, by its id.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Deserialize)]
+pub struct Open {
+    chat: ChatId,
+    step: u64,
+}
+
+/// The thread of the step `open` names, as JSON, with the step: each
+/// line the human wrote on it and what the agent replied, with when, or
+/// null when coxd keeps no plan of the chat with that step.
+#[must_use]
+pub fn thread(open: &Open) -> Value {
+    let read = coxd::storage::path(coxd::storage::Kept::Chats)
+        .ok_or_else(|| anyhow::anyhow!("no place keeps the chats"))
+        .and_then(|path| Store::read(&path)?.thread(open.chat, open.step));
+    let said = read.unwrap_or_else(|error| {
+        tracing::warn!("the thread of a step is not read: {error:#}");
+        Vec::new()
+    });
+    let mut thread = thread_of(open, &said, &TimeZone::system());
+    thread["waiting"] = json!(waiting_on(&now(), open));
+    thread
+}
+
+/// The lines written on the step `open` names that wait for the turn of
+/// its chat, of `told`, to end.
+fn waiting_on(told: &Told, open: &Open) -> Vec<String> {
+    told.chats
+        .iter()
+        .filter(|chat| chat.kept == Some(open.chat))
+        .flat_map(|chat| &chat.on_steps)
+        .filter(|line| line.step.id == open.step)
+        .map(|line| line.text.clone())
+        .collect()
+}
+
+/// The thread of the step `open` names, of the lines `said`, as JSON,
+/// each with when, by the time of day in `zone`.
+fn thread_of(open: &Open, said: &[Said], zone: &TimeZone) -> Value {
+    json!({
+        "chat": open.chat,
+        "step": open.step,
+        "said": said
+            .iter()
+            .map(|said| {
+                json!({
+                    "by": said.by,
+                    "text": said.text,
+                    "at": jiff::Timestamp::from_millisecond(said.at)
+                        .map_or_default(|at| at.to_zoned(zone.clone()).strftime("%H:%M").to_string()),
+                })
+            })
+            .collect::<Vec<_>>(),
+    })
+}
+
+/// A line the human wrote on a step of a chat's plan, from the page, for
+/// the window to send the chat (see [`listen`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Say {
+    /// The chat, by the number the window goes by for it.
+    pub key: u64,
+    pub text: String,
+    pub step: OnStep,
+}
+
+/// Where the lines written on steps go, to the window that listens.
+static SAYS: Mutex<Option<tokio::sync::mpsc::UnboundedSender<Say>>> = Mutex::new(None);
+
+/// The lines the human writes on steps of the plans from now on, for the
+/// window to send each to its chat.
+pub fn listen() -> tokio::sync::mpsc::UnboundedReceiver<Say> {
+    let (says, heard) = tokio::sync::mpsc::unbounded_channel();
+    if let Ok(mut now) = SAYS.lock() {
+        *now = Some(says);
+    }
+    heard
+}
+
+/// What the page asks to say on a step: the line, the chat, by the key
+/// the window goes by for it and as coxd keeps it, and the step, by its
+/// id.
+#[derive(Clone, Debug, serde::Deserialize)]
+pub struct Asked {
+    key: u64,
+    #[serde(flatten)]
+    open: Open,
+    text: String,
+}
+
+/// Has the window send the line `asked` on its step, as the JSON of
+/// [`Asked`] the page sent says, if the chat takes a line now and its
+/// plan, as coxd keeps it, has the step; and answers the step's thread
+/// to show, if the page named one.
+pub fn say(asked: &str) -> Option<Open> {
+    let asked: Asked = serde_json::from_str(asked).ok()?;
+    let told = now();
+    let says = says_on(&told, &plans(), &asked);
+    if let Some(say) = says
+        && let Ok(listening) = SAYS.lock()
+        && let Some(listening) = listening.as_ref()
+    {
+        let _ = listening.send(say);
+    }
+    Some(asked.open)
+}
+
+/// The line `asked` to send, on the step of the chat's plan of `kept` it
+/// names, as it reads there, when the chat of `told` takes a line on a
+/// step (see [`takes_a_line`]).
+fn says_on(told: &Told, kept: &[KeptPlan], asked: &Asked) -> Option<Say> {
+    let text = asked.text.trim();
+    let chat = told
+        .chats
+        .iter()
+        .find(|chat| chat.key == asked.key && chat.kept == Some(asked.open.chat))?;
+    if text.is_empty() || !takes_a_line(chat) {
+        return None;
+    }
+    let step = kept
+        .iter()
+        .find(|plan| plan.chat == asked.open.chat)?
+        .steps
+        .iter()
+        .find(|step| step.id == Some(asked.open.step))?;
+    Some(Say {
+        key: chat.key,
+        text: text.to_owned(),
+        step: OnStep {
+            id: asked.open.step,
+            text: step.text.clone(),
+        },
     })
 }
 
@@ -507,43 +681,6 @@ pub fn dismiss(asked: &str) {
 /// as [`alike`] measures it, for the chat to show under the step.
 const LINKED: f64 = 0.3;
 
-/// How alike `one` and `other` read, from 0 to 1: the Dice coefficient of
-/// the pairs of letters in each of their words, which holds for words
-/// written without spaces between them, as Japanese is, too.
-fn alike(one: &str, other: &str) -> f64 {
-    let pairs = |text: &str| -> Vec<(char, char)> {
-        let mut pairs: Vec<(char, char)> = text
-            .split(|c: char| !c.is_alphanumeric())
-            .flat_map(|word| {
-                let letters: Vec<char> = word.chars().flat_map(char::to_lowercase).collect();
-                match letters.as_slice() {
-                    [] => Vec::new(),
-                    [only] => vec![(*only, ' ')],
-                    _ => letters.windows(2).map(|pair| (pair[0], pair[1])).collect(),
-                }
-            })
-            .collect();
-        pairs.sort_unstable();
-        pairs
-    };
-    let (one, other) = (pairs(one), pairs(other));
-    if one.is_empty() || other.is_empty() {
-        return 0.0;
-    }
-    let (mut both, mut at) = (0_u32, 0);
-    for pair in &one {
-        while at < other.len() && other[at] < *pair {
-            at += 1;
-        }
-        if at < other.len() && other[at] == *pair {
-            both += 1;
-            at += 1;
-        }
-    }
-    let all = u32::try_from(one.len() + other.len()).unwrap_or(u32::MAX);
-    f64::from(2 * both) / f64::from(all)
-}
-
 /// The step of `plan` each of `subagents` works on, by its place in the
 /// plan: the step its chat's name reads most alike, once alike enough.
 fn linked(plan: &[Step], subagents: &[&Chat]) -> Vec<Option<usize>> {
@@ -565,6 +702,10 @@ fn linked(plan: &[Step], subagents: &[&Chat]) -> Vec<Option<usize>> {
 /// milliseconds since the epoch, they are told.
 struct Plans<'a> {
     kept: &'a [KeptPlan],
+    /// How many lines the human wrote on each step of each chat's plans.
+    on: &'a [(ChatId, Vec<(u64, usize)>)],
+    /// When each chat was opened, which tells apart chats of one name.
+    opened: &'a [(ChatId, i64)],
     dismissed: &'a [Dismissed],
     moved: &'a Progress,
     at: i64,
@@ -576,6 +717,22 @@ impl Plans<'_> {
         let plan = self.kept.iter().find(|plan| Some(plan.chat) == chat.kept)?;
         (!self.dismissed.iter().any(|dismissed| dismissed.hides(plan))).then_some(plan)
     }
+
+    /// How many lines the human wrote on each step of `chat`'s plans.
+    fn on_of(&self, chat: &Chat) -> &[(u64, usize)] {
+        self.on
+            .iter()
+            .find(|(id, _)| Some(*id) == chat.kept)
+            .map_or(&[][..], |(_, on)| on.as_slice())
+    }
+}
+
+/// Whether a line the human writes on a step of `chat`'s plan goes, as
+/// one typed in the chat goes: into the turn its agent takes, if it takes
+/// lines so, or else once the turn ends; but not while the agent asks the
+/// human something, unless it takes the line into the turn.
+fn takes_a_line(chat: &Chat) -> bool {
+    !chat.asking || chat.steers
 }
 
 /// Where what happened in a folder is read from: the human's wiki, their
@@ -690,6 +847,7 @@ fn planned(
         let links = linked(steps, &subagents);
         listed.push(json!({
             "key": chat.key,
+            "chat": chat.kept, "takes": takes_a_line(chat), "steers": chat.steers,
             "name": chat.name,
             "goal": chat.goal,
             "depth": depth,
@@ -723,7 +881,7 @@ fn planned(
                     })
                 })
                 .collect::<Vec<_>>(),
-            "plan": steps_of(told, steps, &subagents, &links, now),
+            "plan": steps_of(told, steps, plans.on_of(chat), &subagents, &links, now),
             // Only a plan that keeps a chat listed on its own is
             // dismissed: one at work shows anyway.
             "dismiss": plan
@@ -970,12 +1128,14 @@ fn spent_of(told: &Told, chat: &Chat) -> Value {
     })
 }
 
-/// The steps of a plan, as JSON, each with those of `subagents` that
+/// The steps of a plan, as JSON, each with its id, how many lines the
+/// human wrote on it, as `on` counts them, those of `subagents` that
 /// `links` link to it, what they do now, as `now` says, and what they
 /// spent, with the chats under them, of `told`.
 fn steps_of(
     told: &Told,
     steps: &[Step],
+    on: &[(u64, usize)],
     subagents: &[&Chat],
     links: &[Option<usize>],
     now: &dyn Fn(u64) -> Option<commands::Now>,
@@ -1002,7 +1162,17 @@ fn steps_of(
                     })
                 })
                 .collect();
-            json!({ "text": step.text, "state": step.state, "chats": chats })
+            let written = step
+                .id
+                .and_then(|id| on.iter().find(|(on, _)| *on == id))
+                .map_or(0, |(_, count)| *count);
+            json!({
+                "text": step.text,
+                "state": step.state,
+                "id": step.id,
+                "on": written,
+                "chats": chats,
+            })
         })
         .collect()
 }
@@ -1131,7 +1301,7 @@ fn told_of(
         when(b).cmp(&when(a))
     });
     happened.truncate(HAPPENED);
-    json!({
+    let mut told_json = json!({
         "folder": root,
         "home": home,
         "github": told.github,
@@ -1141,7 +1311,109 @@ fn told_of(
         "busy": busy,
         "decided": decided,
         "happened": happened,
-    })
+    });
+    hint(&mut told_json, &hints(told, root, plans));
+    told_json
+}
+
+/// A way to tell a chat apart from others of its name, if it tells.
+type Hinting<'a> = dyn Fn(&Chat) -> Option<String> + 'a;
+
+/// What tells each chat of the folder `root`, or of every folder in the
+/// home, apart from the others of its name, for those whose name another
+/// has, by its key: the first of where it works, the chat that opened
+/// it, and when it was opened, of `plans`, to the minute or else to the
+/// second, that no other of its name shares.
+fn hints(told: &Told, root: &Path, plans: &Plans<'_>) -> Vec<(u64, String)> {
+    let chats: Vec<&Chat> = told
+        .chats
+        .iter()
+        .filter(|chat| of_folder(told, chat, root))
+        .collect();
+    let zone = TimeZone::system();
+    let folder = |chat: &Chat| {
+        if chat.cwd == chat.project {
+            where_of(told, &chat.project)
+        } else {
+            chat.cwd
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+        }
+        .map(|folder| format!("in {folder}"))
+    };
+    let parent = |chat: &Chat| {
+        let parent = chat.parent?;
+        let parent = told.chats.iter().find(|other| other.key == parent)?;
+        Some(format!("under {}", parent.name))
+    };
+    let opened = |chat: &Chat, seconds: bool| {
+        let at = plans
+            .opened
+            .iter()
+            .find(|(id, _)| Some(*id) == chat.kept)?
+            .1;
+        let day = if plans.at - at < 20 * 60 * 60 * 1000 {
+            ""
+        } else {
+            "%b %-d "
+        };
+        let format = format!("opened {day}%H:%M{}", if seconds { ":%S" } else { "" });
+        let at = jiff::Timestamp::from_millisecond(at).ok()?;
+        Some(at.to_zoned(zone.clone()).strftime(&format).to_string())
+    };
+    let (by_minute, by_second) = (
+        |chat: &Chat| opened(chat, false),
+        |chat: &Chat| opened(chat, true),
+    );
+    // To the second, for chats opened in the same minute.
+    let ways: [&Hinting<'_>; 4] = [&folder, &parent, &by_minute, &by_second];
+    let mut hints = Vec::new();
+    for chat in &chats {
+        let alike: Vec<&&Chat> = chats
+            .iter()
+            .filter(|other| other.key != chat.key && other.name == chat.name)
+            .collect();
+        if alike.is_empty() {
+            continue;
+        }
+        let told_apart = ways.iter().find_map(|way| {
+            let hint = way(chat)?;
+            alike
+                .iter()
+                .all(|other| way(other).as_ref() != Some(&hint))
+                .then_some(hint)
+        });
+        if let Some(hint) = told_apart {
+            hints.push((chat.key, hint));
+        }
+    }
+    hints
+}
+
+/// Puts each of `hints` on each chat `told` tells of, by its key and its
+/// name, as `hint`, in every part of it.
+fn hint(told: &mut Value, hints: &[(u64, String)]) {
+    match told {
+        Value::Object(object) => {
+            let named =
+                object.contains_key("name") || object.get("chat").is_some_and(Value::is_string);
+            if named
+                && let Some(key) = object.get("key").and_then(Value::as_u64)
+                && let Some((_, hint)) = hints.iter().find(|(hinted, _)| *hinted == key)
+            {
+                object.insert("hint".to_owned(), json!(hint));
+            }
+            for value in object.values_mut() {
+                hint(value, hints);
+            }
+        }
+        Value::Array(values) => {
+            for value in values {
+                hint(value, hints);
+            }
+        }
+        _ => {}
+    }
 }
 
 /// Pushes onto `happened` the sources kept of the folder `root`, the
@@ -1205,6 +1477,8 @@ mod tests {
 
     const NO_PLANS: Plans<'static> = Plans {
         kept: &[],
+        on: &[],
+        opened: &[],
         dismissed: &[],
         moved: &NO_MOVED,
         at: 0,
@@ -1220,6 +1494,7 @@ mod tests {
             text: text.to_owned(),
             state,
             since: None,
+            id: None,
         }
     }
 
@@ -1240,6 +1515,8 @@ mod tests {
             spent: None,
             resolved: false,
             archived: false,
+            steers: false,
+            on_steps: Vec::new(),
         }
     }
 
@@ -1554,6 +1831,252 @@ mod tests {
     }
 
     #[test]
+    fn a_step_takes_a_line_on_it_as_the_chat_takes_one() {
+        let root = TempDir::new();
+        let of = |key: u64, asking: bool, working: bool, steers: bool| {
+            let mut of = chat(key, &root, &root, asking, !asking && !working);
+            of.kept = Some(kept(key));
+            of.working = working;
+            of.steers = steers;
+            of
+        };
+        let told = Told {
+            // Waiting, asking, at work and asking with a turn it steers.
+            chats: vec![
+                of(1, false, false, false),
+                of(2, true, false, false),
+                of(3, false, true, false),
+                of(4, true, true, true),
+            ],
+            home: root.join("home"),
+            ..Told::default()
+        };
+        let known = |text: &str, id| Step {
+            id: Some(id),
+            ..step(text, StepState::Pending)
+        };
+        let kept_plans = [1, 2, 3, 4].map(|chat| KeptPlan {
+            chat: kept(chat),
+            number: 1,
+            steps: vec![
+                known("Rename the setting", 1),
+                step("Older", StepState::Pending),
+            ],
+            at: 0,
+        });
+        let on = [(kept(1), vec![(1, 2)])];
+        let plans = Plans {
+            kept: &kept_plans,
+            on: &on,
+            ..NO_PLANS
+        };
+        let places = Places {
+            wiki: &root.join("wiki"),
+            raw: &root.join("raw"),
+            triggers: &json!({}),
+        };
+
+        let json = told_of(&told, &root, &[], &plans, &|_| None, &places);
+
+        let shown = &json["plans"][0];
+        assert_eq!((&shown["chat"], &shown["takes"]), (&json!(1), &json!(true)));
+        let takes: Vec<(u64, bool)> = json["plans"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|chat| {
+                (
+                    chat["key"].as_u64().unwrap(),
+                    chat["takes"].as_bool().unwrap(),
+                )
+            })
+            .collect();
+        assert_eq!(takes, [(1, true), (2, false), (3, true), (4, true)]);
+        let steps = &shown["plan"];
+        assert_eq!((&steps[0]["id"], &steps[0]["on"]), (&json!(1), &json!(2)));
+        assert_eq!(
+            (&steps[1]["id"], &steps[1]["on"]),
+            (&Value::Null, &json!(0))
+        );
+
+        // A line goes on a step the chat's plan has, as the step reads
+        // there, to a chat that takes one.
+        let asked = |key: u64, chat: u64, step: u64, text: &str| Asked {
+            key,
+            open: Open {
+                chat: kept(chat),
+                step,
+            },
+            text: text.to_owned(),
+        };
+        assert_eq!(
+            says_on(&told, &kept_plans, &asked(1, 1, 1, " keep the old name ")),
+            Some(Say {
+                key: 1,
+                text: "keep the old name".to_owned(),
+                step: OnStep {
+                    id: 1,
+                    text: "Rename the setting".to_owned(),
+                },
+            })
+        );
+        for (key, chat, step, text) in [
+            (2, 2, 1, "asking"),
+            (1, 1, 9, "no such step"),
+            (1, 2, 1, "another chat's key"),
+            (1, 1, 1, "  "),
+        ] {
+            assert_eq!(
+                says_on(&told, &kept_plans, &asked(key, chat, step, text)),
+                None,
+                "{text}"
+            );
+        }
+        // At work, it takes the line, into the turn or once it ends.
+        assert!(says_on(&told, &kept_plans, &asked(3, 3, 1, "busy")).is_some());
+        assert!(says_on(&told, &kept_plans, &asked(4, 4, 1, "steered")).is_some());
+    }
+
+    #[test]
+    fn a_thread_tells_the_lines_on_its_step_that_wait_for_the_turn_to_end() {
+        let root = TempDir::new();
+        let mut waits = chat(1, &root, &root, false, false);
+        waits.kept = Some(kept(1));
+        let waiting = |text: &str, id| OnStepLine {
+            text: text.to_owned(),
+            step: OnStep {
+                id,
+                text: String::new(),
+            },
+        };
+        waits.on_steps = vec![waiting("later", 1), waiting("elsewhere", 9)];
+        let told = Told {
+            chats: vec![waits],
+            ..Told::default()
+        };
+        let open = Open {
+            chat: kept(1),
+            step: 1,
+        };
+
+        assert_eq!(waiting_on(&told, &open), ["later"]);
+    }
+
+    #[test]
+    fn a_thread_tells_who_said_each_line_and_when() {
+        use cox_core::store::Sayer;
+        let thread = thread_of(
+            &Open {
+                chat: kept(1),
+                step: 1,
+            },
+            &[
+                Said {
+                    by: Sayer::Human,
+                    text: "keep the old name".to_owned(),
+                    at: 0,
+                    number: 4,
+                },
+                Said {
+                    by: Sayer::Agent,
+                    text: "Kept.".to_owned(),
+                    at: 60_000,
+                    number: 6,
+                },
+            ],
+            &TimeZone::UTC,
+        );
+        assert_eq!(
+            thread,
+            json!({
+                "chat": 1,
+                "step": 1,
+                "said": [
+                    { "by": "human", "text": "keep the old name", "at": "00:00" },
+                    { "by": "agent", "text": "Kept.", "at": "00:01" },
+                ],
+            })
+        );
+    }
+
+    #[test]
+    fn chats_of_one_name_are_told_apart_by_folder_then_parent_then_when_opened() {
+        let root = TempDir::new();
+        let named = |key: u64, name: &str, cwd: &Path, parent: Option<u64>| {
+            let mut named = chat(key, cwd, &root, false, true);
+            named.name = name.to_owned();
+            named.parent = parent;
+            named.kept = Some(kept(key));
+            named
+        };
+        let told = Told {
+            chats: vec![
+                named(1, "Fix CI", &root.join("sketch-a"), None),
+                named(2, "Fix CI", &root.join("sketch-b"), None),
+                named(3, "Lead", &root, None),
+                named(4, "Lead", &root, None),
+                named(5, "Review", &root, Some(3)),
+                named(6, "Review", &root, Some(1)),
+                named(7, "Only one", &root, None),
+                named(8, "Look", &root, None),
+                named(9, "Look", &root, None),
+            ],
+            home: root.join("home"),
+            ..Told::default()
+        };
+        let hour = 60 * 60 * 1000;
+        let opened = [
+            (kept(3), 9 * hour),
+            (kept(4), 9 * hour + 60_000),
+            (kept(8), 9 * hour + 1_000),
+            (kept(9), 9 * hour + 2_000),
+        ];
+        let plans = Plans {
+            opened: &opened,
+            at: 10 * hour,
+            ..NO_PLANS
+        };
+
+        let mut hints = hints(&told, &root, &plans);
+        hints.sort();
+        let at = |at: i64, format: &str| {
+            jiff::Timestamp::from_millisecond(9 * hour + at)
+                .unwrap()
+                .to_zoned(TimeZone::system())
+                .strftime(format)
+                .to_string()
+        };
+        assert_eq!(
+            hints,
+            [
+                (1, "in sketch-a".to_owned()),
+                (2, "in sketch-b".to_owned()),
+                (3, at(0, "opened %H:%M")),
+                (4, at(60_000, "opened %H:%M")),
+                (5, "under Lead".to_owned()),
+                (6, "under Fix CI".to_owned()),
+                (8, at(1_000, "opened %H:%M:%S")),
+                (9, at(2_000, "opened %H:%M:%S")),
+            ]
+        );
+
+        let places = Places {
+            wiki: &root.join("wiki"),
+            raw: &root.join("raw"),
+            triggers: &json!({}),
+        };
+        let json = told_of(&told, &root, &[], &plans, &|_| None, &places);
+        let waiting: Vec<(&str, &Value)> = json["waiting"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|chat| (chat["name"].as_str().unwrap(), &chat["hint"]))
+            .collect();
+        assert_eq!(waiting[0], ("Fix CI", &json!("in sketch-a")));
+        assert_eq!(waiting[6], ("Only one", &Value::Null));
+    }
+
+    #[test]
     fn a_chat_shows_its_plan_while_at_work_not_done_or_done_lately() {
         let root = TempDir::new();
         let listed = |key: u64, name: &str, working: bool, parent: Option<u64>| {
@@ -1774,6 +2297,8 @@ mod tests {
                 &[],
                 &Plans {
                     kept: &plans(),
+                    on: &[],
+                    opened: &[],
                     dismissed: &Dismissed::read(),
                     moved: &NO_MOVED,
                     at: 0,
@@ -1938,6 +2463,7 @@ mod tests {
             text: text.to_owned(),
             state: StepState::Pending,
             since: None,
+            id: None,
         };
         let plan = [
             step("--shout フラグを追加しテストを書く"),

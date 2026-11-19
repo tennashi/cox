@@ -9,11 +9,11 @@
 //! chat's key and the generation of its agent, so that what an agent
 //! stopped since says is let be.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use cox_core::entry::{Attachment, Committed};
+use cox_core::entry::{Attachment, Committed, OnStep};
 use cox_core::goal;
 use cox_core::store::{ChatId, Record};
 use cox_git::commits::{self, Turn};
@@ -30,7 +30,7 @@ use crate::chat::conversation::{
 };
 use crate::chat::judge::{Heard, Judge, Starts};
 use crate::daemon::Internal;
-use crate::daemon::wire::{Background, BackgroundKind};
+use crate::daemon::wire::{Background, BackgroundKind, OnStepLine};
 use crate::trigger::{self, Arranged, By, On, Trigger};
 use cox_acp::{Login, StopReason};
 
@@ -315,6 +315,10 @@ pub struct Chat {
     /// What the chat sends its agent while it starts, which goes once it
     /// has.
     queued: Vec<Command>,
+    /// The lines the human wrote on steps of the plan while a turn ran
+    /// that the agent took no line into, the first first, each of which
+    /// goes as the next line once the chat waits for one.
+    on_steps: VecDeque<OnStepLine>,
     /// Whether its agent is on its way to start.
     starting: bool,
     /// What starts the agent of a closed chat again, until it has.
@@ -441,6 +445,7 @@ impl Chat {
             internal,
             watched: false,
             unsent: Vec::new(),
+            on_steps: VecDeque::new(),
             told: None,
             turn_heads: None,
             places: Places::Cox,
@@ -787,16 +792,51 @@ impl Chat {
         }
     }
 
-    /// The human sent `text`. Answers whether it went: not while a turn
-    /// runs, unless the agent takes it into the turn.
-    pub fn submit(&mut self, text: &str, attached: Vec<Attachment>) -> bool {
-        match self.conversation.submit_with(text, attached) {
+    /// The human sent `text`, on the step of the plan `step` names, if it
+    /// does. Answers whether it went: not while a turn runs, unless the
+    /// agent takes it into the turn; but a line on a step waits for the
+    /// turn to end, and goes then (see [`Chat::send_on_steps`]), unless
+    /// the agent asks the human something.
+    pub fn submit(&mut self, text: &str, attached: Vec<Attachment>, step: Option<OnStep>) -> bool {
+        match self.conversation.submit_on(text, attached, step.clone()) {
             Some(command) => {
                 self.send(command);
                 true
             }
-            None => false,
+            None => match step {
+                Some(step)
+                    if !text.trim().is_empty()
+                        && matches!(
+                            self.conversation.state(),
+                            State::Busy | State::Checking | State::Stopping
+                        ) =>
+                {
+                    self.on_steps.push_back(OnStepLine {
+                        text: text.to_owned(),
+                        step,
+                    });
+                    true
+                }
+                _ => false,
+            },
         }
+    }
+
+    /// Sends the first line written on a step that waits for the turn to
+    /// end, once the chat waits for a line.
+    pub fn send_on_steps(&mut self) {
+        if self.conversation.state() != State::Idle {
+            return;
+        }
+        if let Some(line) = self.on_steps.pop_front() {
+            self.submit(&line.text, Vec::new(), Some(line.step));
+        }
+    }
+
+    /// The lines written on steps that wait for the turn to end.
+    #[must_use]
+    pub fn waiting_on_steps(&self) -> Vec<OnStepLine> {
+        self.on_steps.iter().cloned().collect()
     }
 
     /// Whether the agent is at work by itself at `now`, apart from a turn
@@ -2170,7 +2210,7 @@ mod tests {
 
         /// The human sends `line`, and the agent ends its turn.
         fn take_a_turn(&mut self, line: &str) {
-            assert!(self.chat.submit(line, Vec::new()), "the line goes");
+            assert!(self.chat.submit(line, Vec::new(), None), "the line goes");
             self.hear(AgentEvent::TurnEnded(StopReason::EndTurn));
         }
 
@@ -2198,7 +2238,7 @@ mod tests {
         on_daemon(async {
             let mut talk = Talk::new(None);
 
-            assert!(talk.chat.submit("hello", Vec::new()));
+            assert!(talk.chat.submit("hello", Vec::new(), None));
 
             assert_eq!(talk.agent.prompts(), ["hello"]);
             assert_eq!(talk.state(), State::Busy);
@@ -2209,11 +2249,74 @@ mod tests {
     fn a_line_sent_while_a_turn_runs_does_not_go() {
         on_daemon(async {
             let mut talk = Talk::new(None);
-            talk.chat.submit("hello", Vec::new());
+            talk.chat.submit("hello", Vec::new(), None);
 
-            assert!(!talk.chat.submit("again", Vec::new()));
+            assert!(!talk.chat.submit("again", Vec::new(), None));
 
             assert_eq!(talk.agent.prompts(), ["hello"]);
+        });
+    }
+
+    #[test]
+    fn a_line_on_a_step_sent_while_a_turn_runs_goes_once_it_ends() {
+        on_daemon(async {
+            let mut talk = Talk::new(None);
+            talk.chat.submit("hello", Vec::new(), None);
+            let on = OnStep {
+                id: 2,
+                text: "Rename the setting".to_owned(),
+            };
+
+            assert!(
+                talk.chat
+                    .submit("keep the old name", Vec::new(), Some(on.clone()))
+            );
+            assert_eq!(
+                talk.chat.waiting_on_steps(),
+                [OnStepLine {
+                    text: "keep the old name".to_owned(),
+                    step: on.clone(),
+                }]
+            );
+            talk.chat.send_on_steps();
+            assert_eq!(talk.agent.prompts(), ["hello"], "not while the turn runs");
+
+            talk.hear(AgentEvent::TurnEnded(StopReason::EndTurn));
+            talk.chat.send_on_steps();
+
+            assert_eq!(
+                talk.agent.prompts(),
+                [
+                    "[The human writes this on the step of your plan: Rename the setting]\n\n\
+                  keep the old name"
+                ]
+            );
+            assert_eq!(talk.chat.waiting_on_steps(), []);
+            assert_eq!(talk.state(), State::Busy);
+            assert_eq!(
+                talk.chat.conversation().entries()[1..],
+                [
+                    Entry::Human("keep the old name".to_owned()),
+                    Entry::OnStep(on),
+                ]
+            );
+        });
+    }
+
+    #[test]
+    fn a_line_on_a_step_waits_for_no_turn_while_the_agent_asks() {
+        on_daemon(async {
+            let mut talk = Talk::new(None);
+            talk.chat.submit("hello", Vec::new(), None);
+            talk.hear(asks_permission());
+            assert_eq!(talk.state(), State::Asking);
+            let on = OnStep {
+                id: 1,
+                text: "Clean".to_owned(),
+            };
+
+            assert!(!talk.chat.submit("go ahead", Vec::new(), Some(on)));
+            assert_eq!(talk.chat.waiting_on_steps(), []);
         });
     }
 
@@ -2221,7 +2324,7 @@ mod tests {
     fn a_line_sent_while_the_agent_starts_goes_once_it_has() {
         on_daemon(async {
             let mut talk = Talk::starting(None);
-            assert!(talk.chat.submit("hello", Vec::new()));
+            assert!(talk.chat.submit("hello", Vec::new(), None));
             let (agent, mut played) = played(&talk.cwd);
 
             talk.chat.attach(agent, talk.generation, Vec::new());
@@ -2239,7 +2342,7 @@ mod tests {
             let (agent, mut played) = played(&talk.cwd);
 
             talk.chat.attach(agent, stale, Vec::new());
-            talk.chat.submit("hello", Vec::new());
+            talk.chat.submit("hello", Vec::new(), None);
 
             assert_eq!(played.prompts(), Vec::<String>::new());
             assert!(talk.chat.is_open(), "the chat waits on its new agent");
@@ -2254,7 +2357,7 @@ mod tests {
             talk.take_a_turn("hello");
 
             assert_eq!(talk.state(), State::Idle);
-            assert!(talk.chat.submit("and then", Vec::new()));
+            assert!(talk.chat.submit("and then", Vec::new(), None));
         });
     }
 
@@ -2262,7 +2365,7 @@ mod tests {
     fn what_an_agent_stopped_since_tells_is_let_be() {
         on_daemon(async {
             let mut talk = Talk::new(None);
-            talk.chat.submit("hello", Vec::new());
+            talk.chat.submit("hello", Vec::new(), None);
 
             talk.chat.hear(
                 talk.generation - 1,
@@ -2307,7 +2410,7 @@ mod tests {
                 how: crate::agent::Opened::New,
                 steers: false,
             });
-            talk.chat.submit("hello", Vec::new());
+            talk.chat.submit("hello", Vec::new(), None);
             let asked = tokio::time::Instant::now();
 
             talk.chat.stop();
@@ -2335,7 +2438,7 @@ mod tests {
         on_daemon(async {
             tokio::time::pause();
             let mut talk = Talk::new(None);
-            talk.chat.submit("hello", Vec::new());
+            talk.chat.submit("hello", Vec::new(), None);
 
             talk.chat.stop();
             talk.hear(AgentEvent::TurnEnded(StopReason::Cancelled));
@@ -2773,7 +2876,7 @@ mod tests {
         on_daemon(async {
             let mut talk = Talk::new(None);
             talk.trigger("status", GATHERS);
-            talk.chat.submit("clean up", Vec::new());
+            talk.chat.submit("clean up", Vec::new(), None);
 
             talk.hear(asks_permission());
 
@@ -2788,7 +2891,7 @@ mod tests {
         on_daemon(async {
             let mut talk = Talk::new(None);
             talk.trigger("status", GATHERS);
-            talk.chat.submit("clean up", Vec::new());
+            talk.chat.submit("clean up", Vec::new(), None);
             talk.hear(asks_permission());
             let (_, answer) = talk.agent.ran().unwrap();
 
@@ -2822,7 +2925,7 @@ mod tests {
         on_daemon(async {
             let mut talk = Talk::new(None);
             talk.trigger("status", GATHERS);
-            talk.chat.submit("clean up", Vec::new());
+            talk.chat.submit("clean up", Vec::new(), None);
             talk.hear(asks_permission());
 
             talk.chat.gathered_enough(talk.generation);
@@ -2837,7 +2940,7 @@ mod tests {
         on_daemon(async {
             let mut talk = Talk::new(None);
             talk.trigger("status", GATHERS);
-            talk.chat.submit("clean up", Vec::new());
+            talk.chat.submit("clean up", Vec::new(), None);
             talk.hear(asks_permission());
 
             talk.chat.gathered_enough(talk.generation - 1);

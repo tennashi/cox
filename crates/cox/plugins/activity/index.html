@@ -177,6 +177,84 @@
       .plan .completed .text {
         color: var(--dim);
       }
+      /* What tells a chat apart from another of its name. */
+      .hint {
+        color: var(--faint);
+        font-size: 11px;
+        font-weight: normal;
+      }
+      /* A step opens its thread with a click. */
+      .plan .opens {
+        cursor: pointer;
+      }
+      .plan .opens:hover,
+      .plan .opens.opened {
+        color: var(--link);
+      }
+      .plan .on {
+        color: var(--faint);
+        font-size: 11px;
+      }
+      .plan .step > .what {
+        flex: 1;
+        min-width: 0;
+      }
+      .thread {
+        margin: 4px 0 6px;
+        padding: 6px 8px;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+      }
+      .thread .said {
+        padding: 2px 0;
+      }
+      .thread .by {
+        display: block;
+        font-size: 10.5px;
+        color: var(--faint);
+      }
+      .thread .says {
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+        color: var(--foreground);
+      }
+      .thread .waiting .says {
+        color: var(--dim);
+        font-style: italic;
+      }
+      .thread .agent .says {
+        color: var(--dim);
+      }
+      .thread .none {
+        padding: 2px 0;
+      }
+      .thread .write {
+        display: flex;
+        gap: 6px;
+        margin-top: 4px;
+      }
+      .thread textarea {
+        flex: 1;
+        font: inherit;
+        color: var(--foreground);
+        background: none;
+        border: 1px solid var(--border);
+        border-radius: 4px;
+        padding: 3px 5px;
+        resize: vertical;
+      }
+      .thread button {
+        font: inherit;
+        color: var(--link);
+        background: none;
+        border: 1px solid var(--border);
+        border-radius: 4px;
+        cursor: pointer;
+      }
+      .thread :disabled {
+        opacity: 0.5;
+        cursor: default;
+      }
       .plan .sub {
         display: flex;
         align-items: baseline;

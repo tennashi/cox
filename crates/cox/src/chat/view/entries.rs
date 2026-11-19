@@ -90,7 +90,7 @@ impl Speaker {
     /// spoke last.
     fn of(entry: &Entry) -> Option<Self> {
         match entry {
-            Entry::Human(_) | Entry::Attached(_) => Some(Self::Human),
+            Entry::Human(_) | Entry::Attached(_) | Entry::OnStep(_) => Some(Self::Human),
             Entry::Cox(_) | Entry::Keep { .. } | Entry::Checks(_) | Entry::Event { .. } => {
                 Some(Self::Cox)
             }
@@ -843,6 +843,15 @@ impl ChatView {
                 .child(writer.plain(text, "\n\n"))
                 .into_any_element(),
             Entry::Attached(attached) => Self::render_attached_entry(index, attached, cx),
+            // Written on a step of the plan, from the Activity page,
+            // whose thread there it is in.
+            Entry::OnStep(on) => div()
+                .debug_selector(|| format!("on-step-{index}"))
+                .pb(px(12.))
+                .text_size(px(12.))
+                .text_color(rgb(DIM))
+                .child(writer.plain(&format!("on the plan's step: {}", on.text), "\n\n"))
+                .into_any_element(),
             // Sent in the human's place, so drawn in theirs, but as Cox's
             // notes are.
             Entry::Cox(text) => div()

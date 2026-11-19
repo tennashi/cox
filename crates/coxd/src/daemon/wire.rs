@@ -6,7 +6,7 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-use cox_core::entry::Attachment;
+use cox_core::entry::{Attachment, OnStep};
 use cox_core::goal::Goal;
 use cox_core::store::{ChatId, Named, ProjectId, Resolved};
 use cox_core::tabs::{KeptTabs, Lines};
@@ -96,6 +96,22 @@ pub struct ChatRow {
     /// it away at its end.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resolved: Option<Resolved>,
+    /// Whether a line the human sends now goes into the turn its agent
+    /// takes, as it asks them something too, if it does.
+    #[serde(default)]
+    pub steers: bool,
+    /// The lines the human wrote on steps of its plan that wait for its
+    /// turn to end, the first first.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub on_steps: Vec<OnStepLine>,
+}
+
+/// A line the human wrote on a step of a chat's plan, which waits for the
+/// turn that runs to end, to go as the next line.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OnStepLine {
+    pub text: String,
+    pub step: OnStep,
 }
 
 /// A pull request a chat's agent opened, as the window shows it.
@@ -535,12 +551,15 @@ pub enum ToDaemon {
     /// tell it how it changes.
     Watch { key: u64 },
     /// The human sent `text` in the chat `key`, with what they handed it
-    /// from elsewhere on the screen.
+    /// from elsewhere on the screen, and on the step of its agent's plan
+    /// they wrote it on, from the Activity page, if they did.
     Submit {
         key: u64,
         text: String,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         attached: Vec<Attachment>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        step: Option<OnStep>,
     },
     /// The human chose the option at `index` of what the agent of the
     /// chat `key` asks: of a permission request, or of the ways to log in.
@@ -766,11 +785,14 @@ mod tests {
             pulls: Vec::new(),
             spent: None,
             resolved: None,
+            steers: false,
+            on_steps: Vec::new(),
         };
         let line = serde_json::to_string(&row).unwrap();
         assert!(!line.contains("background"), "{line}");
         assert!(!line.contains("pulls"), "{line}");
         assert!(!line.contains("resolved"), "{line}");
+        assert!(!line.contains("on_steps"), "{line}");
         assert_eq!(serde_json::from_str::<ChatRow>(&line).unwrap(), row);
     }
 

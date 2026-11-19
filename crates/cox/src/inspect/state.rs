@@ -488,6 +488,7 @@ fn describe_entry(entry: &Entry) -> String {
     match entry {
         Entry::Human(text) => format!("human: {}", text_of(text)),
         Entry::Attached(attached) => format!("attached: {}", describe_attached(attached)),
+        Entry::OnStep(on) => format!("on step {}: {}", on.id, text_of(&on.text)),
         Entry::Cox(text) => format!("cox, in the human's place: {}", text_of(text)),
         Entry::Merge => "merge: the human asked the agent to merge what it made".to_owned(),
         Entry::Reply(text) => format!("reply: {}", text_of(text)),

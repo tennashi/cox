@@ -318,6 +318,7 @@ fn what_the_window_and_coxd_say_reads_back_as_it_was() {
             text: "a\nb".to_owned(),
             picture: None,
         }],
+        step: None,
     };
     let line = serde_json::to_string(&told).unwrap();
     assert!(!line.contains('\n'), "a message is one line");

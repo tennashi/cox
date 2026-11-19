@@ -46,7 +46,7 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::Instant;
 
-use cox_core::entry::Attachment;
+use cox_core::entry::{Attachment, OnStep};
 use cox_core::goal::Goal;
 use cox_core::store::{ChatId, Named, ProjectId, Record, Resolved, ResolvedBy, Store};
 use cox_core::tabs::{KeptTab, KeptTabs};
@@ -536,6 +536,11 @@ impl Slot {
                 None => self.spent.clone(),
             },
             resolved: self.resolved,
+            steers: self
+                .chat
+                .as_ref()
+                .is_some_and(|chat| chat.conversation().steers()),
+            on_steps: self.chat.as_ref().map_or_default(Chat::waiting_on_steps),
         }
     }
 }
@@ -1552,7 +1557,8 @@ impl Daemon {
                 key,
                 text,
                 attached,
-            } => self.submit(key, &text, attached),
+                step,
+            } => self.submit(key, &text, attached, step),
             ToDaemon::Choose { key, index } => {
                 if let Some(chat) = self.chat(key) {
                     chat.choose(index);
@@ -1798,9 +1804,10 @@ impl Daemon {
             .unwrap_or_else(|| format!("Nothing was said in chat {number} yet.")))
     }
 
-    /// The human sent `text` in the chat `key`, which makes it theirs: a
-    /// closed chat's agent starts again first, if it can.
-    fn submit(&mut self, key: u64, text: &str, attached: Vec<Attachment>) {
+    /// The human sent `text` in the chat `key`, on the step of its plan
+    /// `step` names, if it does, which makes it theirs: a closed chat's
+    /// agent starts again first, if it can.
+    fn submit(&mut self, key: u64, text: &str, attached: Vec<Attachment>, step: Option<OnStep>) {
         if text.trim().is_empty() {
             return;
         }
@@ -1822,7 +1829,7 @@ impl Daemon {
             self.start_agent(key, start);
         }
         if let Some(chat) = self.chat(key) {
-            chat.submit(text, attached);
+            chat.submit(text, attached, step);
         }
     }
 
@@ -3007,6 +3014,12 @@ impl Daemon {
     /// Keeps and tells what changed: each chat's conversation, how each
     /// chat stands, and the list.
     fn settle(&mut self) {
+        // A line written on a step while a turn ran goes once it ended.
+        for slot in self.chats.iter_mut().chain(&mut self.archived) {
+            if let Some(chat) = &mut slot.chat {
+                chat.send_on_steps();
+            }
+        }
         // What one chat's change does can change another, as a sketch that
         // ends; each pass looks again, until nothing does.
         for _ in 0..4 {
@@ -3862,6 +3875,7 @@ mod tests {
                 key,
                 text: "work".to_owned(),
                 attached: Vec::new(),
+                step: None,
             });
         });
 
@@ -3916,6 +3930,7 @@ mod tests {
                 key,
                 text: "work".to_owned(),
                 attached: Vec::new(),
+                step: None,
             });
             agent
                 .events
@@ -3947,6 +3962,7 @@ mod tests {
             key,
             text: "work".to_owned(),
             attached: Vec::new(),
+            step: None,
         });
     }
 

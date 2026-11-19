@@ -68,7 +68,9 @@ use coxd::chat::conversation::State;
 use coxd::chat::sketch::{self, Sketch};
 use coxd::chat::spent::Spent;
 use coxd::daemon::Link;
-use coxd::daemon::wire::{Background, ChatRow, FromDaemon, Listing, ProjectRow, PullRow, ToDaemon};
+use coxd::daemon::wire::{
+    Background, ChatRow, FromDaemon, Listing, OnStepLine, ProjectRow, PullRow, ToDaemon,
+};
 
 mod at_work;
 pub(crate) mod project_card;
@@ -275,6 +277,11 @@ pub struct Chat {
     /// When it was marked done, and by whom, while it is: the list folds
     /// it away under "Resolved" at its end.
     resolved: Option<Resolved>,
+    /// Whether a line sent now goes into the turn its agent takes.
+    steers: bool,
+    /// The lines written on steps of its plan that wait for its turn to
+    /// end.
+    on_steps: Vec<OnStepLine>,
     /// Its view, once the window showed it, or something asked of its
     /// stage.
     view: Option<Entity<ChatView>>,
@@ -303,6 +310,8 @@ impl Chat {
             pulls,
             spent,
             resolved,
+            steers,
+            on_steps,
         } = row;
         Self {
             key,
@@ -324,6 +333,8 @@ impl Chat {
             pulls,
             spent,
             resolved,
+            steers,
+            on_steps,
             view,
         }
     }
@@ -559,6 +570,9 @@ pub struct Workspace {
     /// workspace, which may be updating as it asks them something.
     chat_names: Rc<RefCell<HashMap<u64, SharedString>>>,
     _from_daemon: Task<()>,
+    /// What sends the chats the lines the human writes on the steps of
+    /// their plans on the Activity page.
+    _said_on_steps: Task<()>,
 }
 
 impl Workspace {
@@ -594,6 +608,22 @@ impl Workspace {
                     workspace.hear(message, window, cx);
                 });
                 if heard.is_err() {
+                    break;
+                }
+            }
+        });
+        let mut says = crate::stage::activity::listen();
+        let said_on_steps = cx.spawn(async move |this, cx| {
+            while let Some(say) = says.recv().await {
+                let said = this.update(cx, |workspace, _| {
+                    workspace.tell(ToDaemon::Submit {
+                        key: say.key,
+                        text: say.text,
+                        attached: Vec::new(),
+                        step: Some(say.step),
+                    });
+                });
+                if said.is_err() {
                     break;
                 }
             }
@@ -653,6 +683,7 @@ impl Workspace {
             shows_chats: Vec::new(),
             chat_names: Rc::default(),
             _from_daemon: heard,
+            _said_on_steps: said_on_steps,
         }
     }
 
@@ -1492,6 +1523,8 @@ impl Workspace {
                     spent: chat.spent.clone(),
                     resolved: chat.is_resolved(),
                     archived,
+                    steers: chat.steers,
+                    on_steps: chat.on_steps.clone(),
                 })
                 .collect(),
             projects: self

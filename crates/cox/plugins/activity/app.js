@@ -9,8 +9,14 @@
 // did not look yet, each with what it does now, or runs in the background,
 // its open pull requests, and the steps of its plan, each with the
 // subagents' chats that work on it, and the subagents no step has under
-// it. A plan of a chat not at work the human may dismiss, one by one or
-// all at once, until its agent sends another. Above the plans, what moved
+// it. A click on a step opens its thread under it: what the human wrote
+// on the step and what the agent replied, with a line to write another,
+// which goes to the chat as the human's next line, on the step, as one
+// typed in the chat goes: into the turn the agent takes, if it takes
+// lines so, or else once the turn ends, but not while the agent asks
+// something, unless it takes the line into the turn. A plan of a chat not at work the
+// human may dismiss, one by one or all at once, until its agent sends
+// another. Above the plans, what moved
 // over the last 15 minutes, hour, or four hours, as the human picks: the
 // chats that moved, each with the steps its plan got done and its
 // subagents that reported or worked, and, as things stand, the chats that
@@ -42,7 +48,15 @@ let windowed = (() => {
 const esc = (s) =>
   String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 
-async function load(url = API) {
+/// The step whose thread shows, by its chat, as coxd keeps it, and its
+/// id, or null.
+let opened = null;
+
+/// The address that tells what goes on, with the thread that shows.
+const address = () =>
+  opened ? `${API}/thread/${encodeURIComponent(JSON.stringify({ chat: opened.chat, step: opened.step }))}` : API;
+
+async function load(url = address()) {
   let text = null;
   try {
     const answer = await fetch(url, { cache: "no-store" });
@@ -56,6 +70,10 @@ async function load(url = API) {
   draw();
 }
 
+/// What tells `chat` apart from others of its name, when another has it:
+/// where it works, the chat that opened it, or when it was opened.
+const hint = (chat) => (chat.hint ? ` <span class="hint">${esc(chat.hint)}</span>` : "");
+
 /// Where `chat` is, in the home, which tells of every folder.
 const where = (chat) => (told.home && chat.where ? ` <span class="in">in ${esc(chat.where)}</span>` : "");
 
@@ -65,7 +83,7 @@ function waiting(chat) {
   return (
     `<a class="row" href="cox://chat/${chat.key}" title="shows the chat">` +
     `<span class="dot ${chat.why === "asks you" ? "asks" : "unread"}"></span>` +
-    `<span class="what"><span class="name">${chat.sketch ? "↳ " : ""}${esc(chat.name)}</span> <span class="why">${esc(chat.why)}</span>` +
+    `<span class="what"><span class="name">${chat.sketch ? "↳ " : ""}${esc(chat.name)}</span>${hint(chat)} <span class="why">${esc(chat.why)}</span>` +
     `${where(chat)}${asks}${goal}</span></a>`
   );
 }
@@ -114,7 +132,7 @@ function working(chat) {
   return (
     `<a class="row" href="cox://chat/${chat.key}" title="shows the chat" style="margin-left: ${chat.depth * 18}px">` +
     `<span class="dot ${dot}"></span>` +
-    `<span class="what"><span class="name">${chat.depth || chat.sketch ? "↳ " : ""}${esc(chat.name)}</span>${why}` +
+    `<span class="what"><span class="name">${chat.depth || chat.sketch ? "↳ " : ""}${esc(chat.name)}</span>${hint(chat)}${why}` +
     `${where(chat)}${spent(chat)}${goal}${said || running || background || chat.waits ? "" : `<div class="line">at work</div>`}${said}${running}${background}${pull}</span></a>` +
     plan(chat)
   );
@@ -139,14 +157,20 @@ function plan(chat) {
         .map(
           (sub) =>
             `<a class="sub" href="cox://chat/${sub.key}" title="shows the chat">` +
-            `<span class="dot ${sub.working ? "busy" : "idle"}"></span>↳ ${esc(sub.name)}${spent(sub)}</a>` +
+            `<span class="dot ${sub.working ? "busy" : "idle"}"></span>↳ ${esc(sub.name)}${hint(sub)}${spent(sub)}</a>` +
             (sub.said ? `<div class="line">${esc(sub.said)}</div>` : "") +
             pulls(sub),
         )
         .join("");
+      const open = step.id != null && chat.chat != null;
+      const shows = open && opened?.chat === chat.chat && opened?.step === step.id;
+      const text = open
+        ? `<span class="text opens${shows ? " opened" : ""}" data-step="${esc(JSON.stringify({ chat: chat.chat, step: step.id }))}" title="${shows ? "closes" : "opens"} the thread of this step">${esc(step.text)}</span>` +
+          (step.on ? ` <span class="on" title="${many(step.on, "line", "lines")} you wrote on this step">✎ ${step.on}</span>` : "")
+        : `<span class="text">${esc(step.text)}</span>`;
       return (
         `<div class="step ${step.state}"><span class="mark" title="${named}">${mark}</span>` +
-        `<span class="what"><span class="text">${esc(step.text)}</span>${chats}</span></div>`
+        `<span class="what">${text}${shows ? thread(chat) : ""}${chats}</span></div>`
       );
     })
     .join("");
@@ -156,8 +180,42 @@ function plan(chat) {
   );
 }
 
+/// The thread of the step that shows, of `chat`'s plan: each line the
+/// human wrote on it and what the agent replied, and a line to write
+/// another, which goes while the chat takes one.
+function thread(chat) {
+  const shown = told.thread && told.thread.chat === opened.chat && told.thread.step === opened.step ? told.thread.said : null;
+  const said = (shown ?? [])
+    .map(
+      (said) =>
+        `<div class="said ${said.by}"><span class="by">${said.by === "human" ? "you" : "agent"} ${esc(said.at)}</span>` +
+        `<span class="says">${esc(said.text)}</span></div>`,
+    )
+    .join("");
+  const waiting = (shown === null ? [] : told.thread.waiting ?? [])
+    .map(
+      (text) =>
+        `<div class="said human waiting"><span class="by">you · goes once the turn ends</span><span class="says">${esc(text)}</span></div>`,
+    )
+    .join("");
+  const why = !chat.takes
+    ? "answer what it asks first"
+    : chat.working
+      ? chat.steers
+        ? "it is at work: a line goes into its turn"
+        : "it is at work: a line goes once its turn ends"
+      : "";
+  return (
+    `<div class="thread">${shown === null ? "" : said + waiting || `<div class="none">Nothing written on this step yet.</div>`}` +
+    `<form class="write" data-key="${chat.key}"><textarea name="text" rows="2" placeholder="Write on this step, for ${esc(chat.name)}"${chat.takes ? "" : " disabled"}></textarea>` +
+    `<button type="submit"${chat.takes ? "" : " disabled"}>Send</button></form>` +
+    (why ? `<div class="line">${esc(why)}</div>` : "") +
+    `</div>`
+  );
+}
+
 /// A link to the chat `chat` names, by its key and name.
-const named = (chat) => `<a href="cox://chat/${chat.key}" title="shows the chat">${esc(chat.name)}</a>`;
+const named = (chat) => `<a href="cox://chat/${chat.key}" title="shows the chat">${esc(chat.name)}</a>${hint(chat)}`;
 
 /// How many of `count` there are, as "1 step" or "2 steps".
 const many = (count, one, more) => `${count} ${count === 1 ? one : more}`;
@@ -216,7 +274,7 @@ const dismiss = (plans, label, title) =>
 
 function decided(decision) {
   const chat = decision.key != null
-    ? `<a href="cox://chat/${decision.key}" title="shows the chat">${esc(decision.chat)}</a>`
+    ? `<a href="cox://chat/${decision.key}" title="shows the chat">${esc(decision.chat)}</a>${hint(decision)}`
     : esc(decision.chat);
   const header = decision.header && decision.header !== decision.question ? `<span class="header">${esc(decision.header)}</span> ` : "";
   const other = decision.other ? ` <span class="other">“${esc(decision.other)}”</span>` : "";
@@ -241,7 +299,23 @@ function happened(event) {
   );
 }
 
+/// Draws the page, keeping what the human was writing on a step, and
+/// where, as it was.
 function draw() {
+  const writing = app.querySelector(".write textarea");
+  const kept = writing && { value: writing.value, focused: document.activeElement === writing, start: writing.selectionStart, end: writing.selectionEnd };
+  drawn();
+  const now = app.querySelector(".write textarea");
+  if (kept && now) {
+    now.value = kept.value;
+    if (kept.focused && !now.disabled) {
+      now.focus();
+      now.setSelectionRange(kept.start, kept.end);
+    }
+  }
+}
+
+function drawn() {
   if (!told) {
     app.innerHTML = `<div class="none">Cox did not answer with what goes on here.</div>`;
     return;
@@ -289,10 +363,39 @@ app.addEventListener("click", (event) => {
     draw();
     return;
   }
+  const step = event.target.closest("[data-step]");
+  if (step) {
+    const asked = JSON.parse(step.dataset.step);
+    opened = opened && opened.chat === asked.chat && opened.step === asked.step ? null : asked;
+    draw();
+    load();
+    return;
+  }
   const button = event.target.closest("[data-dismiss]");
   if (!button) return;
   button.disabled = true;
   load(`${API}/dismiss/${encodeURIComponent(button.dataset.dismiss)}`);
+});
+
+/// Sends what the human wrote on the step whose thread shows.
+function send(form) {
+  const text = form.elements.text.value;
+  if (!opened || !text.trim()) return;
+  const asked = { key: Number(form.dataset.key), chat: opened.chat, step: opened.step, text };
+  form.elements.text.value = "";
+  load(`${API}/say/${encodeURIComponent(JSON.stringify(asked))}`);
+}
+
+app.addEventListener("submit", (event) => {
+  event.preventDefault();
+  send(event.target);
+});
+
+app.addEventListener("keydown", (event) => {
+  // Enter sends; Shift-Enter starts a new line.
+  if (event.key !== "Enter" || event.shiftKey || event.isComposing || !event.target.matches(".write textarea")) return;
+  event.preventDefault();
+  send(event.target.form);
 });
 
 load();

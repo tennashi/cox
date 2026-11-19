@@ -16,6 +16,7 @@ pub use cox_core::entry::{
     Proposal, Proposed, Question, QuestionAnswer, QuestionOption, Step, StepState, TerminalLogin,
     ToolCallResult,
 };
+use cox_core::entry::{OnStep, alike};
 use cox_core::goal;
 use cox_core::settings::Setting;
 use cox_core::store::ChatId;
@@ -108,6 +109,11 @@ fn tokens(count: u64) -> String {
 /// How many turns a chat takes toward its goal on one line of the human's,
 /// at most.
 pub const GOAL_TURNS: usize = 10;
+
+/// How alike a step of a plan must read to one of the plan before, as
+/// [`alike`] measures it, to be that step reworded, which keeps what it
+/// was known by and when it came to its state.
+const REWORDED: f64 = 0.5;
 
 /// The most of what the goal's command printed, or its judge said, that
 /// the agent is told, in characters, from the end.
@@ -324,6 +330,10 @@ pub struct Conversation {
     /// What the session did not offer of the model the agent that opened
     /// the chat asked for, as Cox told it, if anything.
     unoffered: Option<String>,
+    /// The last id a step of the agent's plans got, as [`Self::stamped`]
+    /// gave it, which a step of a plan sent in place of another keeps
+    /// once it is gone from the plan, or 0 before any did.
+    steps_made: u64,
 }
 
 impl Default for Conversation {
@@ -358,6 +368,7 @@ impl Conversation {
             told_line: BTreeSet::new(),
             raised_line: BTreeSet::new(),
             unoffered: None,
+            steps_made: 0,
         }
     }
 
@@ -404,6 +415,7 @@ impl Conversation {
             told_line: BTreeSet::new(),
             raised_line: BTreeSet::new(),
             unoffered: None,
+            steps_made: 0,
         }
     }
 
@@ -710,6 +722,19 @@ impl Conversation {
     /// one, or, for an agent that [`Conversation::steers`], into the turn
     /// it takes.
     pub fn submit_with(&mut self, input: &str, attached: Vec<Attachment>) -> Option<Command> {
+        self.submit_on(input, attached, None)
+    }
+
+    /// Takes what the human entered, with what they handed the chat with
+    /// it, on the step of the agent's plan `step` names, if it does, and
+    /// returns the prompt to send the agent, as [`Self::submit_with`]
+    /// does: which tells the agent the step, before the line.
+    pub fn submit_on(
+        &mut self,
+        input: &str,
+        attached: Vec<Attachment>,
+        step: Option<OnStep>,
+    ) -> Option<Command> {
         let command = match self.steer(input) {
             Some(command) => command,
             None => self.start_turn(input, Entry::Human)?,
@@ -720,11 +745,28 @@ impl Conversation {
         if !attached.is_empty() {
             self.push(Entry::Attached(attached.clone()));
         }
-        Some(match command {
-            Command::Prompt(prompt) => Command::Prompt(Prompt { attached, ..prompt }),
-            Command::Steer(prompt) => Command::Steer(Prompt { attached, ..prompt }),
+        let told = |text: String| match &step {
+            Some(on) => format!(
+                "[The human writes this on the step of your plan: {}]\n\n{text}",
+                on.text
+            ),
+            None => text,
+        };
+        let command = match command {
+            Command::Prompt(prompt) => Command::Prompt(Prompt {
+                text: told(prompt.text),
+                attached,
+            }),
+            Command::Steer(prompt) => Command::Steer(Prompt {
+                text: told(prompt.text),
+                attached,
+            }),
             command => command,
-        })
+        };
+        if let Some(on) = step {
+            self.push(Entry::OnStep(on));
+        }
+        Some(command)
     }
 
     /// Whether a line the human sends now goes into the turn the agent
@@ -1489,29 +1531,80 @@ impl Conversation {
         self.follow_plan(texts);
     }
 
-    /// `steps`, each with when it came to its state: as the plan the
-    /// agent sent last has it, for a step there by the same text in the
-    /// same state, or `now`.
-    fn stamped(&self, steps: Vec<Step>, now: Option<i64>) -> Vec<Step> {
-        let was = self
+    /// `steps`, each with when it came to its state and what the chat
+    /// knows it by, as the step of the plan the agent sent last it is
+    /// has them: the one by the same text, or else the one it reads most
+    /// like, as reworded, once alike enough. A step keeps when it came to
+    /// its state if it was so there, and is stamped `now` otherwise; one
+    /// that is new, or that an older Cox kept, is known by the next id.
+    fn stamped(&mut self, steps: Vec<Step>, now: Option<i64>) -> Vec<Step> {
+        let was: Vec<Step> = self
             .entries
             .iter()
             .rev()
             .find_map(|entry| match entry {
-                Entry::Plan(steps) => Some(steps.as_slice()),
+                Entry::Plan(steps) => Some(steps.clone()),
                 _ => None,
             })
             .unwrap_or_default();
-        steps
+        let mut taken = vec![false; was.len()];
+        let mut matched: Vec<Option<usize>> = Vec::with_capacity(steps.len());
+        for step in &steps {
+            let same = (0..was.len()).find(|&at| !taken[at] && was[at].text == step.text);
+            if let Some(at) = same {
+                taken[at] = true;
+            }
+            matched.push(same);
+        }
+        for (step, matched) in steps.iter().zip(&mut matched) {
+            if matched.is_some() {
+                continue;
+            }
+            let reworded = (0..was.len())
+                .filter(|&at| !taken[at])
+                .map(|at| (at, alike(&was[at].text, &step.text)))
+                .filter(|(_, score)| *score >= REWORDED)
+                .max_by(|one, other| one.1.total_cmp(&other.1))
+                .map(|(at, _)| at);
+            if let Some(at) = reworded {
+                taken[at] = true;
+            }
+            *matched = reworded;
+        }
+        let mut last = self.last_step_id();
+        let steps = steps
             .into_iter()
-            .map(|step| {
-                let since = was
-                    .iter()
-                    .find(|before| before.text == step.text && before.state == step.state)
+            .zip(matched)
+            .map(|(step, matched)| {
+                let before = matched.map(|at| &was[at]);
+                let since = before
+                    .filter(|before| before.state == step.state)
                     .map_or(now, |before| before.since);
-                Step { since, ..step }
+                let id = before.and_then(|before| before.id).unwrap_or_else(|| {
+                    last += 1;
+                    last
+                });
+                Step {
+                    since,
+                    id: Some(id),
+                    ..step
+                }
             })
-            .collect()
+            .collect();
+        self.steps_made = last;
+        steps
+    }
+
+    /// The last id a step of the chat's plans got, or 0 before any did:
+    /// of those its plans have, or had in a plan since sent in its place.
+    fn last_step_id(&self) -> u64 {
+        self.entries
+            .iter()
+            .filter_map(|entry| match entry {
+                Entry::Plan(steps) => steps.iter().filter_map(|step| step.id).max(),
+                _ => None,
+            })
+            .fold(self.steps_made, u64::max)
     }
 
     /// The title the agent gave its session, if it gave one.
@@ -2049,6 +2142,35 @@ mod tests {
     }
 
     #[test]
+    fn a_line_on_a_step_tells_the_agent_the_step_and_shows_after_the_line() {
+        let mut conversation = Conversation::new();
+        let on = OnStep {
+            id: 2,
+            text: "Rename the setting".to_owned(),
+        };
+
+        assert_eq!(
+            conversation.submit_on("keep the old name too", Vec::new(), Some(on.clone())),
+            Some(Command::Prompt(
+                "[The human writes this on the step of your plan: Rename the setting]\n\n\
+                 keep the old name too"
+                    .to_owned()
+                    .into()
+            ))
+        );
+        assert_eq!(
+            conversation.entries(),
+            [
+                Entry::Human("keep the old name too".to_owned()),
+                Entry::OnStep(on.clone()),
+            ]
+        );
+        // Not while a turn runs that the line does not go into.
+        assert_eq!(conversation.submit_on("and?", Vec::new(), Some(on)), None);
+        assert_eq!(conversation.entries().len(), 2);
+    }
+
+    #[test]
     fn what_the_human_handed_goes_with_the_line_and_shows_after_it() {
         let mut conversation = Conversation::new();
         let attached = vec![Attachment {
@@ -2186,6 +2308,41 @@ mod tests {
     }
 
     #[test]
+    fn steers_a_line_on_a_step_into_the_turn_with_the_step_after_it() {
+        let mut conversation = steering();
+        conversation.submit("rename it");
+        conversation.apply(AgentEvent::ReplyText("Renaming".to_owned()));
+        let on = OnStep {
+            id: 1,
+            text: "Rename the setting".to_owned(),
+        };
+
+        assert_eq!(
+            conversation.submit_on("keep the old name", Vec::new(), Some(on.clone())),
+            Some(Command::Steer(
+                "[The human writes this on the step of your plan: Rename the setting]\n\n\
+                 keep the old name"
+                    .to_owned()
+                    .into()
+            ))
+        );
+        conversation.apply(AgentEvent::Steered);
+        conversation.apply(AgentEvent::ReplyText("Kept it.".to_owned()));
+        conversation.apply(AgentEvent::TurnEnded(StopReason::EndTurn));
+
+        assert_eq!(
+            conversation.entries(),
+            [
+                Entry::Human("rename it".to_owned()),
+                Entry::Reply("Renaming".to_owned()),
+                Entry::Human("keep the old name".to_owned()),
+                Entry::OnStep(on),
+                Entry::Reply("Kept it.".to_owned()),
+            ]
+        );
+    }
+
+    #[test]
     fn holds_a_line_while_an_agent_that_does_not_steer_takes_a_turn() {
         let mut conversation = Conversation::new();
         conversation.submit("hello");
@@ -2302,6 +2459,7 @@ mod tests {
             .iter()
             .map(|step| Step {
                 since: None,
+                id: None,
                 ..step.clone()
             })
             .collect()
@@ -2312,6 +2470,7 @@ mod tests {
             text: text.to_owned(),
             state,
             since: None,
+            id: None,
         }
     }
 
@@ -2481,6 +2640,60 @@ mod tests {
             step("Fix", StepState::Pending),
         ]));
         assert_eq!(since(&conversation), first);
+    }
+
+    #[test]
+    fn knows_a_step_by_one_id_as_the_agent_rewords_it() {
+        let mut conversation = Conversation::new();
+        conversation.submit("plan");
+        let known = |conversation: &Conversation| -> Vec<(String, Option<u64>, Option<i64>)> {
+            conversation
+                .last_plan()
+                .unwrap()
+                .iter()
+                .map(|step| (step.text.clone(), step.id, step.since))
+                .collect()
+        };
+        conversation.apply(AgentEvent::Plan(vec![
+            step("Read the code", StepState::Completed),
+            step("Fix the greeting", StepState::Pending),
+        ]));
+        let first = known(&conversation);
+        assert_eq!(
+            first.iter().map(|step| step.1).collect::<Vec<_>>(),
+            [Some(1), Some(2)]
+        );
+
+        // Reworded, done as it was: the same step, done when it was.
+        conversation.apply(AgentEvent::Plan(vec![
+            step("Read all the code", StepState::Completed),
+            step("Fix the greeting", StepState::Pending),
+        ]));
+        let reworded = known(&conversation);
+        assert_eq!((reworded[0].1, reworded[0].2), (first[0].1, first[0].2));
+        assert_eq!(reworded[1], first[1]);
+
+        // A step gone leaves its id behind, and the next turn's plan
+        // goes on from the last given.
+        conversation.apply(AgentEvent::Plan(vec![step(
+            "Fix the greeting",
+            StepState::InProgress,
+        )]));
+        conversation.apply(AgentEvent::TurnEnded(StopReason::EndTurn));
+        conversation.submit("again");
+        conversation.apply(AgentEvent::Plan(vec![
+            step("Fix the greeting", StepState::InProgress),
+            step("Lint", StepState::Pending),
+        ]));
+        assert_eq!(
+            known(&conversation)
+                .iter()
+                .map(|step| step.1)
+                .collect::<Vec<_>>(),
+            [Some(2), Some(3)]
+        );
+        let reopened = Conversation::closed(conversation.entries().to_vec());
+        assert_eq!(reopened.last_step_id(), 3);
     }
 
     #[test]
