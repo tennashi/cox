@@ -2,6 +2,9 @@
 //! badges, and the menu of a project on it, under the bell that counts
 //! what waits for the human.
 
+use crate::ui::depth::{self};
+use coxd::theme::{CONTROL, PANE};
+use gpui::rgba;
 use gpui::{
     Context, Div, FontWeight, MouseButton, MouseDownEvent, Pixels, SharedString, Stateful, Window,
     anchored, deferred, div, img, prelude::*, px, rgb,
@@ -16,8 +19,7 @@ use crate::vim::hints::Hinted as _;
 use coxd::chat::conversation::State;
 use coxd::paths::shortened;
 use coxd::theme::{
-    ACCENT, ACCENT_GROUND, ASKING, BORDER, BORDER_STRONG, FAINT, FOREGROUND, GROUND, HOVER, LINK,
-    SELECTED, SURFACE,
+    ACCENT, ACCENT_GROUND, ASKING, BORDER_STRONG, FAINT, FOREGROUND, GROUND, HOVER, LINK, SELECTED,
 };
 
 impl Workspace {
@@ -425,13 +427,14 @@ impl Workspace {
 
 /// What the square of `project` on the rail shows: Cox's icon for Cox's
 /// own, the home's, or else the icon the human gave the project, filling
-/// the square inside its edge, or else a folder; the edge marks it
-/// chosen, and, dashed in the accent, that an agent draws it an icon.
+/// the square inside its edge, or else a folder, standing up as a
+/// control does; the edge marks it chosen, and, dashed in the accent, that an agent draws it an icon.
 fn project_square(square: Div, project: &Project, home: bool, chosen: bool, drawing: bool) -> Div {
+    // The edges are seen through, `0xRRGGBBAA`.
     let (ground, edge, ink) = if chosen {
-        (ACCENT_GROUND, ACCENT, ACCENT)
+        (ACCENT_GROUND, ACCENT << 8 | 0xff, ACCENT)
     } else {
-        (SURFACE, BORDER, FAINT)
+        (PANE, CONTROL.edge, FAINT)
     };
     if home {
         return square.child(app_icon(PROJECT_SIZE));
@@ -439,7 +442,8 @@ fn project_square(square: Div, project: &Project, home: bool, chosen: bool, draw
     let square = square
         .rounded(px(PROJECT_RADIUS))
         .border_1()
-        .border_color(rgb(edge))
+        .border_color(rgba(edge))
+        .shadow(depth::shadows(CONTROL))
         .when(drawing, |square| {
             square.border_dashed().border_color(rgb(ACCENT))
         })

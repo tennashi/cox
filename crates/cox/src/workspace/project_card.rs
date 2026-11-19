@@ -15,7 +15,9 @@ mod directory;
 
 use crate::ui::depth::Stand as _;
 use coxd::theme::OVERLAY;
+use coxd::theme::{CARD, INPUT_RADIUS, PANE};
 use directory::Directory;
+use gpui::rgba;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -37,7 +39,7 @@ use crate::ui::tip;
 use crate::vim::Move;
 use crate::vim::hints::Hinted as _;
 use coxd::paths::shortened;
-use coxd::theme::{ACCENT, ASKING, BORDER, DIM, FAILED, FAINT, FOREGROUND, HOVER, LINK, RAISED};
+use coxd::theme::{ACCENT, ASKING, BORDER, DIM, FAILED, FAINT, FOREGROUND, HOVER, RAISED};
 use coxd::worktrees::{self, Worktree};
 
 actions!(
@@ -126,17 +128,28 @@ pub enum Drawing {
     NotDrawn(String),
 }
 
-/// The box of `input`, as the card draws its inputs, named `selector`.
-fn input_box(selector: &'static str, input: &Entity<LineInput>) -> gpui::Div {
+/// Whether `input` has the keyboard, which is `keyboard`.
+fn has_keyboard(input: &Entity<LineInput>, keyboard: Option<&FocusHandle>, cx: &App) -> bool {
+    keyboard.is_some_and(|keyboard| *keyboard == input.focus_handle(cx))
+}
+
+/// The box of `input`, as the card draws its inputs, named `selector`,
+/// sunk in, with a ring while it has the keyboard, which is `keyboard`.
+fn input_box(
+    selector: &'static str,
+    input: &Entity<LineInput>,
+    keyboard: Option<&FocusHandle>,
+    cx: &App,
+) -> gpui::Div {
+    let focused = has_keyboard(input, keyboard, cx);
     div()
         .debug_selector(move || selector.to_owned())
         .h(px(INPUT_HEIGHT))
         .px_2()
         .flex()
         .items_center()
-        .border_1()
-        .border_color(rgb(LINK))
-        .rounded(px(10.))
+        .sink(focused)
+        .rounded(px(INPUT_RADIUS))
         .text_size(px(13.))
         .text_color(rgb(FOREGROUND))
         .child(input.clone())
@@ -744,7 +757,8 @@ impl ProjectCard {
 
     /// The input of the project's name, under its heading, with what it
     /// does.
-    fn render_name(&self, cx: &App) -> impl IntoElement + use<> {
+    fn render_name(&self, keyboard: Option<&FocusHandle>, cx: &App) -> impl IntoElement + use<> {
+        let focused = has_keyboard(&self.name, keyboard, cx);
         let typed = self.typed_name(cx);
         let (said, color) = match why_not_renamed(&self.standing, typed) {
             Some(why) if typed != named(&self.standing.folder) => (why, FAILED),
@@ -768,9 +782,8 @@ impl ProjectCard {
                     .px_2()
                     .flex()
                     .items_center()
-                    .border_1()
-                    .border_color(rgb(LINK))
-                    .rounded(px(10.))
+                    .sink(focused)
+                    .rounded(px(INPUT_RADIUS))
                     .text_size(px(13.))
                     .text_color(rgb(FOREGROUND))
                     .child(self.name.clone()),
@@ -780,7 +793,8 @@ impl ProjectCard {
 
     /// The input of what the project is, under its name, with what it
     /// does.
-    fn render_about(&self) -> impl IntoElement + use<> {
+    fn render_about(&self, keyboard: Option<&FocusHandle>, cx: &App) -> impl IntoElement + use<> {
+        let focused = has_keyboard(&self.about, keyboard, cx);
         div()
             .mb_3()
             .flex()
@@ -793,9 +807,8 @@ impl ProjectCard {
                     .min_h(px(INPUT_HEIGHT))
                     .px_2()
                     .py(px(7.))
-                    .border_1()
-                    .border_color(rgb(LINK))
-                    .rounded(px(10.))
+                    .sink(focused)
+                    .rounded(px(INPUT_RADIUS))
                     .text_size(px(13.))
                     .text_color(rgb(FOREGROUND))
                     .child(self.about.clone()),
@@ -935,6 +948,7 @@ impl ProjectCard {
         &self,
         index: usize,
         directory: &Directory,
+        keyboard: Option<&FocusHandle>,
         cx: &mut Context<Self>,
     ) -> gpui::Div {
         let name = directory.name.clone();
@@ -1007,6 +1021,8 @@ impl ProjectCard {
                         Gives::Name => "project-directory-name",
                     },
                     &editing.input,
+                    keyboard,
+                    cx,
                 ))
             });
         let worktrees: Vec<gpui::Div> = directory
@@ -1018,7 +1034,9 @@ impl ProjectCard {
         div()
             .flex()
             .flex_col()
-            .when(index > 0, |row| row.border_t_1().border_color(rgb(BORDER)))
+            .when(index > 0, |row| {
+                row.border_t_1().border_color(rgba(CARD.edge))
+            })
             .child(row)
             .children(editing)
             .children(worktrees)
@@ -1158,13 +1176,17 @@ impl ProjectCard {
     /// The project's directories, a row each, under their heading, each
     /// with what can be done with it, and the input of another's name, or
     /// a repository's URL, with what it does.
-    fn render_directories(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+    fn render_directories(
+        &self,
+        keyboard: Option<&FocusHandle>,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement + use<> {
         let (said, color) = self.said_of_making();
         let rows: Vec<gpui::Div> = self
             .directories
             .iter()
             .enumerate()
-            .map(|(index, directory)| self.render_directory(index, directory, cx))
+            .map(|(index, directory)| self.render_directory(index, directory, keyboard, cx))
             .collect();
         div()
             .mb_3()
@@ -1178,13 +1200,17 @@ impl ProjectCard {
                         .flex()
                         .flex_col()
                         .rounded(px(10.))
-                        .border_1()
-                        .border_color(rgb(BORDER))
-                        .bg(rgb(RAISED))
+                        .bg(rgb(PANE))
+                        .edged(CARD)
                         .children(rows),
                 )
             })
-            .child(input_box("project-directory-input", &self.directory))
+            .child(input_box(
+                "project-directory-input",
+                &self.directory,
+                keyboard,
+                cx,
+            ))
             .child(
                 div()
                     .debug_selector(|| "project-directory-told".to_owned())
@@ -1251,7 +1277,8 @@ impl Focusable for ProjectCard {
 }
 
 impl Render for ProjectCard {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let keyboard = window.focused(cx);
         let missing = self.standing.missing.then(|| {
             div()
                 .debug_selector(|| "project-missing".to_owned())
@@ -1293,10 +1320,10 @@ impl Render for ProjectCard {
                     .flex_col()
                     .gap_2()
                     .children(missing)
-                    .child(self.render_name(cx))
-                    .child(self.render_about())
+                    .child(self.render_name(keyboard.as_ref(), cx))
+                    .child(self.render_about(keyboard.as_ref(), cx))
                     .child(self.render_icon(cx))
-                    .child(self.render_directories(cx)),
+                    .child(self.render_directories(keyboard.as_ref(), cx)),
             )
     }
 }

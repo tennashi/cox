@@ -594,11 +594,12 @@ fn view_button(
         .items_center()
         .gap(px(7.))
         .rounded(px(VIEW_RADIUS))
+        .chosen(chosen)
         .text_size(px(13.))
         .cursor_pointer()
         .map(|button| {
             if chosen {
-                button.bg(rgb(SELECTED)).text_color(rgb(FOREGROUND))
+                button.text_color(rgb(FOREGROUND))
             } else {
                 button
                     .text_color(rgb(DIM))

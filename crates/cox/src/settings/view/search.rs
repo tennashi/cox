@@ -4,6 +4,8 @@
 //! keeps it on Enter or as the keyboard leaves it, or, emptied, goes by
 //! Google's.
 
+use crate::ui::depth::Stand as _;
+use coxd::theme::INPUT_RADIUS;
 use gpui::{Context, Entity, Subscription, Window, div, prelude::*, px, rgb};
 use serde_json::Value;
 
@@ -11,7 +13,7 @@ use super::words::Words;
 use crate::ui::button::INPUT_HEIGHT;
 use crate::ui::input::{Blurred, LineInput, Submitted};
 use coxd::settings::{DEFAULT_SEARCH, SearchEngine};
-use coxd::theme::{ACCENT, BORDER, FAILED, FAINT, FOREGROUND};
+use coxd::theme::{ACCENT, FAILED, FAINT, FOREGROUND};
 
 /// The key of the engine in `settings.json`.
 const KEY: &str = "search";
@@ -158,9 +160,8 @@ impl Render for SearchSection {
                     .px_2()
                     .flex()
                     .items_center()
-                    .border_1()
-                    .border_color(rgb(BORDER))
-                    .rounded(px(10.))
+                    .sink(false)
+                    .rounded(px(INPUT_RADIUS))
                     .text_size(px(13.))
                     .text_color(rgb(FOREGROUND))
                     .child(self.input.clone()),
