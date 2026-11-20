@@ -21,7 +21,7 @@ use super::Stage;
 use super::code::Code;
 use super::plugins::Plugin;
 use super::tab::{Tab, TabContent};
-use super::typed::{Typed, Unmatched, typed};
+use super::typed::{Typed, typed};
 use crate::ui::icons::{Icon, icon};
 use crate::ui::input::{LineInput, Submitted};
 use crate::ui::tip;
@@ -63,15 +63,18 @@ actions!(
     ]
 );
 
+/// What the line at the top of the menu of the stage's + says while it
+/// is empty.
+const PLACEHOLDER: &str = "URL, file, search or !command";
+
 /// The key context of the menu of the stage's +.
 pub(crate) const MENU_CONTEXT: &str = "StageMenu";
 
 /// The menu of the stage's +, while it is open: the line at its top,
-/// where the human types a URL, a file, a command, or, where Vim's `t`
-/// opened it, words to search for with `engine`.
+/// where the human types a URL, a file, `!` and a command, or words to
+/// search for with `engine`, whether the + or Vim's `t` opened it.
 pub(super) struct Menu {
     input: Entity<LineInput>,
-    unmatched: Unmatched,
     engine: coxd::settings::SearchEngine,
     _typed: Subscription,
 }
@@ -212,7 +215,7 @@ impl Stage {
                     // The menu closes as the mouse goes down outside it,
                     // here too, so the button opens it as it comes up.
                     .on_hint_click(cx.listener(|stage, _, window, cx| {
-                        stage.open_menu(Unmatched::Command, window, cx);
+                        stage.open_menu(window, cx);
                     })),
             )
             .children(
@@ -311,14 +314,8 @@ impl Stage {
     }
 
     /// Opens the menu of the stage's +, with the keyboard in the line at
-    /// its top, where a line that is no URL, file or path opens what
-    /// `unmatched` says.
-    pub(super) fn open_menu(
-        &mut self,
-        unmatched: Unmatched,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    /// its top, where a line that is no URL, file or path is searched for.
+    pub(super) fn open_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let input = cx.new(LineInput::new);
         let engine = coxd::settings::search();
         let searched = engine.clone();
@@ -328,14 +325,13 @@ impl Stage {
             move |stage, input, Submitted, window, cx| {
                 let line = input.read(cx).text().to_owned();
                 stage.close_menu(cx);
-                let typed = typed(&line, &stage.cwd, unmatched);
+                let typed = typed(&line, &stage.cwd);
                 stage.open_typed(typed, &searched, Follow::NewTab, window, cx);
             },
         );
         window.focus(&input.focus_handle(cx));
         self.menu = Some(Menu {
             input,
-            unmatched,
             engine,
             _typed: typed,
         });
@@ -356,7 +352,7 @@ impl Stage {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let typed = typed(line, &self.cwd, Unmatched::Search);
+        let typed = typed(line, &self.cwd);
         self.open_typed(typed, &coxd::settings::search(), follow, window, cx);
     }
 
@@ -405,19 +401,12 @@ impl Stage {
 
     /// The line at the top of the menu, where the human types a URL, a
     /// file, a command, or words to search for, which says so while it is
-    /// empty, and, where Vim's `t` opened the menu, what Enter does with
-    /// what is typed.
+    /// empty, and else what Enter does with what is typed.
     fn render_menu_line(menu: &Menu, cwd: &std::path::Path, cx: &App) -> impl IntoElement + use<> {
         let input = &menu.input;
         let text = input.read(cx).text();
         let empty = text.is_empty();
-        let (placeholder, said) = match menu.unmatched {
-            Unmatched::Command => ("URL, file or command", None),
-            Unmatched::Search => (
-                "URL, file, search or !command",
-                typed(text, cwd, Unmatched::Search).map(|typed| typed.said(&menu.engine)),
-            ),
-        };
+        let said = typed(text, cwd).map(|typed| typed.said(&menu.engine));
         div()
             .px(px(4.))
             .pt(px(4.))
@@ -449,7 +438,7 @@ impl Stage {
                                         .top_0()
                                         .left_0()
                                         .text_color(rgb(FAINT))
-                                        .child(placeholder),
+                                        .child(PLACEHOLDER),
                                 )
                             }),
                     ),

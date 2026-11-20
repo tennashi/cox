@@ -975,7 +975,7 @@ impl Stage {
                 }
                 return;
             }
-            Tabs::Menu => return self.open_menu(typed::Unmatched::Search, window, cx),
+            Tabs::Menu => return self.open_menu(window, cx),
             Tabs::Open { line, follow } => return self.open_line(&line, follow, window, cx),
             Tabs::Reload | Tabs::Back | Tabs::Forward => {
                 if let Some(page) = self.tabs.shown().and_then(|tab| tab.content.page()) {
