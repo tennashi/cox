@@ -22,7 +22,7 @@
 //!   own, which a window reaches on a socket, and [`client`] is how the
 //!   window does. [`launcher`] starts each chat's agent for it.
 //! - [`tidy`] takes away the worktrees Cox made for chats once they
-//!   are done.
+//!   are done, and makes one again for a chat that goes on in it.
 //! - [`phone`] serves the human's phone a page of the chats, which watches
 //!   them beside the window, and [`push`] tells the phone of the chats that
 //!   need the human while they are away from the Mac.
@@ -526,7 +526,7 @@ impl Slot {
                         .setup
                         .as_ref()
                         .and_then(|setup| setup.folder.as_ref())
-                        .is_none_or(|folder| folder.exists())
+                        .is_none_or(|folder| folder.exists() || worktrees::in_worktrees(folder))
             }
         };
         ChatRow {
@@ -1100,8 +1100,11 @@ impl Daemon {
             Vec::new()
         });
         // A chat of a sketch whose folder is gone from under it does not
-        // start again.
-        let gone = setup.as_ref().is_some_and(|setup| setup.folder.is_some()) && !cwd.exists();
+        // start again; one of a worktree Cox took away has it made again
+        // as it does (see [`Self::remake_worktree`]).
+        let gone = setup.as_ref().is_some_and(|setup| setup.folder.is_some())
+            && !cwd.exists()
+            && !worktrees::in_worktrees(&cwd);
         let keeps = keeps_in_wiki(setup.as_ref());
         let again = (!gone).then_some(Again {
             cwd,
@@ -1902,19 +1905,8 @@ impl Daemon {
         if let Some(slot) = self.slot_mut(key) {
             slot.whose = Whose::Human;
         }
-        let Some(chat) = self.chat(key) else {
-            return;
-        };
-        let earlier = chat.conversation().entries().to_vec();
-        if let Some(again) = chat.take_again() {
-            let Again {
-                cwd,
-                session,
-                setup,
-            } = again;
-            let start = Start::again(self.instructions_of(key, &cwd), session, &earlier, setup);
-            self.start_agent(key, start);
-        }
+        // Cox tells the chat why its agent does not start, if it does not.
+        let _ = self.start_again(key);
         if let Some(chat) = self.chat(key) {
             chat.submit(text, attached, step);
         }
@@ -1924,17 +1916,24 @@ impl Daemon {
     /// starting it again first if it is closed and can be.
     fn go_on(&mut self, key: u64, text: &str) {
         self.reopen(key);
-        self.start_again(key);
+        let _ = self.start_again(key);
         if let Some(chat) = self.chat(key) {
             chat.told(text);
         }
     }
 
     /// Starts the agent of the chat `key` again, if it is closed and can
-    /// be.
-    fn start_again(&mut self, key: u64) {
+    /// be, making the worktree it works in again first, if Cox took it
+    /// away (see [`Self::remake_worktree`]).
+    ///
+    /// # Errors
+    ///
+    /// When Cox cannot make that worktree again, with why, as the chat is
+    /// told: its agent does not start.
+    fn start_again(&mut self, key: u64) -> Result<(), String> {
+        self.remake_worktree(key)?;
         let Some(chat) = self.chat(key) else {
-            return;
+            return Ok(());
         };
         let earlier = chat.conversation().entries().to_vec();
         if let Some(again) = chat.take_again() {
@@ -1948,6 +1947,7 @@ impl Daemon {
                 Start::again(self.instructions_of(key, &cwd), session, &earlier, setup),
             );
         }
+        Ok(())
     }
 
     /// Does what the daemon's chats' tasks heard.
@@ -2572,7 +2572,7 @@ impl Daemon {
         if merges {
             let line = workflow::CLOSE_MERGE.say(&[]);
             self.reopen(key);
-            self.start_again(key);
+            let _ = self.start_again(key);
             if let Some(chat) = self.chat(key) {
                 chat.merge(&line);
             }
@@ -2659,7 +2659,12 @@ impl Daemon {
             self.reveals.retain(|key| *key != child);
         }
         self.reopen(child);
-        self.start_again(child);
+        self.start_again(child).map_err(|why| {
+            format!(
+                "The subagent \"{name}\" cannot start again: the worktree it works in is gone, \
+                 and Cox cannot make it again: {why}."
+            )
+        })?;
         let chat = self.chat(child).ok_or_else(|| format!("no chat {child}"))?;
         if chat.conversation().state() != State::Idle {
             return Err(format!(
@@ -3087,21 +3092,7 @@ impl Daemon {
             slot.state = State::Closed;
         }
         // The new agent starts at once, told the conversation so far.
-        let Some(chat) = self.chat(key) else {
-            return;
-        };
-        let earlier = chat.conversation().entries().to_vec();
-        if let Some(again) = chat.take_again() {
-            let Again {
-                cwd,
-                session,
-                setup,
-            } = again;
-            self.start_agent(
-                key,
-                Start::again(self.instructions_of(key, &cwd), session, &earlier, setup),
-            );
-        }
+        let _ = self.start_again(key);
     }
 
     /// Takes the chat `key` out of the list, to "Archived" at its foot, or
@@ -3859,6 +3850,8 @@ mod tests {
         events: UnboundedSender<AgentEvent>,
         /// The session it was started to go on with, if any.
         resumes: Option<String>,
+        /// Where it was started to work.
+        cwd: PathBuf,
     }
 
     /// Agents the test plays, each kept as it starts.
@@ -3894,6 +3887,7 @@ mod tests {
                 commands: commands_got,
                 events: events_sent,
                 resumes,
+                cwd: cwd.clone(),
             });
             Spawned {
                 agent: Agent {
@@ -4429,6 +4423,215 @@ mod tests {
                     .iter()
                     .any(|note| note.starts_with("Took away the worktree at ")
                         && note.ends_with("held nothing that is not elsewhere.")),
+                "{notes:?}"
+            );
+        });
+    }
+
+    /// Opens, in the chat `key`, a subagent "Look" that works in a
+    /// worktree of `app` on the branch `look`, has its turn end, and has
+    /// it marked done, so that Cox takes its worktree away; answers its
+    /// key and the worktree's folder, gone.
+    async fn looked_in_a_worktree_taken_away(
+        daemon: &mut Daemon,
+        heard: &mut UnboundedReceiver<Internal>,
+        agents: &PlayedAgents,
+        home: &Path,
+        key: u64,
+    ) -> (u64, PathBuf) {
+        let (answer, mut opened) = oneshot::channel();
+        daemon.asked(
+            key,
+            ChatRequest::OpenChat {
+                text: "look".to_owned(),
+                title: Some("Look".to_owned()),
+                setup: Setup::default(),
+                model: None,
+                goal: None,
+                sketch: None,
+                within: Box::new(Within {
+                    directory: None,
+                    worktree: Some(worktrees::Asked {
+                        directory: "app".to_owned(),
+                        branch: Some("look".to_owned()),
+                        from: None,
+                    }),
+                }),
+                answer,
+            },
+        );
+        let number = opened.try_recv().unwrap().unwrap().number;
+        pump(daemon, heard).await;
+        let made = home
+            .join("shop")
+            .join(worktrees::WORKTREES)
+            .join("app")
+            .join("look");
+        tells(
+            agents.0.borrow().last().unwrap(),
+            [
+                AgentEvent::ReplyText("Found it.".to_owned()),
+                AgentEvent::TurnEnded(cox_acp::StopReason::EndTurn),
+            ],
+        );
+        pump(daemon, heard).await;
+        daemon.resolve(number, ResolvedBy::Human);
+        tokio::time::timeout(crate::testing::waits::GIVEN_UP, async {
+            while made.exists() || daemon.tidying_now() {
+                match heard.recv().await {
+                    Some(event) => daemon.hear(event),
+                    None => panic!("the daemon's events ended"),
+                }
+            }
+        })
+        .await
+        .expect("Cox took the worktree away");
+        (number, made)
+    }
+
+    /// The notes the chat `key` shows.
+    fn notes_of(daemon: &mut Daemon, key: u64) -> Vec<String> {
+        daemon
+            .chat(key)
+            .unwrap()
+            .conversation()
+            .entries()
+            .iter()
+            .filter_map(|entry| match entry {
+                Entry::Note(note) => Some(note.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Has the agent of the chat `key` continue its subagent "Look" with
+    /// `text`, as `agent_continue` does.
+    fn continue_look(daemon: &mut Daemon, key: u64, text: &str) -> Result<(u64, String), String> {
+        let (answer, mut went_on) = oneshot::channel();
+        daemon.asked(
+            key,
+            ChatRequest::ContinueChat {
+                subagent: Subagent::Title("Look".to_owned()),
+                text: text.to_owned(),
+                answer,
+            },
+        );
+        went_on.try_recv().unwrap()
+    }
+
+    #[test]
+    fn a_subagent_continued_once_its_worktree_was_taken_away_has_it_made_again_first() {
+        on_daemon(async {
+            let home = TempDir::new();
+            let agents = Rc::new(PlayedAgents::default());
+            let (mut daemon, mut heard, key) = shop_with_app(&home, &agents).await;
+            let (number, made) =
+                looked_in_a_worktree_taken_away(&mut daemon, &mut heard, &agents, &home, key).await;
+            let kept = daemon.slot(number).unwrap().kept.unwrap().number();
+
+            assert_eq!(
+                continue_look(&mut daemon, key, "Go on."),
+                Ok((number, "Look".to_owned()))
+            );
+
+            assert!(made.exists(), "the worktree is made again");
+            let app = home
+                .join("shop")
+                .join(crate::settings::DIRECTORIES)
+                .join("app");
+            let listed = worktrees::of(&app, &home.join("shop"));
+            assert_eq!(listed.len(), 1);
+            assert_eq!(listed[0].branch.as_deref(), Some("look"));
+            assert_eq!(listed[0].made_for, Some(kept), "Cox's again");
+            assert_eq!(agents.0.borrow().last().unwrap().cwd, made);
+            let notes = notes_of(&mut daemon, number);
+            assert!(
+                notes.iter().any(|note| note.starts_with(&format!(
+                    "Cox made the worktree this chat works in again, at {}, on its branch look, \
+                     made again from its last commit ",
+                    made.display()
+                ))),
+                "{notes:?}"
+            );
+        });
+    }
+
+    #[test]
+    fn a_chat_whose_worktree_was_taken_away_starts_again_there_once_coxd_did() {
+        on_daemon(async {
+            let home = TempDir::new();
+            let agents = Rc::new(PlayedAgents::default());
+            let (mut daemon, mut heard, key) = shop_with_app(&home, &agents).await;
+            let (number, made) =
+                looked_in_a_worktree_taken_away(&mut daemon, &mut heard, &agents, &home, key).await;
+            let kept = daemon.slot(number).unwrap().kept;
+            let store = Rc::clone(&daemon.store);
+            drop(daemon);
+
+            let (internal, _heard) = unbounded_channel();
+            let spawns: Rc<dyn Spawns> = agents.clone();
+            let mut after = Daemon::new(
+                home.to_path_buf(),
+                false,
+                Rc::clone(&store),
+                spawns,
+                internal,
+            );
+            let look = after
+                .chats
+                .iter()
+                .find(|slot| slot.kept == kept)
+                .unwrap()
+                .key;
+            let row = after
+                .slot(look)
+                .unwrap()
+                .row(&after.spawns.agents(), &store);
+            assert!(row.again, "it starts again, though its folder is gone");
+            submit(&mut after, look);
+
+            assert!(made.exists(), "the worktree is made again");
+            assert_eq!(agents.0.borrow().last().unwrap().cwd, made);
+            assert_eq!(
+                after.chat(look).unwrap().conversation().state(),
+                State::Busy
+            );
+        });
+    }
+
+    #[test]
+    fn a_subagent_whose_worktree_cannot_be_made_again_does_not_start_and_says_why() {
+        on_daemon(async {
+            let home = TempDir::new();
+            let agents = Rc::new(PlayedAgents::default());
+            let (mut daemon, mut heard, key) = shop_with_app(&home, &agents).await;
+            let (number, made) =
+                looked_in_a_worktree_taken_away(&mut daemon, &mut heard, &agents, &home, key).await;
+            let app = home
+                .join("shop")
+                .join(crate::settings::DIRECTORIES)
+                .join("app");
+            std::fs::remove_dir_all(&app).unwrap();
+            let started = agents.0.borrow().len();
+
+            let refused = continue_look(&mut daemon, key, "Go on.").unwrap_err();
+
+            assert_eq!(
+                refused,
+                "The subagent \"Look\" cannot start again: the worktree it works in is gone, and \
+                 Cox cannot make it again: the project has no repository app in its directories."
+            );
+            assert!(!made.exists());
+            assert_eq!(agents.0.borrow().len(), started, "no agent started");
+            let notes = notes_of(&mut daemon, number);
+            assert!(
+                notes.iter().any(|note| note
+                    == &format!(
+                        "The worktree this chat works in, at {}, is gone, and Cox cannot make it \
+                         again, so its agent does not start: the project has no repository app \
+                         in its directories.",
+                        made.display()
+                    )),
                 "{notes:?}"
             );
         });

@@ -47,18 +47,17 @@
 //!
 //! - `cox://api/activity`: what goes on in the folder, the human's
 //!   inbox: what is asked of them, what is at work and what each chat
-//!   there does now, what they decided when agents asked, and what
-//!   happened without them (see [`crate::stage::activity`]);
+//!   there does now, and how many steps got done lately (see
+//!   [`crate::stage::activity`]);
 //!   `cox://api/activity/dismiss/<plans>` hides the plans the JSON of
 //!   `<plans>` names until their chats' agents send others, and answers
 //!   what goes on then. Only a plugin's own `fetch` has them hidden.
 //!   `cox://api/activity/timeline/{"chat":<chat>}` tells, alone, the story
 //!   of the chat coxd keeps as `<chat>`: when it started, what it did
 //!   when, and when and how it ended (see
-//!   [`crate::stage::activity::timeline`]).
-//! - `cox://api/commands`: what the agents of the folder's chats run,
-//!   step by step, and what a command that ran long printed (see
-//!   [`crate::stage::commands`]).
+//!   [`crate::stage::activity::timeline`]); and
+//!   `cox://api/activity/command/{"chat":<chat>,"number":<entry>}`, a
+//!   command of the story, laid out, with what it printed.
 //! - `cox://api/triggers`: the triggers of the folder, in the order they
 //!   run in there, each with whether it runs there and how it last ran,
 //!   those on a schedule with when they run next, and in the home, those
@@ -106,8 +105,20 @@ const PROJECT_PLUGINS: &str = "plugins";
 /// The files of a plugin, by their paths within it.
 type Files = &'static [(&'static str, &'static [u8])];
 
-/// What is built into Cox at `cox://<name>/`: the Activity, Commands,
-/// Map, Knowledge and Triggers plugins, with their files.
+/// The pages of the plugins Cox had built in and no longer has: the
+/// Commands page, whose commands a chat's story on the Activity page tells
+/// now.
+const GONE: &[&str] = &["cox://commands/"];
+
+/// Whether `url` is of a page of a plugin Cox had built in and no longer
+/// has, which a tab kept of it does not open again.
+#[must_use]
+pub fn gone(url: &str) -> bool {
+    GONE.iter().any(|gone| url.starts_with(gone))
+}
+
+/// What is built into Cox at `cox://<name>/`: the Activity, Map,
+/// Knowledge and Triggers plugins, with their files.
 const BUILT_IN: &[(&str, Files)] = &[
     (
         "activity",
@@ -121,20 +132,6 @@ const BUILT_IN: &[(&str, Files)] = &[
                 include_bytes!("../../plugins/activity/index.html"),
             ),
             ("app.js", include_bytes!("../../plugins/activity/app.js")),
-        ],
-    ),
-    (
-        "commands",
-        &[
-            (
-                "plugin.json",
-                include_bytes!("../../plugins/commands/plugin.json"),
-            ),
-            (
-                "index.html",
-                include_bytes!("../../plugins/commands/index.html"),
-            ),
-            ("app.js", include_bytes!("../../plugins/commands/app.js")),
         ],
     ),
     (
@@ -338,7 +335,6 @@ impl Plugins {
                     self.triggers()
                 }
             }
-            "commands" if rest.is_empty() => crate::stage::commands::told(&self.root),
             "activity" => self.activity(rest)?,
             "project-wiki" => {
                 let root = self.root.join(coxd::wiki::PROJECT_WIKI);
@@ -408,15 +404,17 @@ impl Plugins {
                         &serde_json::from_str::<activity::Of>(&asked).ok()?,
                     ));
                 }
+                // A command of a story, laid out, read only once the
+                // human opened it.
+                "command" => {
+                    return Some(activity::command(
+                        &serde_json::from_str::<activity::OfCommand>(&asked).ok()?,
+                    ));
+                }
                 _ => return None,
             }
         }
-        let mut told = activity::told(
-            &self.root,
-            &coxd::settings::wiki(),
-            &coxd::settings::raw(),
-            &self.triggers(),
-        );
+        let mut told = activity::told(&self.root);
         if let Some(open) = open {
             told["thread"] = activity::thread(&open);
         }
@@ -699,6 +697,55 @@ mod tests {
     }
 
     #[test]
+    fn a_command_of_a_story_is_told_laid_out_once_opened() {
+        use cox_core::entry::{Content, Entry, ToolCallResult};
+        let root = TempDir::new();
+        coxd::storage::keep_on_this_thread(Some(root.join("data")));
+        let store =
+            cox_core::store::Store::open(&coxd::storage::path(coxd::storage::Kept::Chats).unwrap())
+                .unwrap();
+        let project = store.project(&root, "app").unwrap();
+        let chat = store.add_chat(Some(project), "Chat 1").unwrap();
+        store
+            .keep_entry(
+                chat,
+                0,
+                &Entry::ToolCall {
+                    id: "1".to_owned(),
+                    title: "cargo test".to_owned(),
+                    command: true,
+                    about: None,
+                    content: vec![Content::Text("test result: ok".to_owned())],
+                    result: Some(ToolCallResult::Completed),
+                },
+            )
+            .unwrap();
+        let plugins = Plugins::new(root.to_path_buf(), Outlines::new().0, Calls::new().0);
+        let serve = plugins.serve();
+        let body = |url: &str| {
+            serve(url, Asker::Plugin).map(|resource| {
+                serde_json::from_slice::<serde_json::Value>(&resource.body).unwrap()
+            })
+        };
+
+        let told = body(&format!(
+            r#"cox://api/activity/command/{{"chat":{chat},"number":0}}"#
+        ))
+        .unwrap();
+
+        assert_eq!(told["line"], "cargo test");
+        assert_eq!(told["printed"], "test result: ok");
+        assert_eq!(
+            body(&format!(
+                r#"cox://api/activity/command/{{"chat":{chat},"number":1}}"#
+            )),
+            Some(serde_json::Value::Null)
+        );
+        assert_eq!(body("cox://api/activity/command/not-a-command"), None);
+        coxd::storage::keep_on_this_thread(None);
+    }
+
+    #[test]
     fn the_map_is_told_as_json() {
         let root = TempDir::new();
         let maps = root.join(cox_editor::map::MAPS_FOLDER);
@@ -832,6 +879,17 @@ mod tests {
     }
 
     #[test]
+    fn the_pages_of_a_plugin_no_longer_built_in_are_gone() {
+        let root = TempDir::new();
+        let plugins = Plugins::new(root.to_path_buf(), Outlines::new().0, Calls::new().0);
+
+        assert!(gone("cox://commands/"));
+        assert_eq!(plugins.resource("cox://commands/"), None);
+        assert_eq!(plugins.resource("cox://api/commands"), None);
+        assert!(!gone("cox://activity/"));
+    }
+
+    #[test]
     fn the_projects_plugins_are_listed_and_served_within_their_folders() {
         let root = TempDir::new();
         let folder = root.join(PROJECT_PLUGINS).join("tour");
@@ -843,17 +901,13 @@ mod tests {
 
         let listed = plugins.list();
         let names: Vec<&str> = listed.iter().map(|plugin| plugin.name.as_str()).collect();
-        assert_eq!(
-            names,
-            ["activity", "commands", "map", "wiki", "triggers", "tour"]
-        );
+        assert_eq!(names, ["activity", "map", "wiki", "triggers", "tour"]);
         assert_eq!(listed[0].title, "Activity");
-        assert_eq!(listed[1].title, "Commands");
-        assert_eq!(listed[2].title, "Map");
-        assert_eq!(listed[3].title, "Knowledge");
-        assert_eq!(listed[4].title, "Triggers");
-        assert_eq!(listed[5].title, "A tour");
-        assert_eq!(listed[5].url(), "cox://tour/");
+        assert_eq!(listed[1].title, "Map");
+        assert_eq!(listed[2].title, "Knowledge");
+        assert_eq!(listed[3].title, "Triggers");
+        assert_eq!(listed[4].title, "A tour");
+        assert_eq!(listed[4].url(), "cox://tour/");
         assert_eq!(
             plugins.resource("cox://tour/").unwrap().body,
             b"<h1>Tour</h1>"

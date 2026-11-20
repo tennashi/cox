@@ -388,6 +388,8 @@ impl Stage {
             // it that opens again, or else the first after it.
             let show = index <= shown || stage.tabs.shown_index().is_none();
             match tab {
+                // A page of a plugin Cox no longer has does not open again.
+                KeptTab::Page { url, .. } if plugins::gone(&url) => {}
                 KeptTab::Page { url, .. } => {
                     stage.open_tab(&url, show, window, cx);
                 }

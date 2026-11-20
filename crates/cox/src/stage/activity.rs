@@ -1,43 +1,44 @@
 //! What goes on in a folder, as the stage's Activity page shows it, at
 //! `cox://api/activity` (see [`crate::stage::plugins`]): the human's
-//! inbox, where they look first when they open Cox or have a moment. It
-//! tells, in tiers, what is asked of them, the chats of the folder that
-//! ask them something, with what they ask, or whose turn ended while they
-//! were not looking, or CI ended on a pull request their agent opened;
-//! the plans, of the chats whose agents take a turn, or work in the
-//! background once it ended, or wait on CI, or whose plan, as the agent
-//! last sent it over ACP, is not done, or done while the human did not
-//! look yet, or lately, or that were marked done lately, each with what
-//! it does now, or runs in the background, its open pull requests, and
-//! the steps of its plan, and under it the subagents' chats its agent
-//! opened, and theirs, at any depth, each under the step it came from,
-//! if it tells (see [`linked`]), with the chats above them though these
-//! are not listed on their own (see [`planned`]); what was decided, the
-//! questions agents asked there that the human answered, each with what
-//! they chose and why, the last first; and what happened without them,
-//! the schedules that ran there, the pages of the wiki written from
-//! there, and the sources kept there, the last first. The home, where
-//! Cox lands, tells of every folder.
+//! inbox, where they look first when they open Cox or have a moment.
+//!
+//! On top, how it all stands: how many chats wait for the human, how many
+//! are at work, and how many steps got done over each of [`WINDOWS`], as
+//! the human picks one (see [`summaries`]). Then the chats,
+//! one line each: those that ask the human something, with what they ask,
+//! or whose turn ended while they were not looking, or CI ended on a pull
+//! request their agent opened (see [`waiting_in`]); and those whose
+//! agents take a turn, or work in the background once it ended, or wait
+//! on CI, or whose plan, as the agent last sent it over ACP, is not done,
+//! or was done, or marked done, lately (see [`planned`]). Each tells how
+//! it stands, the steps of its plan, how far it went, what it does now,
+//! or runs in the background, and its open pull requests; under it, the
+//! subagents' chats its agent opened, and theirs, at any depth, each
+//! under the step it came from, if it tells (see [`linked`]), with the
+//! chats above them though these are not listed on their own (see
+//! [`tree_of`]). The home, where Cox lands, tells of every folder.
+//!
+//! A chat's story, what it did when, is read for the chat alone, once the
+//! human opens its line (see [`timeline`]), and the thread of a step of
+//! its plan once they open the step (see [`thread`]), where a line they
+//! write goes to the chat (see [`say`]).
 //!
 //! The window tells this module how its chats stand as they change (see
 //! [`tell`]), since the stage's pages are served apart from it; the bar
 //! counts what waits on the Activity's button (see [`waiting`]). What a
-//! chat does now, and what it asks, come from what the window told the
-//! Commands page of its conversation (see [`commands::now`]). What was
-//! decided, and the plans, are read from the chats as coxd keeps them
-//! (see [`Store::answered`] and [`Store::plans`]), so they hold for chats
-//! the window never showed, and last as long as their conversations do:
-//! what was decided read again once a chat stops asking, as when the
-//! human answers, and once one goes, and the plans each time. A plan the
-//! human dismissed from the page stays hidden until the chat's agent
-//! sends another (see [`dismiss`]).
+//! chat does now, and what it asks, come from what the window told of its
+//! conversation (see [`commands::now`]). The plans are read from the chats
+//! as coxd keeps them (see [`Store::plans`]), so they hold for chats the
+//! window never showed, and last as long as their conversations do, each
+//! time the page reads. A plan the human dismissed from the page stays
+//! hidden until the chat's agent sends another (see [`dismiss`]).
 
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-use cox_core::entry::{Entry, OnStep, QuestionAnswer, Step, StepState, StepsDone, alike};
-use cox_core::store::{ChatId, KeptAnswer, KeptPlan, Progress, ResolvedBy, Said, Store};
+use cox_core::entry::{OnStep, Step, StepState, StepsDone, alike};
+use cox_core::store::{ChatId, KeptPlan, Progress, Said, Store};
 use jiff::tz::TimeZone;
 use serde_json::{Value, json};
 
@@ -48,14 +49,10 @@ use cox_acp::Microdollars;
 use coxd::chat::spent::Spent;
 use coxd::daemon::wire::{OnStepLine, PullRow};
 use coxd::github::CheckState;
-pub use timeline::{Of, timeline};
+pub use timeline::{Of, OfCommand, command, timeline};
 
-/// How many of what happened the page is told of, the last first.
-const HAPPENED: usize = 50;
-/// How many of what was decided the page is told of, the last first.
-const DECIDED: usize = 20;
-/// The windows the Plans tier sums up what moved in, each by its name
-/// and its length in milliseconds, the shortest first.
+/// The windows the page counts the steps done in, each by its name and
+/// its length in milliseconds, the shortest first.
 const WINDOWS: [(&str, i64); 3] = [
     ("15 min", 15 * 60 * 1000),
     ("1 h", 60 * 60 * 1000),
@@ -67,12 +64,6 @@ const WINDOWS: [(&str, i64); 3] = [
 /// the longest of [`WINDOWS`], so that what the page sums up as done
 /// there is on the page too.
 const DONE_SHOWS: i64 = WINDOWS[WINDOWS.len() - 1].1;
-/// How many steps done a chat's line in a summary names, the last done
-/// first, before it says how many more.
-const NAMED: usize = 3;
-/// How many times what was decided is read again after a chat stopped
-/// asking: coxd may tell the window so before it keeps the answer.
-const READ_AGAIN: u8 = 2;
 
 /// A chat as the Activity page is told of it.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -102,7 +93,7 @@ pub struct Chat {
     pub background: Vec<coxd::daemon::wire::Background>,
     /// The key of the chat whose agent opened it, if one did.
     pub parent: Option<u64>,
-    /// How coxd keeps it, which what it decided is read by.
+    /// How coxd keeps it, which its plan and its story are read by.
     pub kept: Option<ChatId>,
     /// The pull requests its agent opened, as coxd last read them.
     pub pulls: Vec<PullRow>,
@@ -178,106 +169,6 @@ fn pulls_of(chat: &Chat) -> Vec<Value> {
         .collect()
 }
 
-/// A question an agent asked in a chat, which the human answered: what
-/// the Decided tier lists.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Decided {
-    pub chat: ChatId,
-    /// The name of the chat, as coxd keeps it.
-    pub name: String,
-    /// The folder of the chat's project, or `None` for Cox's own.
-    pub project: Option<PathBuf>,
-    /// The folder the chat works in, when it is not its project's.
-    pub folder: Option<PathBuf>,
-    /// When it was asked, as `2026-11-16 09:30`.
-    pub when: String,
-    /// When it was answered, or asked where an older Cox kept no time of
-    /// the answer, in milliseconds since the epoch.
-    pub at: i64,
-    /// The question's short label, as "Approach", if the agent gave one.
-    pub header: Option<String>,
-    pub question: String,
-    /// The labels of the options the human chose, or their own words when
-    /// they chose none.
-    pub choice: String,
-    /// What the agent said choosing those options means, which is why
-    /// the human chose them.
-    pub why: Option<String>,
-    /// The human's own words beside the options they chose.
-    pub other: Option<String>,
-}
-
-impl Decided {
-    /// What was decided by `kept`, each of its questions the human
-    /// answered, its time as it reads in `zone`.
-    fn of(kept: &KeptAnswer, zone: &TimeZone) -> Vec<Self> {
-        let Entry::Question {
-            message,
-            questions,
-            answer: Some(QuestionAnswer::Given(picked)),
-            ..
-        } = &kept.entry
-        else {
-            return Vec::new();
-        };
-        let when = jiff::Timestamp::from_millisecond(kept.at).map_or_default(|at| {
-            at.to_zoned(zone.clone())
-                .strftime("%Y-%m-%d %H:%M")
-                .to_string()
-        });
-        let message = message.trim();
-        questions
-            .iter()
-            .zip(picked)
-            .filter_map(|(question, picked)| {
-                let chosen: Vec<_> = picked
-                    .chosen
-                    .iter()
-                    .filter_map(|&index| question.options.get(index))
-                    .collect();
-                let mut other = picked
-                    .other
-                    .clone()
-                    .filter(|other| !other.trim().is_empty());
-                let choice = if chosen.is_empty() {
-                    other.take()?
-                } else {
-                    chosen
-                        .iter()
-                        .map(|option| option.label.as_str())
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                };
-                let why: Vec<&str> = chosen
-                    .iter()
-                    .filter_map(|option| option.description.as_deref())
-                    .collect();
-                let asked = question
-                    .text
-                    .clone()
-                    .or_else(|| {
-                        (questions.len() == 1 && !message.is_empty()).then(|| message.to_owned())
-                    })
-                    .or_else(|| question.header.clone())
-                    .unwrap_or_else(|| message.to_owned());
-                Some(Self {
-                    chat: kept.chat,
-                    name: kept.name.clone(),
-                    project: kept.project.clone(),
-                    folder: kept.folder.clone(),
-                    when: when.clone(),
-                    at: kept.at,
-                    header: question.header.clone(),
-                    question: asked,
-                    choice,
-                    why: (!why.is_empty()).then(|| why.join("; ")),
-                    other,
-                })
-            })
-            .collect()
-    }
-}
-
 /// How the window's chats stand, and its projects, by folder and name,
 /// with the home, the folder of Cox's own chats.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -292,67 +183,11 @@ pub struct Told {
 /// How the chats stood when the window last told.
 static TOLD: Mutex<Option<Told>> = Mutex::new(None);
 
-/// What was decided, as last read, and how many times to read it again
-/// before that holds.
-struct Read {
-    decided: Option<Vec<Decided>>,
-    again: u8,
-}
-
-static READ: Mutex<Read> = Mutex::new(Read {
-    decided: None,
-    again: 0,
-});
-
-/// Keeps how the window's chats stand now, for the pages to read, and
-/// has what was decided read again if a chat stopped asking, or went.
+/// Keeps how the window's chats stand now, for the pages to read.
 pub fn tell(told: Told) {
-    let Ok(mut now) = TOLD.lock() else {
-        return;
-    };
-    let changed = now.as_ref().is_some_and(|was| decided_since(was, &told));
-    *now = Some(told);
-    drop(now);
-    if changed && let Ok(mut read) = READ.lock() {
-        read.again = READ_AGAIN;
+    if let Ok(mut now) = TOLD.lock() {
+        *now = Some(told);
     }
-}
-
-/// Whether what was decided may have changed from when the chats stood
-/// as `was` to how they stand `now`: a chat stopped asking, as when the
-/// human answered it, or went, and with it what it decided.
-fn decided_since(was: &Told, now: &Told) -> bool {
-    was.chats.iter().any(|chat| {
-        let still = now.chats.iter().find(|now| now.key == chat.key);
-        still.is_none_or(|still| chat.asking && !still.asking)
-    })
-}
-
-/// What was decided in every chat coxd keeps, the last asked first, read
-/// again once what the window told says it changed.
-fn decided() -> Vec<Decided> {
-    let Ok(mut read) = READ.lock() else {
-        return Vec::new();
-    };
-    if read.decided.is_none() || read.again > 0 {
-        read.again = read.again.saturating_sub(1);
-        let zone = TimeZone::system();
-        let answered = coxd::storage::path(coxd::storage::Kept::Chats)
-            .ok_or_else(|| anyhow::anyhow!("no place keeps the chats"))
-            .and_then(|path| Store::read(&path)?.answered());
-        match answered {
-            Ok(answered) => {
-                read.decided = Some(
-                    answered
-                        .iter()
-                        .flat_map(|kept| Decided::of(kept, &zone))
-                        .collect(),
-                );
-            }
-            Err(error) => tracing::warn!("what the chats decided is not read: {error:#}"),
-        }
-    }
-    read.decided.clone().unwrap_or_default()
 }
 
 /// How the chats stood when the window last told, or none of them.
@@ -399,19 +234,16 @@ pub fn waiting(root: &Path) -> usize {
 }
 
 /// What goes on in the folder `root`, as JSON, from how the chats stand
-/// now, what they do and ask, as the Commands page was told, what they
-/// decided, the human's `wiki`, the folder's own, the sources at `raw`,
-/// and `triggers`, as [`coxd::trigger::told`] tells them, of which the
-/// schedules ran.
+/// now, and what they do and ask, as the window told of their
+/// conversations.
 #[must_use]
-pub fn told(root: &Path, wiki: &Path, raw: &Path, triggers: &Value) -> Value {
+pub fn told(root: &Path) -> Value {
     let at = jiff::Timestamp::now().as_millisecond();
     let kept = plans();
     let opened = opened();
     told_of(
         &now(),
         root,
-        &decided(),
         &Plans {
             on: &on_steps(&kept),
             opened: &opened,
@@ -421,11 +253,6 @@ pub fn told(root: &Path, wiki: &Path, raw: &Path, triggers: &Value) -> Value {
             at,
         },
         &commands::now,
-        &Places {
-            wiki,
-            raw,
-            triggers,
-        },
     )
 }
 
@@ -821,14 +648,6 @@ fn takes_a_line(chat: &Chat) -> bool {
     !chat.asking || chat.steers
 }
 
-/// Where what happened in a folder is read from: the human's wiki, their
-/// sources, and the triggers, as [`coxd::trigger::told`] tells them.
-struct Places<'a> {
-    wiki: &'a Path,
-    raw: &'a Path,
-    triggers: &'a Value,
-}
-
 /// The project of `folder`, by its name, as `told` says it.
 fn name_of(told: &Told, folder: &Path) -> Option<String> {
     told.projects
@@ -1087,191 +906,31 @@ fn works_under(told: &Told, chat: &Chat) -> bool {
         })
 }
 
-/// The chat of `told` at the top of `chat`'s: the one whose agent opened
-/// the one that opened it, and so on, as far as the window lists them.
-fn top_of<'a>(told: &'a Told, chat: &'a Chat) -> &'a Chat {
-    let mut top = chat;
-    while let Some(parent) = parent_of(told, top) {
-        top = parent;
+/// How many steps got done in the folder `root`, or in every folder in
+/// the home, over each of [`WINDOWS`], as JSON, as `plans` read them
+/// moved: of the plans of its chats' agents, the subagents' too, each
+/// step once, however many of the window's chats stand for its chat.
+fn summaries(told: &Told, root: &Path, plans: &Plans<'_>) -> Vec<Value> {
+    // The chats, as coxd keeps them, each once.
+    let mut kept: Vec<ChatId> = Vec::new();
+    for chat in told.chats.iter().filter(|chat| of_folder(told, chat, root)) {
+        if let Some(id) = chat.kept.filter(|id| !kept.contains(id)) {
+            kept.push(id);
+        }
     }
-    top
-}
-
-/// What moved in the folder `root`, or in every folder in the home, over
-/// each of [`WINDOWS`], as JSON, from what `plans` read moved and the
-/// questions answered of `decided`: each chat at the top of those that
-/// moved, by what its own agent's plan and those of the subagents' chats
-/// under it, at any depth, got done, the subagents' chats under it that
-/// reported or were marked done, and those that worked;
-/// and, as things stand, the chats that wait on the human, and those
-/// that stopped with their plan not done, with when they last moved.
-fn summaries(told: &Told, root: &Path, plans: &Plans<'_>, decided: &[Decided]) -> Vec<Value> {
-    let zone = TimeZone::system();
-    // The time of day, and the day too once it is not today's hour.
-    let clock = |at: i64| {
-        let format = if plans.at - at < 20 * 60 * 60 * 1000 {
-            "%H:%M"
-        } else {
-            "%b %-d %H:%M"
-        };
-        jiff::Timestamp::from_millisecond(at)
-            .map_or_default(|at| at.to_zoned(zone.clone()).strftime(format).to_string())
-    };
-    let chats: Vec<&Chat> = told
-        .chats
-        .iter()
-        .filter(|chat| of_folder(told, chat, root))
-        .collect();
-    let kept = |chat: &Chat, id: ChatId| chat.kept == Some(id);
-    let waits: Vec<Value> = chats
-        .iter()
-        .filter(|chat| !chat.resolved && (chat.asking || (chat.unread && !chat.archived)))
-        .map(|chat| {
-            json!({
-                "key": chat.key,
-                "name": chat.name,
-                "why": if chat.asking { "asks you" } else { "finished a turn" },
-            })
-        })
-        .collect();
-    let stopped: Vec<Value> = chats
-        .iter()
-        .filter(|chat| !chat.resolved && !chat.working && !chat.asking && !chat.unread)
-        .filter_map(|chat| {
-            let plan = plans.of(chat)?;
-            let done = StepsDone::count(&plan.steps);
-            (done.left() > 0).then(|| {
-                json!({
-                    "key": chat.key,
-                    "name": chat.name,
-                    "done": done.done,
-                    "of": done.of,
-                    "since": clock(plan.at),
-                })
-            })
-        })
-        .collect();
     WINDOWS
         .iter()
         .map(|&(name, long)| {
-            let mut summed = summed(told, &chats, plans.moved, plans.at - long);
-            summed["window"] = json!(name);
-            summed["answered"] = json!(
-                decided
-                    .iter()
-                    .filter(|decided| {
-                        decided.at >= plans.at - long
-                            && chats.iter().any(|chat| kept(chat, decided.chat))
-                    })
-                    .count()
-            );
-            summed["waits"] = json!(waits);
-            summed["stopped"] = json!(stopped);
-            summed
+            let start = plans.at - long;
+            let steps = plans
+                .moved
+                .done
+                .iter()
+                .filter(|(chat, _, at)| *at >= start && kept.contains(chat))
+                .count();
+            json!({ "window": name, "steps": steps })
         })
         .collect()
-}
-
-/// A chat at the top of those that moved in a window, as [`summed`] sums
-/// it up: the steps its agent's plan and those of the subagents' chats
-/// under it got done, the last first, and the subagents' chats under it
-/// that `ended`, as they reported or were marked done, and that `worked`.
-struct Line<'a> {
-    chat: &'a Chat,
-    done: Vec<(&'a str, i64)>,
-    ended: Vec<&'a Chat>,
-    worked: Vec<&'a Chat>,
-}
-
-/// What moved among `chats` of `told` since `start`, as `moved` read it,
-/// as JSON: how many steps of the plans of `chats` were done, each once,
-/// those of a subagent's chat as those of the chat at the top of its, at
-/// any depth, which the lines name, how many subagents reported, and
-/// each chat at the top of those that moved, as a [`Line`].
-fn summed(told: &Told, chats: &[&Chat], moved: &Progress, start: i64) -> Value {
-    let mut lines: Vec<Line<'_>> = Vec::new();
-    let (mut steps, mut reports) = (0, 0);
-    // The chats summed up, as coxd keeps them, for the steps of each to
-    // count once, however many of the window's chats stand for it.
-    let mut summed: Vec<ChatId> = Vec::new();
-    for chat in chats {
-        let Some(id) = chat.kept.filter(|id| !summed.contains(id)) else {
-            continue;
-        };
-        summed.push(id);
-        let kept = |kept: ChatId| kept == id;
-        let done: Vec<(&str, i64)> = moved
-            .done
-            .iter()
-            .filter(|(id, _, at)| kept(*id) && *at >= start)
-            .map(|(_, text, at)| (text.as_str(), *at))
-            .collect();
-        let resolved = moved
-            .resolved
-            .iter()
-            .find(|(id, resolved)| kept(*id) && resolved.at >= start)
-            .map(|(_, resolved)| resolved);
-        let active = moved
-            .active
-            .iter()
-            .any(|(id, at)| kept(*id) && *at >= start);
-        if done.is_empty() && resolved.is_none() && !active {
-            continue;
-        }
-        let top = top_of(told, chat);
-        let at = lines
-            .iter()
-            .position(|line| line.chat.key == top.key)
-            .unwrap_or_else(|| {
-                lines.push(Line {
-                    chat: top,
-                    done: Vec::new(),
-                    ended: Vec::new(),
-                    worked: Vec::new(),
-                });
-                lines.len() - 1
-            });
-        let line = &mut lines[at];
-        // What a subagent's plan got done is done for the chat at the top,
-        // whose line names it.
-        steps += done.len();
-        line.done.extend(done);
-        if top.key == chat.key {
-            continue;
-        }
-        if let Some(resolved) = resolved {
-            if resolved.by == ResolvedBy::Agent {
-                reports += 1;
-            }
-            line.ended.push(chat);
-        } else {
-            line.worked.push(chat);
-        }
-    }
-    let named = |chats: &[&Chat]| -> Vec<Value> {
-        chats
-            .iter()
-            .map(|chat| json!({ "key": chat.key, "name": chat.name, "working": chat.working }))
-            .collect()
-    };
-    json!({
-        "steps": steps,
-        "reports": reports,
-        "moved": lines
-            .iter_mut()
-            .map(|line| {
-                line.done.sort_by_key(|(_, at)| std::cmp::Reverse(*at));
-                json!({
-                    "key": line.chat.key,
-                    "name": line.chat.name,
-                    "done": line.done.iter().take(NAMED).map(|(text, _)| text).collect::<Vec<_>>(),
-                    "more": line.done.len().saturating_sub(NAMED),
-                    "ended": named(&line.ended),
-                    "worked": named(&line.worked),
-                })
-            })
-            .collect::<Vec<_>>(),
-    })
 }
 
 /// What `chat`'s agent spent, with what the agents of the subagents'
@@ -1338,140 +997,27 @@ fn steps_of(steps: &[Step], on: &[(u64, usize)]) -> Vec<Value> {
         .collect()
 }
 
-/// What was decided in the folder `root`, or in any in the home, the
-/// last [`DECIDED`] of `decided`, as JSON: each chat by its key when the
-/// window lists it, and by its name there.
-fn decided_in(told: &Told, root: &Path, decided: &[Decided]) -> Vec<Value> {
-    decided
-        .iter()
-        .filter(|decided| {
-            let project = decided.project.as_deref().unwrap_or(&told.home);
-            root == told.home || project == root || decided.folder.as_deref() == Some(root)
-        })
-        .take(DECIDED)
-        .map(|decided| {
-            let listed = told
-                .chats
-                .iter()
-                .find(|chat| chat.kept == Some(decided.chat));
-            json!({
-                "when": decided.when,
-                "header": decided.header,
-                "question": decided.question,
-                "choice": decided.choice,
-                "why": decided.why,
-                "other": decided.other,
-                "chat": listed.map_or(decided.name.as_str(), |chat| chat.name.as_str()),
-                "key": listed.map(|chat| chat.key),
-                "where": where_of(told, decided.project.as_deref().unwrap_or(&told.home)),
-            })
-        })
-        .collect()
-}
-
 /// What goes on in the folder `root`, as [`told`] tells it, the chats
-/// standing as `told` says, doing and asking as `now` says, having
-/// `decided` what they did, and what happened read from `places`.
+/// standing as `told` says, doing and asking as `now` says.
 fn told_of(
     told: &Told,
     root: &Path,
-    decided: &[Decided],
     plans: &Plans<'_>,
     now: &dyn Fn(u64) -> Option<commands::Now>,
-    places: &Places<'_>,
 ) -> Value {
-    let Places {
-        wiki,
-        raw,
-        triggers,
-    } = *places;
-    let home = root == told.home;
-    let waiting = waiting_in(told, root, now);
-    let planned = planned(told, root, plans, now);
-    let summaries = summaries(told, root, plans, decided);
     let busy = told
         .chats
         .iter()
         .filter(|chat| chat.working && of_folder(told, chat, root))
         .count();
-    let decided = decided_in(told, root, decided);
-    let name = name_of(told, root);
-    let mut happened = Vec::new();
-    for folder in triggers["folders"].as_array().into_iter().flatten() {
-        let place = folder["name"].as_str().unwrap_or("~");
-        for trigger in folder["triggers"].as_array().into_iter().flatten() {
-            let schedule = &trigger["schedule"];
-            let Some(last) = schedule["last"].as_str() else {
-                continue;
-            };
-            let every = schedule["every"].as_str().unwrap_or_default();
-            happened.push(json!({
-                "when": last,
-                "kind": "schedule",
-                "title": trigger["name"],
-                "says": if home {
-                    format!("ran in {place}, {every}")
-                } else {
-                    format!("ran, {every}")
-                },
-                "href": "cox://triggers/",
-            }));
-        }
-    }
-    let written =
-        |root: &Path, shelf: &str, of: &dyn Fn(&str) -> bool, happened: &mut Vec<Value>| {
-            let told = coxd::wiki::told::told(root);
-            for page in told["pages"].as_array().into_iter().flatten() {
-                let name = page["name"].as_str().unwrap_or_default();
-                for used in page["used"].as_array().into_iter().flatten() {
-                    let what = used["what"].as_str().unwrap_or_default();
-                    if of(what) {
-                        happened.push(json!({
-                            "when": used["day"],
-                            "kind": "wiki",
-                            "title": page["title"],
-                            "says": what,
-                            "href": format!("cox://wiki/#{shelf}{name}"),
-                        }));
-                    }
-                }
-            }
-        };
-    if home {
-        written(wiki, "", &|_: &str| true, &mut happened);
-    } else if let Some(name) = &name {
-        let ours = format!("in {name}, chat ");
-        written(
-            wiki,
-            "",
-            &|what: &str| what.starts_with(&ours),
-            &mut happened,
-        );
-    }
-    if !home {
-        written(
-            &root.join(coxd::wiki::PROJECT_WIKI),
-            "project:",
-            &|_: &str| true,
-            &mut happened,
-        );
-    }
-    kept_sources(root, raw, home, name.as_deref(), &mut happened);
-    happened.sort_by(|a, b| {
-        let when = |event: &Value| event["when"].as_str().unwrap_or_default().to_owned();
-        when(b).cmp(&when(a))
-    });
-    happened.truncate(HAPPENED);
     let mut told_json = json!({
         "folder": root,
-        "home": home,
+        "home": root == told.home,
         "github": told.github,
-        "waiting": waiting,
-        "plans": planned,
-        "summaries": summaries,
+        "waiting": waiting_in(told, root, now),
+        "plans": planned(told, root, plans, now),
+        "summaries": summaries(told, root, plans),
         "busy": busy,
-        "decided": decided,
-        "happened": happened,
     });
     hint(&mut told_json, &hints(told, root, plans));
     told_json
@@ -1577,57 +1123,11 @@ fn hint(told: &mut Value, hints: &[(u64, String)]) {
     }
 }
 
-/// Pushes onto `happened` the sources kept of the folder `root`, the
-/// project of `name`, if it is one: those of the human's sources at
-/// `raw` the project kept, or all of them in the home, and those of the
-/// project's own.
-fn kept_sources(
-    root: &Path,
-    raw: &Path,
-    home: bool,
-    name: Option<&str>,
-    happened: &mut Vec<Value>,
-) {
-    let mut sources: Vec<(Value, &str)> = coxd::raw::told(raw)["sources"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .map(|source| (source.clone(), "raw:"))
-        .collect();
-    if !home {
-        sources.extend(
-            coxd::raw::told(&root.join(coxd::raw::PROJECT_RAW))["sources"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .map(|source| (source.clone(), "project-raw:")),
-        );
-    }
-    for (source, shelf) in &sources {
-        let project = source["project"].as_str();
-        let kept_here = home || *shelf == "project-raw:" || (project.is_some() && name == project);
-        if kept_here {
-            happened.push(json!({
-                "when": source["kept"],
-                "kind": "source",
-                "title": source["title"],
-                "says": format!(
-                    "kept in {}{}{}",
-                    source["topic"].as_str().unwrap_or_default(),
-                    source["chat"].as_str().map_or_default(|chat| format!(" by {chat}")),
-                    project
-                        .filter(|_| home)
-                        .map_or_default(|project| format!(" in {project}"))
-                ),
-                "href": format!("cox://wiki/#{shelf}{}", source["name"].as_str().unwrap_or_default()),
-            }));
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cox_core::entry::Entry;
+    use cox_core::store::ResolvedBy;
     use coxd::testing::TempDir;
 
     const NO_MOVED: Progress = Progress {
@@ -1754,13 +1254,8 @@ mod tests {
             home: folder.path().to_owned(),
             github: None,
         };
-        let places = Places {
-            wiki: &root.join("wiki"),
-            raw: &root.join("raw"),
-            triggers: &json!({}),
-        };
 
-        let json = told_of(&told, &root, &[], &NO_PLANS, &|_| None, &places);
+        let json = told_of(&told, &root, &NO_PLANS, &|_| None);
 
         let spent: Vec<(u64, &Value)> = json["plans"]
             .as_array()
@@ -1792,21 +1287,10 @@ mod tests {
         );
     }
 
-    /// What goes on in the folder `root`, nothing decided, doing or
-    /// asking anything, and what happened read from `wiki`, `raw` and
-    /// `triggers`.
-    fn told_at(told: &Told, root: &Path, wiki: &Path, raw: &Path, triggers: &Value) -> Value {
-        let places = Places {
-            wiki,
-            raw,
-            triggers,
-        };
-        told_of(told, root, &[], &NO_PLANS, &|_| None, &places)
-    }
-
-    /// What goes on in the folder `root`, where nothing happened.
-    fn told_in(told: &Told, root: &Path, at: &Path) -> Value {
-        told_at(told, root, &at.join("wiki"), &at.join("raw"), &json!({}))
+    /// What goes on in the folder `root`, no chat doing or asking
+    /// anything.
+    fn told_in(told: &Told, root: &Path) -> Value {
+        told_of(told, root, &NO_PLANS, &|_| None)
     }
 
     #[test]
@@ -1825,7 +1309,7 @@ mod tests {
             home: root.join("home"),
             github: None,
         };
-        let json = told_in(&told, &root, &root);
+        let json = told_in(&told, &root);
         let waiting = json["waiting"].as_array().unwrap();
         assert_eq!(waiting.len(), 2);
         assert_eq!(waiting[0]["key"], 1);
@@ -1837,7 +1321,7 @@ mod tests {
 
         // The home tells of what waits in every folder.
         let home = told.home.clone();
-        let json = told_in(&told, &home, &home);
+        let json = told_in(&told, &home);
         let keys: Vec<_> = json["waiting"]
             .as_array()
             .unwrap()
@@ -1848,79 +1332,7 @@ mod tests {
     }
 
     #[test]
-    fn a_question_answered_is_decided_with_why_and_a_declined_one_is_not() {
-        use cox_core::entry::{Picked, Question, QuestionOption};
-
-        let option = |label: &str, description: Option<&str>| QuestionOption {
-            label: label.to_owned(),
-            description: description.map(str::to_owned),
-        };
-        let question = Question {
-            header: Some("Approach".to_owned()),
-            text: None,
-            options: vec![
-                option("Derive", Some("One source of truth")),
-                option("Record", Some("A table of its own")),
-            ],
-            multiple: false,
-            other: true,
-        };
-        let words = Question {
-            header: Some("Name".to_owned()),
-            text: Some("What is it called?".to_owned()),
-            options: Vec::new(),
-            multiple: false,
-            other: true,
-        };
-        let kept = |answer| KeptAnswer {
-            chat: serde_json::from_value(json!(7)).unwrap(),
-            name: "plan".to_owned(),
-            project: Some(PathBuf::from("/src/app")),
-            folder: None,
-            at: 1_763_280_000_000,
-            entry: Entry::Question {
-                message: "Which way do we go?".to_owned(),
-                questions: vec![question.clone(), words.clone()],
-                answer: Some(answer),
-                answered_at: None,
-            },
-        };
-        let given = QuestionAnswer::Given(vec![
-            Picked {
-                chosen: vec![0],
-                other: Some("but keep it cheap".to_owned()),
-            },
-            Picked {
-                chosen: Vec::new(),
-                other: Some("inbox".to_owned()),
-            },
-        ]);
-
-        let decided = Decided::of(&kept(given), &TimeZone::UTC);
-
-        assert_eq!(decided.len(), 2);
-        assert_eq!(decided[0].when, "2025-11-16 08:00");
-        assert_eq!(decided[0].header.as_deref(), Some("Approach"));
-        // Of several questions, one without words of its own is asked by
-        // its label, the message being for them all.
-        assert_eq!(decided[0].question, "Approach");
-        assert_eq!(decided[0].choice, "Derive");
-        assert_eq!(decided[0].why.as_deref(), Some("One source of truth"));
-        assert_eq!(decided[0].other.as_deref(), Some("but keep it cheap"));
-        assert_eq!(decided[1].question, "What is it called?");
-        assert_eq!(decided[1].choice, "inbox");
-        assert_eq!(decided[1].why, None);
-        assert_eq!(decided[1].other, None);
-        assert_eq!(
-            Decided::of(&kept(QuestionAnswer::Declined), &TimeZone::UTC),
-            []
-        );
-        let skipped = QuestionAnswer::Given(vec![Picked::default(), Picked::default()]);
-        assert_eq!(Decided::of(&kept(skipped), &TimeZone::UTC), []);
-    }
-
-    #[test]
-    fn the_inbox_tells_what_is_asked_at_work_and_decided_in_the_folder() {
+    fn the_inbox_tells_what_is_asked_and_at_work_in_the_folder() {
         let root = TempDir::new();
         let other = root.join("other");
         let home = root.join("home");
@@ -1951,24 +1363,6 @@ mod tests {
             home: home.clone(),
             github: None,
         };
-        let decided = |chat: u64, project: &Path, question: &str| Decided {
-            chat: kept(chat),
-            name: format!("kept {chat}"),
-            project: Some(project.to_owned()),
-            folder: None,
-            when: "2026-11-16 09:00".to_owned(),
-            at: 0,
-            header: None,
-            question: question.to_owned(),
-            choice: "Derive".to_owned(),
-            why: Some("One source of truth".to_owned()),
-            other: None,
-        };
-        let decisions = [
-            decided(1, &root, "Which way?"),
-            decided(8, &other, "Which name?"),
-            decided(6, &root, "Which store?"),
-        ];
         let now = |key: u64| {
             Some(commands::Now {
                 said: Some(format!("step of {key}")),
@@ -1976,13 +1370,8 @@ mod tests {
                 asks: (key == 1).then(|| "Which way?".to_owned()),
             })
         };
-        let places = Places {
-            wiki: &root.join("wiki"),
-            raw: &root.join("raw"),
-            triggers: &json!({}),
-        };
 
-        let json = told_of(&told, &root, &decisions, &NO_PLANS, &now, &places);
+        let json = told_of(&told, &root, &NO_PLANS, &now);
 
         assert_eq!(json["waiting"][0]["asks"], "Which way?");
         let working: Vec<(u64, u64)> = json["plans"]
@@ -2008,27 +1397,26 @@ mod tests {
             json["plans"][2]["background"],
             json!([{"what": "sleep 120", "command": true}])
         );
-        let decided = json["decided"].as_array().unwrap();
-        assert_eq!(decided.len(), 2);
-        // A chat the window lists is linked, by the name it has there.
-        assert_eq!(decided[0]["key"], 1);
-        assert_eq!(decided[0]["chat"], "chat 1");
-        assert_eq!(decided[0]["why"], "One source of truth");
-        assert_eq!(decided[1]["key"], Value::Null);
-        assert_eq!(decided[1]["chat"], "kept 6");
+        // Only what the page draws.
+        let mut keys: Vec<&String> = json.as_object().unwrap().keys().collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            [
+                "busy",
+                "folder",
+                "github",
+                "home",
+                "plans",
+                "summaries",
+                "waiting"
+            ]
+        );
 
         // The home tells of every folder.
-        let json = told_of(&told, &home, &decisions, &NO_PLANS, &now, &places);
+        let json = told_of(&told, &home, &NO_PLANS, &now);
         assert_eq!(json["plans"].as_array().unwrap().len(), 4);
         assert_eq!(json["busy"], 4);
-        let questions: Vec<&str> = json["decided"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|decided| decided["question"].as_str().unwrap())
-            .collect();
-        assert_eq!(questions, ["Which way?", "Which name?", "Which store?"]);
-        assert_eq!(json["decided"][1]["where"], "other");
     }
 
     #[test]
@@ -2071,13 +1459,8 @@ mod tests {
             on: &on,
             ..NO_PLANS
         };
-        let places = Places {
-            wiki: &root.join("wiki"),
-            raw: &root.join("raw"),
-            triggers: &json!({}),
-        };
 
-        let json = told_of(&told, &root, &[], &plans, &|_| None, &places);
+        let json = told_of(&told, &root, &plans, &|_| None);
 
         let shown = &json["plans"][0];
         assert_eq!((&shown["chat"], &shown["takes"]), (&json!(1), &json!(true)));
@@ -2261,12 +1644,7 @@ mod tests {
             ]
         );
 
-        let places = Places {
-            wiki: &root.join("wiki"),
-            raw: &root.join("raw"),
-            triggers: &json!({}),
-        };
-        let json = told_of(&told, &root, &[], &plans, &|_| None, &places);
+        let json = told_of(&told, &root, &plans, &|_| None);
         let waiting: Vec<(&str, &Value)> = json["waiting"]
             .as_array()
             .unwrap()
@@ -2344,13 +1722,8 @@ mod tests {
                 asks: None,
             })
         };
-        let places = Places {
-            wiki: &root.join("wiki"),
-            raw: &root.join("raw"),
-            triggers: &json!({}),
-        };
 
-        let json = told_of(&told, &root, &[], &plans, &now, &places);
+        let json = told_of(&told, &root, &plans, &now);
 
         // Under the chat, its subagents that came from no step of its
         // plan first, done or not, while it has a plan, then those whose
@@ -2459,13 +1832,8 @@ mod tests {
             at,
             ..NO_PLANS
         };
-        let places = Places {
-            wiki: &root.join("wiki"),
-            raw: &root.join("raw"),
-            triggers: &json!({}),
-        };
 
-        let json = told_of(&told, &root, &[], &plans, &|_| None, &places);
+        let json = told_of(&told, &root, &plans, &|_| None);
 
         // The chat with no plan shows above the subagents it waits on.
         assert_eq!(
@@ -2504,13 +1872,8 @@ mod tests {
             home: root.join("home"),
             ..Told::default()
         };
-        let places = Places {
-            wiki: &root.join("wiki"),
-            raw: &root.join("raw"),
-            triggers: &json!({}),
-        };
 
-        let json = told_of(&told, &root, &[], &NO_PLANS, &|_| None, &places);
+        let json = told_of(&told, &root, &NO_PLANS, &|_| None);
 
         assert_eq!(
             tree(&json),
@@ -2554,13 +1917,8 @@ mod tests {
             kept: &kept_plans,
             ..NO_PLANS
         };
-        let places = Places {
-            wiki: &root.join("wiki"),
-            raw: &root.join("raw"),
-            triggers: &json!({}),
-        };
 
-        let json = told_of(&told, &root, &[], &plans, &|_| None, &places);
+        let json = told_of(&told, &root, &plans, &|_| None);
 
         let told: Vec<(u64, &Value, &Value)> = json["plans"]
             .as_array()
@@ -2632,13 +1990,8 @@ mod tests {
             kept: &kept_plans,
             ..NO_PLANS
         };
-        let places = Places {
-            wiki: &root.join("wiki"),
-            raw: &root.join("raw"),
-            triggers: &json!({}),
-        };
 
-        let json = told_of(&told, &root, &[], &plans, &|_| None, &places);
+        let json = told_of(&told, &root, &plans, &|_| None);
 
         let keys = |tier: &str| -> Vec<u64> {
             json[tier]
@@ -2711,13 +2064,8 @@ mod tests {
             at,
             ..NO_PLANS
         };
-        let places = Places {
-            wiki: &root.join("wiki"),
-            raw: &root.join("raw"),
-            triggers: &json!({}),
-        };
 
-        let json = told_of(&told, &root, &[], &plans, &|_| None, &places);
+        let json = told_of(&told, &root, &plans, &|_| None);
 
         let rows: Vec<(u64, u64, &str)> = json["plans"]
             .as_array()
@@ -2777,7 +2125,6 @@ mod tests {
             told_of(
                 &told,
                 &root,
-                &[],
                 &Plans {
                     kept: &plans(),
                     on: &[],
@@ -2787,11 +2134,6 @@ mod tests {
                     at: 0,
                 },
                 &|_| None,
-                &Places {
-                    wiki: &root.join("wiki"),
-                    raw: &root.join("raw"),
-                    triggers: &json!({}),
-                },
             )
         };
         let rows = || -> Vec<u64> {
@@ -2833,24 +2175,21 @@ mod tests {
     }
 
     #[test]
-    fn sums_up_what_moved_in_each_window_and_what_stands_still() {
-        use cox_core::store::Resolved;
+    fn counts_the_steps_done_in_each_window_of_the_folder() {
         let folder = TempDir::new();
         let root = folder.path().join("app");
         let minute = 60 * 1000;
         let at = 100 * 24 * 60 * minute;
-        let mut chats: Vec<Chat> = (1..=6)
+        let mut chats: Vec<Chat> = (1..=3)
             .map(|key| {
                 let mut chat = chat(key, &root, &root, false, false);
                 chat.kept = Some(kept(key));
                 chat
             })
             .collect();
-        (chats[0].working, chats[1].resolved) = (true, true);
-        (chats[1].parent, chats[2].parent) = (Some(1), Some(1));
-        chats[4].asking = true;
+        chats[1].parent = Some(1);
         // Not of the folder: it moves, but elsewhere.
-        let elsewhere = &mut chats[5];
+        let elsewhere = &mut chats[2];
         (elsewhere.cwd, elsewhere.project) = (folder.path().join("x"), folder.path().join("x"));
         let told = Told {
             chats,
@@ -2861,83 +2200,34 @@ mod tests {
         let moved = Progress {
             active: vec![
                 (kept(1), at - minute),
-                (kept(2), at - 20 * minute),
-                (kept(3), at - 2 * 60 * minute),
-                (kept(6), at - minute),
+                (kept(2), at - 2 * 60 * minute),
+                (kept(3), at - minute),
             ],
             done: vec![
                 (kept(1), "Fix".to_owned(), at - 30 * minute),
                 (kept(1), "Read".to_owned(), at - 5 * minute),
-                (kept(6), "Elsewhere".to_owned(), at - minute),
-                // A subagent's own, done for the chat at the top too.
-                (kept(3), "Its own".to_owned(), at - 3 * 60 * minute),
+                (kept(3), "Elsewhere".to_owned(), at - minute),
+                // A subagent's own.
+                (kept(2), "Its own".to_owned(), at - 3 * 60 * minute),
             ],
-            resolved: vec![(
-                kept(2),
-                Resolved {
-                    at: at - 20 * minute,
-                    by: ResolvedBy::Agent,
-                },
-            )],
+            resolved: Vec::new(),
         };
-        let stopped = [KeptPlan {
-            chat: kept(4),
-            number: 3,
-            steps: vec![
-                step("Plan", StepState::Completed),
-                step("Build", StepState::InProgress),
-            ],
-            at: at - 3 * 60 * minute,
-        }];
         let plans = Plans {
-            kept: &stopped,
             moved: &moved,
             at,
             ..NO_PLANS
         };
-        let places = Places {
-            wiki: &root.join("wiki"),
-            raw: &root.join("raw"),
-            triggers: &json!({}),
-        };
 
-        let json = told_of(&told, &root, &[], &plans, &|_| None, &places);
+        let json = told_of(&told, &root, &plans, &|_| None);
 
-        let summaries = json["summaries"].as_array().unwrap();
-        let line = |window: usize| &summaries[window]["moved"][0];
         assert_eq!(
-            summaries
-                .iter()
-                .map(|summary| (
-                    summary["window"].as_str().unwrap(),
-                    summary["steps"].as_u64().unwrap(),
-                    summary["reports"].as_u64().unwrap(),
-                    summary["moved"].as_array().unwrap().len(),
-                ))
-                .collect::<Vec<_>>(),
-            [("15 min", 1, 0, 1), ("1 h", 2, 1, 1), ("4 h", 3, 1, 1)]
+            json["summaries"],
+            json!([
+                { "window": "15 min", "steps": 1 },
+                { "window": "1 h", "steps": 2 },
+                { "window": "4 h", "steps": 3 },
+            ])
         );
-        assert_eq!(line(0)["done"], json!(["Read"]));
-        assert_eq!(line(1)["done"], json!(["Read", "Fix"]));
-        let keys = |chats: &Value| -> Vec<u64> {
-            let chats = chats.as_array().unwrap().iter();
-            chats.map(|chat| chat["key"].as_u64().unwrap()).collect()
-        };
-        assert_eq!(keys(&line(1)["ended"]), [2]);
-        assert_eq!(keys(&line(1)["worked"]), [0; 0]);
-        assert_eq!(keys(&line(2)["worked"]), [3]);
-        for summary in summaries {
-            assert_eq!(
-                summary["waits"],
-                json!([{ "key": 5, "name": "chat 5", "why": "asks you" }])
-            );
-            let stopped = &summary["stopped"];
-            assert_eq!(
-                (&stopped[0]["key"], &stopped[0]["done"], &stopped[0]["of"]),
-                (&json!(4), &json!(1), &json!(2))
-            );
-            assert_eq!(stopped.as_array().unwrap().len(), 1);
-        }
     }
 
     #[test]
@@ -2987,13 +2277,8 @@ mod tests {
             at,
             ..NO_PLANS
         };
-        let places = Places {
-            wiki: &root.join("wiki"),
-            raw: &root.join("raw"),
-            triggers: &json!({}),
-        };
 
-        let json = told_of(&told, &root, &[], &plans, &|_| None, &places);
+        let json = told_of(&told, &root, &plans, &|_| None);
 
         let summaries = json["summaries"].as_array().unwrap();
         assert_eq!(
@@ -3003,24 +2288,6 @@ mod tests {
                 .collect::<Vec<_>>(),
             [2, 3, 5]
         );
-        // The chat at the top names what its subagents got done, the
-        // last first, and has them under it as they worked.
-        let line = &summaries[2]["moved"][0];
-        assert_eq!(line["key"], 1);
-        assert_eq!(
-            (&line["done"], &line["more"]),
-            (
-                &json!(["Add the flag", "Test it", "Write the docs"]),
-                &json!(1)
-            )
-        );
-        let worked: Vec<u64> = line["worked"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|chat| chat["key"].as_u64().unwrap())
-            .collect();
-        assert_eq!(worked, [2, 3]);
     }
 
     #[test]
@@ -3115,141 +2382,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn what_was_decided_is_read_again_once_a_chat_stops_asking_or_goes() {
-        let root = PathBuf::from("/p");
-        let told = |chats: Vec<Chat>| Told {
-            chats,
-            projects: Vec::new(),
-            home: PathBuf::from("/home"),
-            github: None,
-        };
-        let asking = told(vec![
-            chat(1, &root, &root, true, false),
-            chat(2, &root, &root, false, false),
-        ]);
-        let answered = told(vec![
-            chat(1, &root, &root, false, true),
-            chat(2, &root, &root, false, false),
-        ]);
-        let gone = told(vec![chat(1, &root, &root, false, true)]);
-
-        assert!(decided_since(&asking, &answered));
-        assert!(!decided_since(&answered, &asking));
-        assert!(!decided_since(&answered, &answered));
-        assert!(decided_since(&answered, &gone));
-    }
-
-    #[test]
-    fn what_happened_there_comes_the_last_first() {
-        let root = TempDir::new();
-        // The human's wiki, apart from the project's own, in `root`.
-        let wiki = root.join("human/wiki");
-        std::fs::create_dir_all(&wiki).unwrap();
-        std::fs::write(
-            wiki.join("errors.md"),
-            "# Errors\n\nUse anyhow.\n\n## Used in\n\n\
-             - 2026-11-05 in app, chat \"one\"\n\
-             - 2026-11-06 in other, chat \"two\"\n",
-        )
-        .unwrap();
-        std::fs::create_dir_all(root.join("wiki")).unwrap();
-        std::fs::write(
-            root.join("wiki/people.md"),
-            "# People\n\nAsk Ann.\n\n## Used in\n\n- 2026-11-04 in app, chat \"three\"\n",
-        )
-        .unwrap();
-        // The human's sources, apart from the project's own, in `root`.
-        let raw = root.join("human/raw");
-        let source = coxd::raw::Source {
-            from: "https://example.com/",
-            title: "News",
-            text: "What changed.",
-        };
-        let kept = |project| coxd::raw::Kept {
-            day: "2026-11-07",
-            chat: "news",
-            chat_id: None,
-            project,
-        };
-        coxd::raw::keep(&raw, "news", source, kept(Some("app"))).unwrap();
-        coxd::raw::keep(&raw, "elsewhere", source, kept(Some("other"))).unwrap();
-        let schedules = json!({
-            "folders": [{"folder": root.path(), "name": null, "triggers": [
-                {"name": "triage", "schedule": {"every": "Every 6 hours", "last": "2026-11-07 09:00"}},
-                {"name": "never", "schedule": {"every": "Daily 09:00", "last": null}},
-                {"name": "ci"},
-            ]}],
-        });
-        let home = root.join("home");
-        let told = Told {
-            chats: Vec::new(),
-            projects: vec![
-                (home.clone(), "~".to_owned()),
-                (root.to_path_buf(), "app".to_owned()),
-            ],
-            home: home.clone(),
-            github: None,
-        };
-        let json = told_at(&told, &root, &wiki, &raw, &schedules);
-        let kinds: Vec<(&str, &str)> = json["happened"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|event| {
-                (
-                    event["kind"].as_str().unwrap(),
-                    event["when"].as_str().unwrap(),
-                )
-            })
-            .collect();
-        assert_eq!(
-            kinds,
-            [
-                ("schedule", "2026-11-07 09:00"),
-                ("source", "2026-11-07"),
-                ("wiki", "2026-11-05"),
-                ("wiki", "2026-11-04"),
-            ]
-        );
-        assert_eq!(json["happened"][2]["href"], "cox://wiki/#errors");
-        assert_eq!(json["happened"][3]["href"], "cox://wiki/#project:people");
-
-        // The home tells of what happened in every folder: the wiki's
-        // pages written from any, and the sources kept in any, but not
-        // the project's own wiki, which only the project shows.
-        let schedules = json!({
-            "folders": [
-                {"folder": home, "name": null, "triggers": []},
-                {"folder": root.path(), "name": "app", "triggers": [
-                    {"name": "triage", "schedule": {"every": "Every 6 hours", "last": "2026-11-07 09:00"}},
-                ]},
-            ],
-        });
-        let json = told_at(&told, &home, &wiki, &raw, &schedules);
-        let said: Vec<(&str, &str)> = json["happened"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|event| {
-                (
-                    event["kind"].as_str().unwrap(),
-                    event["says"].as_str().unwrap(),
-                )
-            })
-            .collect();
-        assert_eq!(
-            said,
-            [
-                ("schedule", "ran in app, Every 6 hours"),
-                ("source", "kept in elsewhere by news in other"),
-                ("source", "kept in news by news in app"),
-                ("wiki", "in other, chat \"two\""),
-                ("wiki", "in app, chat \"one\""),
-            ]
-        );
-    }
-
     fn pull(number: u64, checks: CheckState, unseen: Option<CheckState>) -> PullRow {
         use coxd::github::{Check, Pull, PullState, Status};
         PullRow {
@@ -3286,7 +2418,7 @@ mod tests {
             home: root.join("home"),
             github: Some("gh is not logged in".to_owned()),
         };
-        let json = told_in(&told, &root, &root);
+        let json = told_in(&told, &root);
         let plans = json["plans"].as_array().unwrap();
         assert_eq!(plans.len(), 1);
         assert_eq!(plans[0]["key"], 1);

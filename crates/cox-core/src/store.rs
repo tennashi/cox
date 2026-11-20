@@ -15,14 +15,14 @@ use std::time::{Duration, SystemTime};
 use anyhow::{Context as _, bail};
 use rusqlite::{Connection, OptionalExtension as _, params};
 
-use crate::entry::{Entry, QuestionAnswer, Step};
+use crate::entry::{Entry, Step, ToolCallResult};
 use crate::goal::Goal;
 use crate::moved::Moved;
 use crate::settings::Setting;
 use crate::tabs::KeptTabs;
 
 /// The version of the tables below, as `SQLite`'s `user_version` holds it.
-const VERSION: i64 = 24;
+const VERSION: i64 = 26;
 
 const TABLES: &str = "
 CREATE TABLE projects (
@@ -166,10 +166,35 @@ CREATE TABLE steps (
 CREATE INDEX steps_done ON steps (done) WHERE done IS NOT NULL;
 -- The entries that tell a chat's story, past its steps: the human's
 -- lines, of which the first starts it, the receipts of how its plan
--- changed, the questions and the commits.
+-- changed, the questions, the commits, and what ran as a turn ended or
+-- as something else happened, as the chat's goal and its triggers.
 CREATE INDEX milestones ON entries (chat, number) WHERE entry LIKE '{\"human\":%'
     OR entry LIKE '{\"plan_revised\":%' OR entry LIKE '{\"question\":%'
-    OR entry LIKE '{\"commits\":%';
+    OR entry LIKE '{\"commits\":%' OR entry LIKE '{\"checks\":%'
+    OR entry LIKE '{\"event\":%';
+-- Each command the agents of a chat ran, kept as its entry is: when it
+-- started and ended, and how, and the step of commands it is of: what the
+-- Activity page tells the commands that ran long or failed by, in a
+-- chat's story, without reading every command the chat ran.
+CREATE TABLE commands (
+    chat INTEGER NOT NULL REFERENCES chats (id),
+    -- The number of its entry.
+    number INTEGER NOT NULL,
+    -- The number of the entry before it of what the agent replied, or of
+    -- a line the agent was sent, if one is: the commands it ran one after
+    -- another, with nothing said between, share it.
+    step INTEGER,
+    -- When it started, in milliseconds since the epoch: when coxd kept
+    -- it as the command it runs last read, as an agent tells the command
+    -- once it has written it.
+    started INTEGER NOT NULL,
+    -- When coxd saw it end; NULL while it runs, and for one an older Cox
+    -- kept.
+    ended INTEGER,
+    -- How it ended, as `ToolCallResult` names it, once it did.
+    result TEXT,
+    PRIMARY KEY (chat, number)
+) WITHOUT ROWID;
 ";
 
 /// What makes the tables of each earlier version into those of the next:
@@ -252,6 +277,37 @@ const UPGRADES: &[&str] = &[
          ON CONFLICT (chat, id) DO UPDATE SET text = excluded.text,
              started = coalesce(excluded.started, steps.started), done = excluded.done;
      DROP INDEX plans;"#,
+    // The story told what ran as a turn ended, or as something else
+    // happened, too.
+    r#"DROP INDEX milestones;
+     CREATE INDEX milestones ON entries (chat, number) WHERE entry LIKE '{"human":%'
+         OR entry LIKE '{"plan_revised":%' OR entry LIKE '{"question":%'
+         OR entry LIKE '{"commits":%' OR entry LIKE '{"checks":%'
+         OR entry LIKE '{"event":%';"#,
+    // Kept from the commands the entries keep, with when each was first
+    // kept as when it started, and no end, which an older Cox did not
+    // keep.
+    r#"CREATE TABLE commands (
+         chat INTEGER NOT NULL REFERENCES chats (id),
+         number INTEGER NOT NULL,
+         step INTEGER,
+         started INTEGER NOT NULL,
+         ended INTEGER,
+         result TEXT,
+         PRIMARY KEY (chat, number)
+     ) WITHOUT ROWID;
+     INSERT INTO commands (chat, number, step, started, result)
+         SELECT chat, number, step, at, result FROM (
+             SELECT chat, number, at,
+                 CASE WHEN entry LIKE '{"tool_call":%' THEN entry ->> '$.tool_call.command' END
+                     AS command,
+                 CASE WHEN entry LIKE '{"tool_call":%' THEN entry ->> '$.tool_call.result' END
+                     AS result,
+                 max(CASE WHEN entry LIKE '{"reply":%' OR entry LIKE '{"human":%'
+                     OR entry LIKE '{"cox":%' THEN number END)
+                     OVER (PARTITION BY chat ORDER BY number) AS step
+             FROM entries)
+         WHERE command;"#,
 ];
 
 /// What keeps an entry of a chat, in place of what was kept there.
@@ -485,6 +541,39 @@ pub struct KeptStep {
     pub done: Option<i64>,
 }
 
+/// Commands a chat's agent ran one after another, with nothing said
+/// between, as [`Store::ran`] reads them: those of them that ran
+/// long or failed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct KeptRun {
+    /// What the agent replied before it ran them, if it replied since the
+    /// line it answers.
+    pub said: Option<String>,
+    /// How many commands it ran one after another there, those that did
+    /// not run long too.
+    pub of: usize,
+    pub commands: Vec<KeptCommand>,
+}
+
+/// A command a chat's agent ran, which ended, as [`Store::ran`] reads
+/// it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct KeptCommand {
+    /// The number of its entry, from 0.
+    pub number: usize,
+    /// The command, as the agent gave it.
+    pub line: String,
+    /// What the agent said it is for, if it said.
+    pub about: Option<String>,
+    /// What it shows, as what it printed.
+    pub content: Vec<crate::entry::Content>,
+    pub result: ToolCallResult,
+    /// When it started, in milliseconds since the epoch.
+    pub started: i64,
+    /// When it ended, unless an older Cox kept it, which kept no end.
+    pub ended: Option<i64>,
+}
+
 /// What moved in the chats since a time, as [`Store::progress`] reads it.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Progress {
@@ -518,24 +607,6 @@ pub struct Said {
     pub at: i64,
     /// The number of its entry in the chat.
     pub number: usize,
-}
-
-/// A question an agent asked in a chat, which the human answered by
-/// choosing or in their own words, as [`Store::answered`] reads it.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct KeptAnswer {
-    pub chat: ChatId,
-    /// The name of the chat it was asked in, as it is now.
-    pub name: String,
-    /// The folder of the chat's project, or `None` for Cox's own.
-    pub project: Option<PathBuf>,
-    /// The folder the chat works in, when it is not its project's.
-    pub folder: Option<PathBuf>,
-    /// When it was answered, or asked where an older Cox kept no time of
-    /// the answer, in milliseconds since the epoch.
-    pub at: i64,
-    /// The [`Entry::Question`], with its answer.
-    pub entry: Entry,
 }
 
 /// Where a chat's name came from, from the name that gives way most
@@ -1062,6 +1133,10 @@ impl Store {
             &format!("DELETE FROM steps WHERE chat IN ({chats})"),
             [project.0],
         )?;
+        transaction.execute(
+            &format!("DELETE FROM commands WHERE chat IN ({chats})"),
+            [project.0],
+        )?;
         // A chat of another project, or of Cox's own, that one of these
         // opened forgets which did.
         transaction.execute(
@@ -1117,61 +1192,6 @@ impl Store {
             .collect()
     }
 
-    /// The questions agents asked in any chat that the human answered,
-    /// the last answered first, each with the chat it was asked in. A
-    /// question declined, or still asked, is not one of them.
-    ///
-    /// # Errors
-    ///
-    /// When the database cannot be read.
-    pub fn answered(&self) -> anyhow::Result<Vec<KeptAnswer>> {
-        // The JSON of an entry starts with its kind, as `{"question":`.
-        let mut statement = self.connection.prepare(
-            r#"SELECT entries.chat, chats.name, projects.folder, chats.folder, entries.at,
-             entries.entry
-             FROM entries JOIN chats ON chats.id = entries.chat
-             LEFT JOIN projects ON projects.id = chats.project
-             WHERE entries.entry LIKE '{"question":%' AND entries.entry LIKE '%"given":%'
-             ORDER BY entries.at DESC"#,
-        )?;
-        let rows = statement.query_map([], |row| {
-            Ok((
-                row.get::<_, String>(5)?,
-                ChatId(row.get(0)?),
-                row.get(1)?,
-                row.get::<_, Option<String>>(2)?,
-                row.get::<_, Option<String>>(3)?,
-                row.get(4)?,
-            ))
-        })?;
-        let mut answered = Vec::new();
-        for row in rows {
-            let (entry, chat, name, project, folder, at) = row?;
-            // An entry a newer Cox wrote, which this one cannot read, is
-            // left out rather than leaving out all the rest.
-            let Ok(entry) = serde_json::from_str::<Entry>(&entry) else {
-                continue;
-            };
-            if let Entry::Question {
-                answer: Some(QuestionAnswer::Given(_)),
-                answered_at,
-                ..
-            } = entry
-            {
-                answered.push(KeptAnswer {
-                    chat,
-                    name,
-                    project: project.map(PathBuf::from),
-                    folder: folder.map(PathBuf::from),
-                    at: answered_at.unwrap_or(at),
-                    entry,
-                });
-            }
-        }
-        answered.sort_by_key(|kept| std::cmp::Reverse(kept.at));
-        Ok(answered)
-    }
-
     /// Keeps `entry` as the `number`th of `chat`, from 0, in place of what
     /// was kept there.
     ///
@@ -1179,6 +1199,15 @@ impl Store {
     ///
     /// When the database cannot be written.
     pub fn keep_entry(&self, chat: ChatId, number: usize, entry: &Entry) -> anyhow::Result<()> {
+        if let Entry::ToolCall {
+            command: true,
+            title,
+            result,
+            ..
+        } = entry
+        {
+            return self.keep_command(chat, number, entry, title, *result);
+        }
         let Entry::Plan(steps) = entry else {
             self.connection
                 .prepare_cached(KEEP_ENTRY)?
@@ -1229,6 +1258,170 @@ impl Store {
         drop(step_kept);
         transaction.commit()?;
         Ok(())
+    }
+
+    /// Keeps `entry`, a command the agent runs, `line`, which ended as
+    /// `result` once it did, as the `number`th of `chat`, and when it
+    /// started and ended, and its step: it starts as the command it runs
+    /// is first told, and again while it runs, as it is told anew, as an
+    /// agent tells a placeholder first, and the command once it wrote it.
+    fn keep_command(
+        &self,
+        chat: ChatId,
+        number: usize,
+        entry: &Entry,
+        line: &str,
+        result: Option<ToolCallResult>,
+    ) -> anyhow::Result<()> {
+        let transaction = self.connection.unchecked_transaction()?;
+        let number = i64::try_from(number)?;
+        let at = now();
+        let result = result
+            .map(serde_json::to_value)
+            .transpose()?
+            .and_then(|result| result.as_str().map(str::to_owned));
+        // Its step, of the entry before it that says something, read once.
+        transaction
+            .prepare_cached(
+                r#"INSERT INTO commands (chat, number, step, started)
+                 SELECT ?1, ?2, (SELECT number FROM entries WHERE chat = ?1 AND number < ?2
+                     AND (entry LIKE '{"reply":%' OR entry LIKE '{"human":%'
+                     OR entry LIKE '{"cox":%') ORDER BY number DESC LIMIT 1), ?3
+                 WHERE NOT EXISTS (SELECT 1 FROM commands WHERE chat = ?1 AND number = ?2)"#,
+            )?
+            .execute(params![chat.0, number, at])?;
+        // Read against the entry as it was kept before.
+        transaction
+            .prepare_cached(
+                r"UPDATE commands SET
+                 started = CASE WHEN ended IS NULL AND ?5 IS NULL AND ?4 IS NOT
+                     (SELECT entry ->> '$.tool_call.title' FROM entries
+                      WHERE chat = ?1 AND number = ?2) THEN ?3 ELSE started END,
+                 ended = CASE WHEN ended IS NULL AND ?5 IS NOT NULL THEN ?3 ELSE ended END,
+                 result = coalesce(?5, result)
+                 WHERE chat = ?1 AND number = ?2",
+            )?
+            .execute(params![chat.0, number, at, line, result])?;
+        transaction.prepare_cached(KEEP_ENTRY)?.execute(params![
+            chat.0,
+            number,
+            at,
+            serde_json::to_string(entry)?
+        ])?;
+        transaction.commit()?;
+        Ok(())
+    }
+
+    /// The commands `chat`'s agent ran that ran `long` milliseconds or
+    /// longer, as coxd saw them start and end, or failed, by the steps
+    /// they are of, in order: each with how many commands the step ran,
+    /// and what the agent said before them, if it said anything since the
+    /// line it answers. A command that runs yet is not one of them, nor is
+    /// one an older Cox kept that did not fail, whose end it did not keep.
+    ///
+    /// # Errors
+    ///
+    /// When the database cannot be read.
+    pub fn ran(&self, chat: ChatId, long: i64) -> anyhow::Result<Vec<KeptRun>> {
+        // How many each step ran, of the commands' own table, which reads
+        // no entry; the entries only of those that ran long or failed.
+        let mut statement = self
+            .connection
+            .prepare_cached("SELECT step, count(*) FROM commands WHERE chat = ?1 GROUP BY step")?;
+        let counts: Vec<(Option<i64>, i64)> = statement
+            .query_map([chat.0], |row| Ok((row.get(0)?, row.get(1)?)))?
+            .collect::<Result<_, _>>()?;
+        let mut statement = self.connection.prepare_cached(
+            "SELECT commands.number, commands.step, commands.started, commands.ended,
+             entries.entry
+             FROM commands JOIN entries
+                 ON entries.chat = commands.chat AND entries.number = commands.number
+             WHERE commands.chat = ?1 AND commands.result IS NOT NULL
+                 AND (commands.result = 'failed' OR commands.ended - commands.started >= ?2)
+             ORDER BY commands.number",
+        )?;
+        let rows = statement.query_map(params![chat.0, long], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, Option<i64>>(1)?,
+                row.get::<_, i64>(2)?,
+                row.get::<_, Option<i64>>(3)?,
+                row.get::<_, String>(4)?,
+            ))
+        })?;
+        let mut said = self.connection.prepare_cached(
+            r#"SELECT entry FROM entries WHERE chat = ?1 AND number = ?2
+             AND entry LIKE '{"reply":%'"#,
+        )?;
+        let mut runs: Vec<(Option<i64>, KeptRun)> = Vec::new();
+        for row in rows {
+            let (number, step, started, ended, entry) = row?;
+            // An entry this Cox cannot read tells nothing.
+            let Ok(Entry::ToolCall {
+                title,
+                about,
+                content,
+                result: Some(result),
+                ..
+            }) = serde_json::from_str::<Entry>(&entry)
+            else {
+                continue;
+            };
+            let command = KeptCommand {
+                number: usize::try_from(number)?,
+                line: title,
+                about,
+                content,
+                result,
+                started,
+                ended,
+            };
+            if let Some((_, run)) = runs.last_mut().filter(|(of, _)| *of == step) {
+                run.commands.push(command);
+                continue;
+            }
+            let said = match step {
+                Some(step) => said
+                    .query_row(params![chat.0, step], |row| row.get::<_, String>(0))
+                    .optional()?
+                    .and_then(|entry| match serde_json::from_str(&entry) {
+                        Ok(Entry::Reply(text)) => Some(text),
+                        _ => None,
+                    }),
+                None => None,
+            };
+            let of = counts
+                .iter()
+                .find(|(of, _)| *of == step)
+                .map_or(Ok(1), |(_, count)| usize::try_from(*count))?;
+            runs.push((
+                step,
+                KeptRun {
+                    said,
+                    of,
+                    commands: vec![command],
+                },
+            ));
+        }
+        Ok(runs.into_iter().map(|(_, run)| run).collect())
+    }
+
+    /// The `number`th entry of `chat`, from 0, if it keeps one this Cox
+    /// can read.
+    ///
+    /// # Errors
+    ///
+    /// When the database cannot be read.
+    pub fn entry(&self, chat: ChatId, number: usize) -> anyhow::Result<Option<Entry>> {
+        let entry: Option<String> = self
+            .connection
+            .query_row(
+                "SELECT entry FROM entries WHERE chat = ?1 AND number = ?2",
+                params![chat.0, i64::try_from(number)?],
+                |row| row.get(0),
+            )
+            .optional()?;
+        Ok(entry.and_then(|entry| serde_json::from_str(&entry).ok()))
     }
 
     /// The tabs of the stage of `folder`, where its chats work, if it has
@@ -1573,7 +1766,8 @@ impl Store {
     /// [`Self::steps`]), each entry with when it was first written, in
     /// milliseconds since the epoch, in order: the first line the human
     /// sent, and the receipts of how its agent's plan changed, the
-    /// questions and the commits of its agent.
+    /// questions and the commits of its agent, and what ran as a turn
+    /// ended or as something else happened (see [`Entry::checks`]).
     ///
     /// # Errors
     ///
@@ -1584,7 +1778,8 @@ impl Store {
         let mut statement = self.connection.prepare_cached(
             r#"SELECT at, entry FROM entries INDEXED BY milestones WHERE chat = ?1
              AND (entry LIKE '{"human":%' OR entry LIKE '{"plan_revised":%'
-             OR entry LIKE '{"question":%' OR entry LIKE '{"commits":%')
+             OR entry LIKE '{"question":%' OR entry LIKE '{"commits":%'
+             OR entry LIKE '{"checks":%' OR entry LIKE '{"event":%')
              ORDER BY number"#,
         )?;
         let rows = statement.query_map([chat.0], |row| {
@@ -2053,92 +2248,6 @@ mod tests {
             chats,
             [(first, Some(notes)), (second, None), (third, Some(cox))]
         );
-    }
-
-    #[test]
-    fn reads_the_questions_the_human_answered_the_last_answered_first() {
-        use crate::entry::{Picked, Question, QuestionOption};
-
-        let scratch = scratch();
-        let path = scratch.path().join("chats.sqlite");
-        let store = Store::open(&path).unwrap();
-        let app = store.project(Path::new("/src/app"), "app").unwrap();
-        let first = store.add_chat(Some(app), "plan").unwrap();
-        let second = store.add_chat(None, "home").unwrap();
-        let question = |answer, answered_at| Entry::Question {
-            message: "Which way?".to_owned(),
-            questions: vec![Question {
-                options: vec![QuestionOption {
-                    label: "Derive".to_owned(),
-                    description: Some("One source of truth".to_owned()),
-                }],
-                ..Question::default()
-            }],
-            answer,
-            answered_at,
-        };
-        let given = || {
-            Some(QuestionAnswer::Given(vec![Picked {
-                chosen: vec![0],
-                other: None,
-            }]))
-        };
-        store
-            .keep_entry(first, 0, &Entry::Human("plan it".to_owned()))
-            .unwrap();
-        // The first chat's question was asked first and answered last;
-        // the second's answer was kept by a Cox that kept no time of it.
-        store
-            .keep_entry(first, 1, &question(given(), Some(1000)))
-            .unwrap();
-        store
-            .keep_entry(
-                first,
-                2,
-                &question(Some(QuestionAnswer::Declined), Some(1001)),
-            )
-            .unwrap();
-        store.keep_entry(first, 3, &question(None, None)).unwrap();
-        store
-            .keep_entry(second, 0, &question(given(), None))
-            .unwrap();
-        store
-            .keep_folder(second, Some(Path::new("/elsewhere")))
-            .unwrap();
-        store
-            .connection
-            .execute("UPDATE entries SET at = number + chat * 10", [])
-            .unwrap();
-
-        let answered = Store::read(&path).unwrap().answered().unwrap();
-
-        let read: Vec<_> = answered
-            .iter()
-            .map(|kept| {
-                (
-                    kept.chat,
-                    kept.name.as_str(),
-                    kept.project.clone(),
-                    kept.folder.clone(),
-                    kept.at,
-                )
-            })
-            .collect();
-        assert_eq!(
-            read,
-            [
-                (first, "plan", Some(PathBuf::from("/src/app")), None, 1000),
-                (
-                    second,
-                    "home",
-                    None,
-                    Some(PathBuf::from("/elsewhere")),
-                    second.0 * 10
-                ),
-            ]
-        );
-        assert_eq!(answered[0].entry, question(given(), Some(1000)));
-        assert!(Store::read(&scratch.path().join("none.sqlite")).is_err());
     }
 
     #[test]
@@ -2826,6 +2935,16 @@ mod tests {
         let other = store.add_chat(None, "Chat 2").unwrap();
         let commits = Entry::Commits(Vec::new());
         let revised = Entry::PlanRevised(crate::entry::Revision::between(&[], &[], &[]));
+        let check = |name: &str| crate::entry::Check {
+            name: name.to_owned(),
+            state: crate::entry::CheckState::Passed,
+            said: None,
+        };
+        let checks = Entry::Checks(vec![check("goal")]);
+        let event = Entry::Event {
+            on: "goal.met".to_owned(),
+            checks: vec![check("docs")],
+        };
         let entries = [
             Entry::Note("instructions".to_owned()),
             Entry::Human("split the parser".to_owned()),
@@ -2835,6 +2954,8 @@ mod tests {
             Entry::Reply("reading".to_owned()),
             Entry::Human("and the lexer".to_owned()),
             commits.clone(),
+            checks.clone(),
+            event.clone(),
         ];
         for (number, entry) in entries.iter().enumerate() {
             store.keep_entry(chat, number, entry).unwrap();
@@ -2857,7 +2978,9 @@ mod tests {
             [
                 Entry::Human("split the parser".to_owned()),
                 revised,
-                commits
+                commits,
+                checks,
+                event
             ]
         );
         let plan: String = store
@@ -2865,12 +2988,234 @@ mod tests {
             .query_row(
                 r#"EXPLAIN QUERY PLAN SELECT number FROM entries INDEXED BY milestones
                  WHERE chat = 1 AND (entry LIKE '{"human":%' OR entry LIKE '{"plan_revised":%'
-                 OR entry LIKE '{"question":%' OR entry LIKE '{"commits":%')"#,
+                 OR entry LIKE '{"question":%' OR entry LIKE '{"commits":%'
+                 OR entry LIKE '{"checks":%' OR entry LIKE '{"event":%')"#,
                 [],
                 |row| row.get(3),
             )
             .unwrap();
         assert!(plan.contains("milestones"), "read by the index: {plan}");
+    }
+
+    /// A command the agent runs, `line`, as its entry keeps it, as the
+    /// `id`th call, ended as `result`, once it did.
+    fn command(id: &str, line: &str, result: Option<ToolCallResult>) -> Entry {
+        Entry::ToolCall {
+            id: id.to_owned(),
+            title: line.to_owned(),
+            command: true,
+            about: None,
+            content: vec![Content::Text(format!("ran {line}"))],
+            result,
+        }
+    }
+
+    /// When the command of the `number`th entry of `chat` started and
+    /// ended, as kept.
+    fn ran_at(store: &Store, chat: ChatId, number: i64) -> (i64, Option<i64>, Option<String>) {
+        store
+            .connection
+            .query_row(
+                "SELECT started, ended, result FROM commands WHERE chat = ?1 AND number = ?2",
+                params![chat.0, number],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap()
+    }
+
+    #[test]
+    fn a_command_starts_as_it_is_told_and_ends_as_it_ends() {
+        let store = Store::in_memory().unwrap();
+        let chat = store.add_chat(None, "Chat 1").unwrap();
+        let unstarted = |store: &Store| {
+            store
+                .connection
+                .execute("UPDATE commands SET started = 0", [])
+                .unwrap();
+        };
+        // The agent tells a placeholder first, as it writes the command.
+        store
+            .keep_entry(chat, 0, &command("1", "Terminal", None))
+            .unwrap();
+        assert_eq!(ran_at(&store, chat, 0).1, None);
+        unstarted(&store);
+
+        // The command, once written, starts it anew; told again as it
+        // was, it goes on.
+        store
+            .keep_entry(chat, 0, &command("1", "cargo test", None))
+            .unwrap();
+        let started = ran_at(&store, chat, 0).0;
+        assert!(started > 0, "started anew");
+        unstarted(&store);
+        store
+            .keep_entry(chat, 0, &command("1", "cargo test", None))
+            .unwrap();
+        assert_eq!(ran_at(&store, chat, 0).0, 0, "went on");
+
+        store
+            .keep_entry(
+                chat,
+                0,
+                &command("1", "cargo test", Some(ToolCallResult::Failed)),
+            )
+            .unwrap();
+        let (started, ended, result) = ran_at(&store, chat, 0);
+        assert_eq!(started, 0, "an end starts nothing");
+        assert!(ended.is_some_and(|ended| ended > 0));
+        assert_eq!(result.as_deref(), Some("failed"));
+
+        // Told anew once it ended, it ended as it did.
+        store
+            .keep_entry(
+                chat,
+                0,
+                &command("1", "cargo test -p a", Some(ToolCallResult::Failed)),
+            )
+            .unwrap();
+        assert_eq!(ran_at(&store, chat, 0), (started, ended, result));
+        assert_eq!(
+            store.entry(chat, 0).unwrap(),
+            Some(command(
+                "1",
+                "cargo test -p a",
+                Some(ToolCallResult::Failed)
+            ))
+        );
+    }
+
+    #[test]
+    fn reads_the_commands_that_ran_long_or_failed_by_their_steps() {
+        let store = Store::in_memory().unwrap();
+        let chat = store.add_chat(None, "Chat 1").unwrap();
+        let other = store.add_chat(None, "Chat 2").unwrap();
+        let done = Some(ToolCallResult::Completed);
+        let entries = [
+            Entry::Human("fix it".to_owned()),
+            Entry::Reply("Now I test.\n\nThen more.".to_owned()),
+            command("1", "cargo test", done),
+            Entry::Thought("hm".to_owned()),
+            command("2", "ls", done),
+            command("3", "false", Some(ToolCallResult::Failed)),
+            Entry::Reply("Then I lint.".to_owned()),
+            command("4", "cargo clippy", Some(ToolCallResult::Cancelled)),
+            Entry::Human("again".to_owned()),
+            command("5", "cargo build", done),
+            command("6", "sleep 60", None),
+        ];
+        for (number, entry) in entries.iter().enumerate() {
+            store.keep_entry(chat, number, entry).unwrap();
+        }
+        store
+            .keep_entry(other, 0, &command("1", "cargo test", done))
+            .unwrap();
+        // How long each ran: 9 s, 1 s, 1 s, 30 s, 12 s.
+        for (number, secs) in [(2, 9), (4, 1), (5, 1), (7, 30), (9, 12)] {
+            store
+                .connection
+                .execute(
+                    "UPDATE commands SET started = 1000, ended = 1000 + ?3 * 1000
+                     WHERE chat = ?1 AND number = ?2",
+                    params![chat.0, number, secs],
+                )
+                .unwrap();
+        }
+
+        let runs = store.ran(chat, 9_000).unwrap();
+
+        let told: Vec<(Option<&str>, usize, Vec<&str>)> = runs
+            .iter()
+            .map(|run| {
+                (
+                    run.said.as_deref(),
+                    run.of,
+                    run.commands
+                        .iter()
+                        .map(|command| command.line.as_str())
+                        .collect(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            told,
+            [
+                (
+                    Some("Now I test.\n\nThen more."),
+                    3,
+                    vec!["cargo test", "false"]
+                ),
+                (Some("Then I lint."), 1, vec!["cargo clippy"]),
+                // After the human's line, before the agent said anything;
+                // the one that runs yet is counted, not told.
+                (None, 2, vec!["cargo build"]),
+            ]
+        );
+        let test = &runs[0].commands[0];
+        assert_eq!(
+            (test.number, test.started, test.ended, test.result),
+            (2, 1000, Some(10_000), ToolCallResult::Completed)
+        );
+        assert_eq!(test.content, [Content::Text("ran cargo test".to_owned())]);
+        assert_eq!(runs[1].commands[0].result, ToolCallResult::Cancelled);
+    }
+
+    #[test]
+    fn the_commands_kept_before_tell_how_they_failed_through_the_upgrade() {
+        let directory = scratch();
+        let path = directory.path().join("chats.sqlite");
+        database_of_version(&path, 25);
+        let entries = [
+            Entry::Human("fix it".to_owned()),
+            Entry::Reply("Now I test.".to_owned()),
+            command("1", "cargo test", Some(ToolCallResult::Failed)),
+            command("2", "cargo build", Some(ToolCallResult::Completed)),
+            Entry::ToolCall {
+                id: "3".to_owned(),
+                title: "Read a.rs".to_owned(),
+                command: false,
+                about: None,
+                content: Vec::new(),
+                result: Some(ToolCallResult::Failed),
+            },
+            command("4", "sleep 60", None),
+        ];
+        {
+            let connection = Connection::open(&path).unwrap();
+            for (number, entry) in entries.iter().enumerate() {
+                connection
+                    .execute(
+                        "INSERT INTO entries (chat, number, at, entry) VALUES (1, ?1, 7, ?2)",
+                        params![
+                            i64::try_from(number).unwrap(),
+                            serde_json::to_string(entry).unwrap()
+                        ],
+                    )
+                    .unwrap();
+            }
+        }
+
+        let store = Store::open(&path).unwrap();
+
+        let chat = store.chats().unwrap()[0].id;
+        // No end was kept: of those that ended, the one that failed.
+        let runs = store.ran(chat, 0).unwrap();
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].said.as_deref(), Some("Now I test."));
+        assert_eq!(runs[0].of, 3);
+        let failed = &runs[0].commands[0];
+        assert_eq!(
+            (failed.line.as_str(), failed.started, failed.ended),
+            ("cargo test", 7, None)
+        );
+        // It goes on as a command kept now is, from where it was.
+        store
+            .keep_entry(
+                chat,
+                5,
+                &command("4", "sleep 60", Some(ToolCallResult::Failed)),
+            )
+            .unwrap();
+        assert_eq!(store.ran(chat, 0).unwrap()[0].commands.len(), 2);
     }
 
     #[test]
@@ -3324,6 +3669,50 @@ mod tests {
             store.progress(0).unwrap().done,
             [(plans[0].chat, "Read the code".to_owned(), 20)]
         );
+    }
+
+    #[test]
+    fn the_checks_kept_before_tell_the_story_through_the_upgrade() {
+        use crate::entry::{Check, CheckState};
+        let directory = scratch();
+        let path = directory.path().join("chats.sqlite");
+        database_of_version(&path, 24);
+        let checks = Entry::Checks(vec![Check {
+            name: "goal".to_owned(),
+            state: CheckState::Failed,
+            said: Some("1 test failed".to_owned()),
+        }]);
+        let entries = [
+            Entry::Human("fix it".to_owned()),
+            Entry::Reply("Done.".to_owned()),
+            checks.clone(),
+        ];
+        {
+            let connection = Connection::open(&path).unwrap();
+            for (number, entry) in entries.iter().enumerate() {
+                connection
+                    .execute(
+                        "INSERT INTO entries (chat, number, at, entry) VALUES (1, ?1, ?2, ?3)",
+                        params![
+                            i64::try_from(number).unwrap(),
+                            now(),
+                            serde_json::to_string(entry).unwrap()
+                        ],
+                    )
+                    .unwrap();
+            }
+        }
+
+        let store = Store::open(&path).unwrap();
+
+        let chat = store.chats().unwrap()[0].id;
+        let told: Vec<Entry> = store
+            .milestones(chat)
+            .unwrap()
+            .into_iter()
+            .map(|(_, entry)| entry)
+            .collect();
+        assert_eq!(told, [Entry::Human("fix it".to_owned()), checks]);
     }
 
     #[test]

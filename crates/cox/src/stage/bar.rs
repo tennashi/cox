@@ -99,6 +99,21 @@ struct Present {
 }
 
 impl Stage {
+    /// The checkout of each repository of the stage's folder the human
+    /// chose to see on its tab of what changed, if it has one, which the
+    /// bar counts the files changed in.
+    fn checkouts_chosen(&self, cx: &App) -> Vec<coxd::repositories::Chosen> {
+        self.tabs
+            .iter()
+            .find_map(|tab| match &tab.content {
+                TabContent::Changes(changes) if changes.read(cx).folder() == self.cwd => {
+                    Some(changes.read(cx).checkouts().to_vec())
+                }
+                _ => None,
+            })
+            .unwrap_or_default()
+    }
+
     /// The view of the project `tab` shows, if it shows one: what changed
     /// in the project's files, or a plugin's page.
     fn view_of(&self, tab: &Tab, plugins: &[Plugin], cx: &App) -> Option<View> {
@@ -212,7 +227,6 @@ impl Stage {
             let glyph = match plugin.name.as_str() {
                 ACTIVITY => Icon::Inbox,
                 MAP => Icon::Map,
-                "commands" => Icon::Terminal,
                 "wiki" => Icon::Book,
                 "triggers" => Icon::Bolt,
                 _ => Icon::Plug,
@@ -537,23 +551,29 @@ impl Stage {
 /// the human, now and then, while the stage is open, for the bar to show
 /// "Changes" only in a Git repository, or a project with one among its
 /// directories (see [`coxd::repositories::of`]), with the count of
-/// the files of all of them, "Map" only for a project with a map, and the
-/// count on "Activity".
+/// the files of all of them, each in the checkout its tab of what changed
+/// shows (see [`coxd::repositories::count`]), "Map" only for a project
+/// with a map, and the count on "Activity".
 pub(super) fn count_changes(cx: &mut Context<Stage>) -> Task<()> {
     cx.spawn(async move |this, cx| {
         loop {
             let Ok(open) = this.read_with(cx, |stage, cx| {
-                stage.panel.read(cx).is_open().then(|| stage.cwd.clone())
+                stage
+                    .panel
+                    .read(cx)
+                    .is_open()
+                    .then(|| (stage.cwd.clone(), stage.checkouts_chosen(cx)))
             }) else {
                 break;
             };
-            if let Some(cwd) = open {
+            if let Some((cwd, chosen)) = open {
                 let (changed, mapped, waiting) = cx
                     .background_executor()
                     .spawn(async move {
                         let mapped = !cox_editor::map::list(&cwd).is_empty();
                         let waiting = super::activity::waiting(&cwd);
-                        (coxd::repositories::count(&cwd).ok(), mapped, waiting)
+                        let changed = coxd::repositories::count(&cwd, &chosen, &cwd).ok();
+                        (changed, mapped, waiting)
                     })
                     .await;
                 let counted = this.update(cx, |stage, cx| {
