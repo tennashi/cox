@@ -2436,6 +2436,9 @@ impl Daemon {
             ChatRequest::ReadChat { chat, answer } => {
                 answer.send(self.read_chat(key, chat)).ok();
             }
+            ChatRequest::ResolveChat { chat, answer } => {
+                answer.send(self.resolve_chat(key, chat)).ok();
+            }
             ChatRequest::ProposeAbout { about, why, answer } => {
                 answer.send(self.propose_about(key, &about, why)).ok();
             }
@@ -5983,6 +5986,72 @@ mod tests {
                 .map(|&key| resolved(&opener.daemon, key))
                 .collect();
             assert_eq!(done, [Some(ResolvedBy::Human), None, None]);
+        });
+    }
+
+    #[test]
+    fn an_agent_marks_another_chat_done_but_its_own_one_at_work_or_one_asking() {
+        on_daemon(async {
+            let mut opener = Opener::new(&["Look", "Fix", "Ask"]).await;
+            submit(&mut opener.daemon, opener.key);
+            opener.pump().await;
+            opener.ends(0, "Found it.");
+            tells(
+                &opener.agent(Some(2)),
+                [AgentEvent::PermissionRequest {
+                    id: "rm".to_owned(),
+                    title: Some("rm -rf build".to_owned()),
+                    content: None,
+                    options: vec!["Allow".to_owned(), "Reject".to_owned()],
+                }],
+            );
+            opener.pump().await;
+            let number =
+                |daemon: &Daemon, key: u64| daemon.slot(key).unwrap().kept.unwrap().number();
+            let [look, fix, ask] = opener.subagents[..] else {
+                panic!("three subagents");
+            };
+            // Fix, at work, asks to mark each chat done.
+            let resolve = |daemon: &mut Daemon, chat: i64| {
+                let (answer, mut resolved) = oneshot::channel();
+                daemon.asked(fix, ChatRequest::ResolveChat { chat, answer });
+                resolved.try_recv().unwrap()
+            };
+            let key = opener.key;
+            let daemon = &mut opener.daemon;
+            let [own, opener_number, ask_number, look_number] =
+                [fix, key, ask, look].map(|key| number(daemon, key));
+
+            let own = resolve(daemon, own).unwrap_err();
+            assert!(
+                own.ends_with(
+                    "is this chat: the human marks it done, or Cox does once its work ends."
+                ),
+                "{own}"
+            );
+            let at_work = resolve(daemon, opener_number).unwrap_err();
+            assert!(at_work.contains("is at work"), "{at_work}");
+            let asking = resolve(daemon, ask_number).unwrap_err();
+            assert!(asking.contains("waits for the human"), "{asking}");
+            let none = resolve(daemon, 999).unwrap_err();
+            assert_eq!(none, "This project has no chat 999.");
+            assert_eq!(resolved(daemon, fix), None);
+            assert_eq!(resolved(daemon, key), None);
+            assert_eq!(resolved(daemon, ask), None);
+
+            let done = resolve(daemon, look_number).unwrap();
+            assert_eq!(
+                done,
+                format!(
+                    "Marked chat {look_number}, \"Look\", done. Anything that arrives in it \
+                     reopens it."
+                )
+            );
+            assert_eq!(resolved(daemon, look), Some(ResolvedBy::Agent));
+            let again = resolve(daemon, look_number).unwrap();
+            assert!(again.ends_with("is marked done already."), "{again}");
+            opener.pump().await;
+            assert!(!runs(&mut opener.daemon, look), "its agent closed");
         });
     }
 

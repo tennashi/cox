@@ -32,6 +32,7 @@ const SHOW_MAP: &str = "show_map";
 const SHOW_MEDIA: &str = "show_media";
 const RUN_COMMAND: &str = "run_command";
 const READ_CHAT: &str = "read_chat";
+const RESOLVE_CHAT: &str = "resolve_chat";
 const PROPOSE_GOAL: &str = "propose_goal";
 const PROPOSE_NAME: &str = "propose_name";
 const PROPOSE_ABOUT: &str = "propose_about";
@@ -225,6 +226,7 @@ fn all_tools() -> Value {
     subagent::agent_continue_tool(),
     subagent::agent_stop_tool(),
     read_chat_tool(),
+    resolve_chat_tool(),
     show_media_tool(),
     propose_goal_tool(),
     propose_name_tool(),
@@ -825,6 +827,33 @@ fn read_chat_tool() -> Value {
     })
 }
 
+/// The tool that marks another chat of the project done, as the agent
+/// learns of it.
+fn resolve_chat_tool() -> Value {
+    json!(
+    {
+        "name": RESOLVE_CHAT,
+        "description": "Marks another chat of this project done, as the human's Resolve \
+            does: it folds away at the end of the human's list, is no longer counted among \
+            what waits for them, and its agent closes; the chats it opened that are neither \
+            at work nor asking the human are marked done with it, and the worktrees made \
+            for them may go. Anything that arrives in it later, as a line, a report or CI \
+            that ended, reopens it. Use it for a chat whose work is over, once you read \
+            with read_chat that it is. It marks neither this chat, nor one at work, nor one \
+            that waits for the human to answer it.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "chat": {
+                    "type": "integer",
+                    "description": "The chat's number, as the project's chats were told you.",
+                },
+            },
+            "required": ["chat"],
+        },
+    })
+}
+
 /// The tool that proposes what the chat's project is, as the agent learns
 /// of it.
 fn propose_about_tool() -> Value {
@@ -946,6 +975,7 @@ pub(super) async fn call(
         subagent::AGENT_CONTINUE => subagent::agent_continue(arguments, hands_off, chats).await,
         subagent::AGENT_STOP => subagent::agent_stop(arguments, chats).await,
         READ_CHAT => read_chat(arguments, chats).await,
+        RESOLVE_CHAT => resolve_chat(arguments, chats).await,
         PROPOSE_GOAL => propose_goal(arguments, chats).await,
         PROPOSE_NAME => propose_name(arguments, chats).await,
         PROPOSE_ABOUT => propose_about(arguments, chats).await,
@@ -1507,6 +1537,25 @@ async fn read_chat(
         .map_err(|_| "the chat has closed".to_owned())?;
     read.await
         .map_err(|_| "the chat closed before it read the other".to_owned())?
+}
+
+/// Asks the window to mark the chat of the project `arguments` name
+/// done, and tells the agent what it marked.
+async fn resolve_chat(
+    arguments: &Value,
+    chats: &UnboundedSender<ChatRequest>,
+) -> Result<String, String> {
+    let chat = arguments
+        .get("chat")
+        .and_then(Value::as_i64)
+        .ok_or("no chat: give the chat's number as `chat`")?;
+    let (answer, resolved) = oneshot::channel();
+    chats
+        .send(ChatRequest::ResolveChat { chat, answer })
+        .map_err(|_| "the chat has closed".to_owned())?;
+    resolved
+        .await
+        .map_err(|_| "the chat closed before it marked the other done".to_owned())?
 }
 
 /// Asks the window to show the human what `arguments` propose the chat's
@@ -2218,6 +2267,7 @@ mod tests {
             "agent_continue",
             "agent_stop",
             "read_chat",
+            "resolve_chat",
             "show_media",
             "propose_goal",
             "propose_name",
@@ -2884,6 +2934,38 @@ mod tests {
         assert_eq!(window.await.unwrap(), 3);
         // No number asks nothing.
         let none = read(json!({ "chat": "Cart" })).await;
+        assert_eq!(none["isError"], true);
+    }
+
+    #[tokio::test]
+    async fn marks_another_chat_of_the_project_done() {
+        let (sent, _requests) = unbounded_channel();
+        let (chats, mut asked) = unbounded_channel();
+        let window = tokio::spawn(async move {
+            let Some(ChatRequest::ResolveChat { chat, answer }) = asked.recv().await else {
+                panic!("the window was not asked");
+            };
+            let _ = answer.send(Ok("Marked chat 3, \"Cart\", done.".to_owned()));
+            chat
+        });
+        let resolve = |arguments: Value| {
+            let params = json!({ "name": RESOLVE_CHAT, "arguments": arguments });
+            let (sent, chats) = (sent.clone(), chats.clone());
+            async move {
+                call(&params, Path::new("/work"), None, false, &sent, &chats)
+                    .await
+                    .unwrap()
+            }
+        };
+        let answered = resolve(json!({ "chat": 3 })).await;
+        assert_eq!(answered["isError"], false);
+        assert_eq!(
+            answered["content"][0]["text"],
+            "Marked chat 3, \"Cart\", done."
+        );
+        assert_eq!(window.await.unwrap(), 3);
+        // No number asks nothing.
+        let none = resolve(json!({ "chat": "Cart" })).await;
         assert_eq!(none["isError"], true);
     }
 

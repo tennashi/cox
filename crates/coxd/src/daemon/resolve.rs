@@ -89,6 +89,62 @@ impl Daemon {
         self.tidy_worktrees(Instant::now(), true);
     }
 
+    /// Marks the chat kept as `number`, of the project of the chat `key`,
+    /// done, as its agent asked, the way the human's Resolve does (see
+    /// [`Self::resolve`]), and answers what was marked, or why it cannot
+    /// be: not the chat `key` itself, nor one at work or asking the
+    /// human. One done already stays so.
+    pub(super) fn resolve_chat(&mut self, key: u64, number: i64) -> Result<String, String> {
+        let now = Instant::now();
+        let slot = self
+            .seen_by(key)
+            .ok_or("the chat has closed")?
+            .find(|slot| slot.kept.is_some_and(|kept| kept.number() == number))
+            .ok_or_else(|| format!("This project has no chat {number}."))?;
+        let (target, name) = (slot.key, slot.name.clone());
+        let chat = format!("Chat {number}, \"{name}\",");
+        if target == key {
+            return Err(format!(
+                "{chat} is this chat: the human marks it done, or Cox does once its work ends."
+            ));
+        }
+        if slot.resolved.is_some() {
+            return Ok(format!("{chat} is marked done already."));
+        }
+        if slot.state == State::Asking {
+            return Err(format!(
+                "{chat} waits for the human to answer it, so it is not marked done."
+            ));
+        }
+        if slot.at_work(now) {
+            return Err(format!(
+                "{chat} is at work, so it is not marked done. Mark it once its work ends."
+            ));
+        }
+        let open: Vec<u64> = self
+            .seen_by(key)
+            .into_iter()
+            .flatten()
+            .filter(|slot| slot.resolved.is_none() && slot.key != target)
+            .map(|slot| slot.key)
+            .collect();
+        self.resolve(target, ResolvedBy::Agent);
+        let with: Vec<String> = open
+            .into_iter()
+            .filter_map(|key| self.slot(key))
+            .filter(|slot| slot.resolved.is_some())
+            .filter_map(|slot| slot.kept)
+            .map(|kept| format!("chat {}", kept.number()))
+            .collect();
+        let mut done = format!("Marked chat {number}, \"{name}\", done");
+        if !with.is_empty() {
+            done.push_str(", with the chats it opened: ");
+            done.push_str(&with.join(", "));
+        }
+        done.push_str(". Anything that arrives in it reopens it.");
+        Ok(done)
+    }
+
     /// Reopens the chat `key`, if it was marked done.
     pub(super) fn reopen(&mut self, key: u64) {
         let store = Rc::clone(&self.store);
