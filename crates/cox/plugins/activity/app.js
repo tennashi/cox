@@ -1,7 +1,8 @@
-// What goes on in the folder of the stage, drawn by a page of the stage:
-// read as JSON from `cox://api/activity`, and again every two seconds, as
-// Cox's own tabs follow what they show, and drawn afresh only when it
-// changed.
+// What goes on in the project of the stage, drawn by a page of the stage,
+// alike in every stage of the project, whichever of its chats the window
+// shows: read as JSON from `cox://api/activity`, and again every two
+// seconds, as Cox's own tabs follow what they show, and drawn afresh only
+// when it changed.
 //
 // On top, how it all stands: how many chats wait for the human, how many
 // are at work, and how many steps got done over the last 15 minutes,
@@ -12,7 +13,8 @@
 // stepped back; under it, stepped in, the subagents its agent opened,
 // those that came from a step of its plan under the step, and theirs
 // under them, as deep as they go, which a click on how many there are
-// folds away, as those three deep are at first. A click on its name
+// folds away, as those three deep are at first, but for those over the
+// chat the window shows, whose line is marked. A click on its name
 // shows the chat, by going to
 // `cox://chat/<key>`; a click elsewhere on the line opens it, and its
 // story is read, from `cox://api/activity/timeline/<chat>`, for it alone:
@@ -73,9 +75,10 @@ const piecesOpened = new Set();
 /// are folded away at first.
 const FOLDED = 2;
 /// Whether the subagents under a chat are folded away, by its key, as the
-/// human last chose.
+/// human last chose: unless they chose, those deep enough are, but not
+/// over the chat the window shows.
 const folds = new Map();
-const folded = (chat) => folds.get(chat.key) ?? chat.depth >= FOLDED;
+const folded = (chat) => folds.get(chat.key) ?? (chat.depth >= FOLDED && !chat.below.some((sub) => sub.key === told.shown));
 
 const esc = (s) =>
   String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
@@ -222,7 +225,7 @@ function row(chat, indent) {
     `<a href="cox://chat/${chat.key}" title="shows the chat">${chat.sketch ? "↳ " : ""}${esc(chat.name)}</a>${hint(chat)}${more}`;
   const plan = chat.plan ?? [];
   return (
-    `<div class="row ${chat.stands.as}${open ? " open" : ""}" style="--indent: ${indent}" data-key="${chat.key}" title="${esc(chat.stands.says)}">` +
+    `<div class="row ${chat.stands.as}${open ? " open" : ""}${chat.key === told.shown ? " shown" : ""}" style="--indent: ${indent}" data-key="${chat.key}" title="${esc(chat.key === told.shown ? `${chat.stands.says}, shown in the window` : chat.stands.says)}">` +
     `<span class="name">${named}</span>` +
     `${plan.length ? bar(plan) : `<span class="bar"></span>`}<span class="steps">${plan.length ? counted(chat.progress) : ""}</span>` +
     `<span class="now">${esc(now(chat))}</span></div>` +

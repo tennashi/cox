@@ -16,7 +16,11 @@
 //! subagents' chats its agent opened, and theirs, at any depth, each
 //! under the step it came from, if it tells (see [`linked`]), with the
 //! chats above them though these are not listed on their own (see
-//! [`tree_of`]). The home, where Cox lands, tells of every folder.
+//! [`tree_of`]). The home, where Cox lands, tells of every folder. The
+//! stage of a folder a chat works in apart, as a sketch or a worktree,
+//! tells of the whole project, as the project's does, whichever of its
+//! chats the window shows (see [`project_of`]), and the chat the window
+//! shows is marked there.
 //!
 //! A chat's story, what it did when, is read for the chat alone, once the
 //! human opens its line (see [`timeline`]), and the thread of a step of
@@ -178,6 +182,9 @@ pub struct Told {
     pub home: PathBuf,
     /// Why no chat shows its pull requests, as coxd says, if that is so.
     pub github: Option<String>,
+    /// The key of the chat the window shows, if it shows one, which the
+    /// page marks wherever the chat is on it.
+    pub shown: Option<u64>,
 }
 
 /// How the chats stood when the window last told.
@@ -217,25 +224,54 @@ fn of_folder(told: &Told, chat: &Chat, root: &Path) -> bool {
     root == told.home || chat.cwd == root || chat.project == root
 }
 
+/// The folder the page of the stage of `root` tells of: that of the
+/// project whose chats work in `root`, as in a sketch or a worktree of
+/// it, so that the page tells the same, of every chat of the project,
+/// whichever of them the window shows; `root` itself when it is the
+/// folder of a project, or the home, or of none `told` knows.
+fn project_of(told: &Told, root: &Path) -> PathBuf {
+    let projects = || told.projects.iter().map(|(folder, _)| folder.as_path());
+    if root == told.home || projects().any(|folder| folder == root) {
+        return root.to_owned();
+    }
+    told.chats
+        .iter()
+        .find(|chat| chat.cwd == root)
+        .map(|chat| chat.project.clone())
+        // A worktree in the project's folder, whose chats are gone.
+        .or_else(|| {
+            projects()
+                .filter(|folder| *folder != told.home && root.starts_with(folder))
+                .max_by_key(|folder| folder.components().count())
+                .map(Path::to_owned)
+        })
+        .unwrap_or_else(|| root.to_owned())
+}
+
 /// Whether `chat` waits for the human and is of the folder `root`, or
 /// of any, when `root` is the home of `told`.
 fn waits_in(told: &Told, chat: &Chat, root: &Path) -> bool {
     chat.waits() && of_folder(told, chat, root)
 }
 
-/// How many chats of the folder `root` wait for the human, for the bar.
+/// How many chats wait for the human of those the page of the stage of
+/// `root` tells of (see [`project_of`]), for the bar.
 #[must_use]
 pub fn waiting(root: &Path) -> usize {
-    let told = now();
+    waiting_of(&now(), root)
+}
+
+fn waiting_of(told: &Told, root: &Path) -> usize {
+    let root = project_of(told, root);
     told.chats
         .iter()
-        .filter(|chat| waits_in(&told, chat, root))
+        .filter(|chat| waits_in(told, chat, &root))
         .count()
 }
 
-/// What goes on in the folder `root`, as JSON, from how the chats stand
-/// now, and what they do and ask, as the window told of their
-/// conversations.
+/// What goes on in the project of the folder `root`, as its stage's page
+/// tells it (see [`project_of`]), as JSON, from how the chats stand now,
+/// and what they do and ask, as the window told of their conversations.
 #[must_use]
 pub fn told(root: &Path) -> Value {
     let at = jiff::Timestamp::now().as_millisecond();
@@ -997,14 +1033,16 @@ fn steps_of(steps: &[Step], on: &[(u64, usize)]) -> Vec<Value> {
         .collect()
 }
 
-/// What goes on in the folder `root`, as [`told`] tells it, the chats
-/// standing as `told` says, doing and asking as `now` says.
+/// What goes on in the project of the folder `root`, as [`told`] tells
+/// it, the chats standing as `told` says, doing and asking as `now`
+/// says.
 fn told_of(
     told: &Told,
     root: &Path,
     plans: &Plans<'_>,
     now: &dyn Fn(u64) -> Option<commands::Now>,
 ) -> Value {
+    let root = &project_of(told, root);
     let busy = told
         .chats
         .iter()
@@ -1012,8 +1050,9 @@ fn told_of(
         .count();
     let mut told_json = json!({
         "folder": root,
-        "home": root == told.home,
+        "home": *root == told.home,
         "github": told.github,
+        "shown": told.shown,
         "waiting": waiting_in(told, root, now),
         "plans": planned(told, root, plans, now),
         "summaries": summaries(told, root, plans),
@@ -1252,7 +1291,7 @@ mod tests {
             chats: vec![main, subagent, under_it, silent],
             projects: vec![(root.clone(), "app".to_owned())],
             home: folder.path().to_owned(),
-            github: None,
+            ..Told::default()
         };
 
         let json = told_of(&told, &root, &NO_PLANS, &|_| None);
@@ -1307,7 +1346,7 @@ mod tests {
             ],
             projects: vec![(root.to_path_buf(), "app".to_owned())],
             home: root.join("home"),
-            github: None,
+            ..Told::default()
         };
         let json = told_in(&told, &root);
         let waiting = json["waiting"].as_array().unwrap();
@@ -1361,7 +1400,7 @@ mod tests {
                 (other.clone(), "other".to_owned()),
             ],
             home: home.clone(),
-            github: None,
+            ..Told::default()
         };
         let now = |key: u64| {
             Some(commands::Now {
@@ -1408,6 +1447,7 @@ mod tests {
                 "github",
                 "home",
                 "plans",
+                "shown",
                 "summaries",
                 "waiting"
             ]
@@ -1883,6 +1923,101 @@ mod tests {
     }
 
     #[test]
+    fn the_stage_of_a_sketch_or_a_worktree_tells_of_the_whole_project_as_its_own_does() {
+        let folder = TempDir::new();
+        let project = folder.join("app");
+        let other = folder.join("other");
+        let sketch = folder.join("sketches").join("scratch-1");
+        let worktree = project.join("worktrees").join("app").join("parser");
+        let minute = 60 * 1000;
+        let at = 100 * 24 * 60 * minute;
+        let listed = |key: u64, cwd: &Path, parent: Option<u64>| {
+            let mut listed = chat(key, cwd, &project, false, false);
+            (listed.kept, listed.parent, listed.working) = (Some(kept(key)), parent, true);
+            listed
+        };
+        let mut asking = listed(4, &project, Some(1));
+        (asking.working, asking.asking) = (false, true);
+        let mut elsewhere = listed(7, &other, None);
+        elsewhere.project.clone_from(&other);
+        // Two chats of the project the human opened, each with subagents
+        // of its own: 1's in a sketch, with one more there, and one beside
+        // it, which asks the human something; 5's in a worktree.
+        let told = Told {
+            chats: vec![
+                listed(1, &project, None),
+                listed(2, &sketch, Some(1)),
+                listed(3, &sketch, Some(2)),
+                asking,
+                listed(5, &project, None),
+                listed(6, &worktree, Some(5)),
+                elsewhere,
+            ],
+            projects: vec![
+                (folder.join("home"), "~".to_owned()),
+                (project.clone(), "app".to_owned()),
+                (other.clone(), "other".to_owned()),
+            ],
+            home: folder.join("home"),
+            github: None,
+            shown: Some(3),
+        };
+        let moved = Progress {
+            active: [1, 2, 3, 5, 6, 7]
+                .into_iter()
+                .map(|chat| (kept(chat), at - minute))
+                .collect(),
+            done: vec![
+                (kept(3), "Seed the corpus".to_owned(), at - 5 * minute),
+                (kept(7), "Its own".to_owned(), at - 10 * minute),
+                (kept(6), "Build on Linux".to_owned(), at - 30 * minute),
+            ],
+            resolved: Vec::new(),
+        };
+        let plans = Plans {
+            moved: &moved,
+            at,
+            ..NO_PLANS
+        };
+        let page = |root: &Path| told_of(&told, root, &plans, &|_| None);
+
+        let json = page(&project);
+
+        assert_eq!(
+            tree(&json),
+            [
+                "1: null",
+                "  2: null",
+                "    3: null",
+                r#"  4: "asks you""#,
+                "5: null",
+                "  6: null"
+            ]
+        );
+        assert_eq!(json["folder"], json!(project));
+        assert_eq!(json["shown"], 3);
+        assert_eq!(json["busy"], 5);
+        let steps: Vec<u64> = json["summaries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|summary| summary["steps"].as_u64().unwrap())
+            .collect();
+        assert_eq!(steps, [1, 2, 2]);
+        assert_eq!(waiting_of(&told, &project), 1);
+        // The stage of the sketch, of the worktree, and of a worktree in
+        // the project's folder whose chats are gone, tell the same.
+        let gone = project.join("worktrees").join("app").join("gone");
+        for root in [&sketch, &worktree, &gone] {
+            assert_eq!(page(root), json, "{}", root.display());
+            assert_eq!(waiting_of(&told, root), 1, "{}", root.display());
+        }
+        // Another project's tells of its own.
+        assert_eq!(page(&other)["busy"], 1);
+        assert_eq!(waiting_of(&told, &other), 0);
+    }
+
+    #[test]
     fn how_far_each_plan_went_is_told_for_the_page_not_to_count_it() {
         let root = TempDir::new();
         let listed = |key: u64, parent: Option<u64>| {
@@ -2117,7 +2252,7 @@ mod tests {
             ],
             projects: Vec::new(),
             home: root.join("home"),
-            github: None,
+            ..Told::default()
         };
         // What the page is told after a restart: the plans and those
         // dismissed read again from where they are kept.
@@ -2195,7 +2330,7 @@ mod tests {
             chats,
             projects: vec![(root.clone(), "app".to_owned())],
             home: folder.path().to_owned(),
-            github: None,
+            ..Told::default()
         };
         let moved = Progress {
             active: vec![
@@ -2256,7 +2391,7 @@ mod tests {
             ],
             projects: vec![(root.clone(), "app".to_owned())],
             home: folder.path().to_owned(),
-            github: None,
+            ..Told::default()
         };
         let moved = Progress {
             active: [1, 2, 3, 5]
@@ -2417,6 +2552,7 @@ mod tests {
             projects: vec![(root.to_path_buf(), "app".to_owned())],
             home: root.join("home"),
             github: Some("gh is not logged in".to_owned()),
+            ..Told::default()
         };
         let json = told_in(&told, &root);
         let plans = json["plans"].as_array().unwrap();
