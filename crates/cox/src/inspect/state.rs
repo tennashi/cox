@@ -446,7 +446,18 @@ fn tabs(told: &mut String, view: &ChatView, cx: &App) {
                 None => format!("file {}", path.display()),
             },
             KeptTab::Files { .. } => "files, no file chosen".to_owned(),
-            KeptTab::Changes { folder } => format!("changes in {}", folder.display()),
+            KeptTab::Changes { folder, checkouts } => {
+                let mut what = format!("changes in {}", folder.display());
+                for (name, checkout) in checkouts {
+                    let _ = write!(
+                        what,
+                        ", {} in {}",
+                        name.as_deref().unwrap_or("its repository"),
+                        checkout.display()
+                    );
+                }
+                what
+            }
             KeptTab::Flow { call } => format!("flow of tool call {call}"),
             KeptTab::Android { device } => format!("android emulator {device}"),
             KeptTab::AndroidDevices => "android devices".to_owned(),
