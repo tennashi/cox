@@ -55,7 +55,9 @@
 //!   `cox://api/activity/timeline/{"chat":<chat>}` tells, alone, the story
 //!   of the chat coxd keeps as `<chat>`: when it started, what it did
 //!   when, and when and how it ended (see
-//!   [`crate::stage::activity::timeline`]).
+//!   [`crate::stage::activity::timeline`]); and
+//!   `cox://api/activity/command/{"chat":<chat>,"number":<entry>}`, a
+//!   command of the story, laid out, with what it printed.
 //! - `cox://api/commands`: what the agents of the folder's chats run,
 //!   step by step, and what a command that ran long printed (see
 //!   [`crate::stage::commands`]).
@@ -408,6 +410,13 @@ impl Plugins {
                         &serde_json::from_str::<activity::Of>(&asked).ok()?,
                     ));
                 }
+                // A command of a story, laid out, read only once the
+                // human opened it.
+                "command" => {
+                    return Some(activity::command(
+                        &serde_json::from_str::<activity::OfCommand>(&asked).ok()?,
+                    ));
+                }
                 _ => return None,
             }
         }
@@ -695,6 +704,55 @@ mod tests {
             Some(b"null".to_vec())
         );
         assert_eq!(body("cox://api/activity/timeline/not-a-chat"), None);
+        coxd::storage::keep_on_this_thread(None);
+    }
+
+    #[test]
+    fn a_command_of_a_story_is_told_laid_out_once_opened() {
+        use cox_core::entry::{Content, Entry, ToolCallResult};
+        let root = TempDir::new();
+        coxd::storage::keep_on_this_thread(Some(root.join("data")));
+        let store =
+            cox_core::store::Store::open(&coxd::storage::path(coxd::storage::Kept::Chats).unwrap())
+                .unwrap();
+        let project = store.project(&root, "app").unwrap();
+        let chat = store.add_chat(Some(project), "Chat 1").unwrap();
+        store
+            .keep_entry(
+                chat,
+                0,
+                &Entry::ToolCall {
+                    id: "1".to_owned(),
+                    title: "cargo test".to_owned(),
+                    command: true,
+                    about: None,
+                    content: vec![Content::Text("test result: ok".to_owned())],
+                    result: Some(ToolCallResult::Completed),
+                },
+            )
+            .unwrap();
+        let plugins = Plugins::new(root.to_path_buf(), Outlines::new().0, Calls::new().0);
+        let serve = plugins.serve();
+        let body = |url: &str| {
+            serve(url, Asker::Plugin).map(|resource| {
+                serde_json::from_slice::<serde_json::Value>(&resource.body).unwrap()
+            })
+        };
+
+        let told = body(&format!(
+            r#"cox://api/activity/command/{{"chat":{chat},"number":0}}"#
+        ))
+        .unwrap();
+
+        assert_eq!(told["line"], "cargo test");
+        assert_eq!(told["printed"], "test result: ok");
+        assert_eq!(
+            body(&format!(
+                r#"cox://api/activity/command/{{"chat":{chat},"number":1}}"#
+            )),
+            Some(serde_json::Value::Null)
+        );
+        assert_eq!(body("cox://api/activity/command/not-a-command"), None);
         coxd::storage::keep_on_this_thread(None);
     }
 
