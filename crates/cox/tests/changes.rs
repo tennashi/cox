@@ -68,6 +68,7 @@ fn shown(changes: &Entity<Changes>, cx: &mut VisualTestContext) -> Vec<(String, 
         let Some(Repository {
             name,
             read: Ok(diff),
+            ..
         }) = changes.shown()
         else {
             return Vec::new();
@@ -104,6 +105,7 @@ fn shows_the_lines_that_changed_and_opens_a_file_there(cx: &mut TestAppContext) 
                 since: Since::Head(_),
                 ..
             }),
+            ..
         }]
     )));
     assert_eq!(
@@ -169,7 +171,7 @@ fn shows_what_changed_in_each_repository_among_a_projects_directories(cx: &mut T
     );
     // The first that changed anything is shown, with each to choose.
     assert_eq!(shown(&changes, cx), [("app/a.txt".to_owned(), 1, 0)]);
-    assert_eq!(coxd::repositories::count(&project), Ok(1));
+    assert_eq!(coxd::repositories::count(&project, &[], &project), Ok(1));
     assert!(cx.debug_bounds("changed-repository-0").is_some());
     assert!(cx.debug_bounds("changed-repository-1").is_some());
 
@@ -183,7 +185,7 @@ fn shows_what_changed_in_each_repository_among_a_projects_directories(cx: &mut T
     cx.executor().advance_clock(Duration::from_secs(3));
     cx.run_until_parked();
     assert_eq!(shown(&changes, cx), [("app/a.txt".to_owned(), 1, 0)]);
-    assert_eq!(coxd::repositories::count(&project), Ok(2));
+    assert_eq!(coxd::repositories::count(&project, &[], &project), Ok(2));
     click("changed-repository-1", cx);
     assert_eq!(shown(&changes, cx), [("lib/b.txt".to_owned(), 1, 0)]);
     click("changed-file-0", cx);
@@ -304,7 +306,7 @@ fn lists_the_commits_and_shows_what_one_changed_and_the_turn_it_was_made_in(
 fn a_folder_with_no_repository_counts_none() {
     let folder = scratch::folder("changes-none");
     std::fs::create_dir_all(folder.join("directories/notes")).unwrap();
-    assert!(coxd::repositories::count(&folder).is_err());
+    assert!(coxd::repositories::count(&folder, &[], &folder).is_err());
 }
 
 #[gpui::test]
@@ -383,4 +385,100 @@ fn an_amended_commit_shows_what_it_was_and_what_amending_it_changed(cx: &mut Tes
         changes.read_with(cx, |changes, _| changes.shown_pick()),
         Pick::Commit(now)
     );
+}
+
+/// A project whose directory `app` is a repository with two worktrees: one
+/// made by hand among the directories, `hotfix`, and one where Cox makes
+/// them, `search`; and the folders of `app` and `search`.
+fn project_with_worktrees(name: &str) -> (PathBuf, PathBuf, PathBuf) {
+    let project = scratch::folder(&format!("changes-{name}"));
+    std::fs::create_dir_all(project.join("directories")).unwrap();
+    let project = project.canonicalize().unwrap();
+    let app = project.join("directories/app");
+    std::fs::rename(repository(&format!("{name}-app"), "one\n"), &app).unwrap();
+    for (branch, folder) in [
+        ("hotfix", project.join("directories/app-hotfix")),
+        ("search", project.join("worktrees/app/search")),
+    ] {
+        let folder = folder.to_string_lossy();
+        git(&app, &["worktree", "add", "--quiet", "-b", branch, &folder]);
+    }
+    let search = project.join("worktrees/app/search");
+    std::fs::write(app.join("a.txt"), "one\ntwo\n").unwrap();
+    std::fs::write(search.join("s.txt"), "search\n").unwrap();
+    (project, app, search)
+}
+
+/// What each checkout of the repository the tab shows goes by.
+fn checkouts(changes: &Entity<Changes>, cx: &mut VisualTestContext) -> Vec<String> {
+    changes.read_with(cx, |changes, _| {
+        changes.shown().map_or_default(|shown| {
+            shown
+                .checkouts
+                .iter()
+                .map(coxd::repositories::Checkout::label)
+                .collect()
+        })
+    })
+}
+
+#[gpui::test]
+fn shows_a_repository_in_another_of_its_checkouts_as_the_human_chooses_it(cx: &mut TestAppContext) {
+    let (project, _, search) = project_with_worktrees("checkouts");
+
+    let (changes, chosen, cx) = open(cx, &project, &project);
+    // The worktree among the directories is no repository of its own.
+    assert_eq!(
+        changes.read_with(cx, |changes, _| changes
+            .repositories()
+            .iter()
+            .map(|repository| repository.name.clone())
+            .collect::<Vec<_>>()),
+        [Some("app".to_owned())]
+    );
+    assert_eq!(checkouts(&changes, cx), ["main", "hotfix", "search"]);
+    assert_eq!(shown(&changes, cx), [("app/a.txt".to_owned(), 1, 0)]);
+
+    click("checkout", cx);
+    assert!(cx.debug_bounds("checkouts").is_some());
+    click("checkout-choice-2", cx);
+    assert_eq!(shown(&changes, cx), [("app/s.txt".to_owned(), 1, 0)]);
+    assert_eq!(checkouts(&changes, cx), ["main", "hotfix", "search"]);
+    click("changed-file-0", cx);
+    assert_eq!(*chosen.borrow(), [(search.join("s.txt"), None)]);
+    // The tab keeps what the human chose, and stays on it as it looks
+    // again.
+    let checkout = (Some("app".to_owned()), search.clone());
+    assert_eq!(
+        changes.read_with(cx, |changes, _| changes.kept()),
+        cox_core::tabs::KeptTab::Changes {
+            folder: project.clone(),
+            checkouts: vec![checkout],
+        }
+    );
+    std::fs::write(search.join("t.txt"), "t\n").unwrap();
+    cx.executor().advance_clock(Duration::from_secs(3));
+    cx.run_until_parked();
+    assert_eq!(
+        shown(&changes, cx),
+        [
+            ("app/s.txt".to_owned(), 1, 0),
+            ("app/t.txt".to_owned(), 1, 0)
+        ]
+    );
+}
+
+#[gpui::test]
+fn a_chat_working_in_a_worktree_sees_it_at_first(cx: &mut TestAppContext) {
+    let (project, app, search) = project_with_worktrees("chats-checkout");
+
+    let (changes, _, cx) = open(cx, &project, &search);
+    assert_eq!(shown(&changes, cx), [("app/s.txt".to_owned(), 1, 0)]);
+
+    // As kept, the checkout the human chose comes first.
+    let kept = vec![(Some("app".to_owned()), app)];
+    let (folder, cwd) = (project.clone(), search.clone());
+    let (changes, cx) = cx.add_window_view(|_, cx| Changes::new(folder, &cwd, cx).choosing(kept));
+    cx.run_until_parked();
+    assert_eq!(shown(&changes, cx), [("app/a.txt".to_owned(), 1, 0)]);
 }

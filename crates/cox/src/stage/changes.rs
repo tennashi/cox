@@ -23,6 +23,14 @@
 //! names the turn of the chat it was made in, which a click on the turn,
 //! over what the commit changed, shows (see [`ShowTurn`]).
 //!
+//! A repository is seen in one of its checkouts at a time: its own, or
+//! another of its worktrees, wherever it is (see
+//! [`coxd::repositories::checkouts`]), which the human chooses under the
+//! repositories, from a menu of them, each marked as Cox's, made by hand,
+//! or outside the folder, with how many files changed in it. A chat that
+//! works in one of them sees that one at first. The tab keeps what the
+//! human chose.
+//!
 //! The tab looks again now and then, so that it shows what the agent
 //! changes as it works. It draws only the rows in sight, so a long list
 //! of changes scrolls as a short one does, and stays where the human
@@ -45,20 +53,22 @@ use cox_editor::words;
 use cox_git::changes::{Diff, File, How, Kind, Line};
 use cox_git::commits::{self, Base, Commit, History};
 use gpui::{
-    AnyElement, App, Context, EventEmitter, FocusHandle, Focusable, FontWeight, HighlightStyle,
-    Hsla, ListAlignment, ListOffset, ListState, Pixels, ScrollWheelEvent, SharedString, StyledText,
-    Task, TextRun, Window, div, font, list, prelude::*, px, rgb,
+    AnchoredPositionMode, AnyElement, App, AsyncApp, Context, EventEmitter, FocusHandle, Focusable,
+    FontWeight, HighlightStyle, Hsla, ListAlignment, ListOffset, ListState, MouseDownEvent, Pixels,
+    Point, ScrollWheelEvent, SharedString, StyledText, Task, TextRun, WeakEntity, Window, anchored,
+    deferred, div, font, list, point, prelude::*, px, rgb,
 };
 
 use crate::stage::code::syntax_style;
 use crate::stage::heading::{CARD_RADIUS, INSET, heading};
 use crate::stage::tab::Shows;
 use crate::ui::ellipsis::ellipsis;
+use crate::ui::icons::{Icon, icon};
 use crate::vim::hints::Hinted as _;
 use crate::vim::keymap::Motion;
 use crate::vim::{Move, NextStretch, Open, PreviousStretch};
 use coxd::paths::shortened;
-use coxd::repositories::{self, Repository};
+use coxd::repositories::{self, Checkout, Repository};
 use coxd::theme::{
     ACCENT, ADDED_GROUND, ADDED_WORD, ASKING, BORDER, CODE_FONT, DIM, DISABLED, FAILED,
     FAILED_MARK, FAINT, FOREGROUND, HOVER, LINK, RAISED, REMOVED_GROUND, REMOVED_WORD, SELECTED,
@@ -85,6 +95,9 @@ const TEXT_END: f32 = 12.;
 
 /// How wide the column of commits is.
 const HISTORY_WIDTH: f32 = 236.;
+
+/// How tall the button of the checkout shown is.
+const CHECKOUT_HEIGHT: f32 = 26.;
 
 /// What the syntax says the stretches of a line are, as bytes of the line
 /// as it is drawn.
@@ -144,17 +157,36 @@ impl Pick {
 }
 
 /// What the human picked to see, as the tab read it: of the repository of
-/// a name, and how its lines are drawn.
+/// a name, in the checkout at a folder, and how its lines are drawn.
 struct Picked {
     pick: Pick,
     repository: Option<String>,
+    checkout: Option<PathBuf>,
     read: Result<Diff, String>,
     looks: Vec<Vec<Look>>,
 }
 
 pub struct Changes {
-    /// The folder whose changes the tab shows (see [`repositories::of`]).
+    /// The folder whose changes the tab shows (see [`repositories::listed`]).
     folder: PathBuf,
+    /// Where the chat the tab is of works, whose checkout of a repository
+    /// it shows at first.
+    cwd: PathBuf,
+    /// The checkout of each repository the human chose to see, once they
+    /// chose one (see [`repositories::read`]).
+    checkouts: Vec<repositories::Chosen>,
+    /// Whether the menu of the checkouts of the repository shown is open.
+    checkout_menu: bool,
+    /// How many files changed in each checkout of the repository shown, by
+    /// its folder, as the tab counted them as its menu opened.
+    counted: HashMap<PathBuf, Result<usize, String>>,
+    /// What counts them, while it does.
+    counting: Option<Task<()>>,
+    /// What reads what changed at once, as the human chose a checkout.
+    looking: Option<Task<()>>,
+    /// Where the press was that closed the menu of the checkouts, which on
+    /// its button leaves it closed.
+    checkouts_closed_at: Option<Point<Pixels>>,
     /// The tab's name: "Changes", and the folder's name when it is not
     /// where the chat works.
     title: String,
@@ -233,6 +265,13 @@ impl Changes {
         };
         Self {
             folder,
+            cwd: cwd.to_owned(),
+            checkouts: Vec::new(),
+            checkout_menu: false,
+            counted: HashMap::new(),
+            counting: None,
+            looking: None,
+            checkouts_closed_at: None,
             title,
             read: None,
             chosen: None,
@@ -252,10 +291,72 @@ impl Changes {
         }
     }
 
+    /// The tab, showing the checkouts `checkouts` choose, as it kept
+    /// them.
+    #[must_use]
+    pub fn choosing(mut self, checkouts: Vec<repositories::Chosen>) -> Self {
+        self.checkouts = checkouts;
+        self
+    }
+
     /// The folder whose changes the tab shows.
     #[must_use]
     pub fn folder(&self) -> &Path {
         &self.folder
+    }
+
+    /// The checkout of each repository the human chose to see.
+    #[must_use]
+    pub fn checkouts(&self) -> &[repositories::Chosen] {
+        &self.checkouts
+    }
+
+    /// Shows the repository `name` (see [`Repository::name`]) in its
+    /// checkout at `folder`, as the human chose it, as it shows at first,
+    /// reading what changed there at once.
+    pub fn show_checkout(&mut self, name: Option<String>, folder: PathBuf, cx: &mut Context<Self>) {
+        self.checkouts.retain(|(chosen, _)| *chosen != name);
+        self.checkouts.push((name.clone(), folder));
+        self.checkout_menu = false;
+        self.show(name, cx);
+        self.looking = Some(cx.spawn(async move |this, cx| {
+            look(&this, cx).await;
+        }));
+    }
+
+    /// Opens the menu of the checkouts of the repository shown, counting
+    /// the files that changed in each, or closes it.
+    fn toggle_checkouts(&mut self, cx: &mut Context<Self>) {
+        self.checkout_menu = !self.checkout_menu;
+        cx.notify();
+        if !self.checkout_menu {
+            return;
+        }
+        let folders: Vec<PathBuf> = self.shown().map_or_default(|shown| {
+            shown
+                .checkouts
+                .iter()
+                .map(|checkout| checkout.folder().to_owned())
+                .collect()
+        });
+        self.counting = Some(cx.spawn(async move |this, cx| {
+            let counted = cx
+                .background_executor()
+                .spawn(async move {
+                    folders
+                        .into_iter()
+                        .map(|folder| {
+                            let count = cox_git::changes::count(&folder);
+                            (folder, count)
+                        })
+                        .collect::<HashMap<_, _>>()
+                })
+                .await;
+            let _ = this.update(cx, |changes, cx| {
+                changes.counted = counted;
+                cx.notify();
+            });
+        }));
     }
 
     /// What changed in each repository, as the tab read it; none until
@@ -276,6 +377,7 @@ impl Changes {
     /// top, as the human chose it, as it shows at first.
     pub fn show(&mut self, name: Option<String>, cx: &mut Context<Self>) {
         self.chosen = Some(Choice(name));
+        self.checkout_menu = false;
         self.pick = None;
         self.picked = None;
         self.relist(false);
@@ -320,9 +422,14 @@ impl Changes {
         if *pick == first_pick(self.history()) {
             return Some(at_first);
         }
+        let checkout = shown.checkout().map(Checkout::folder);
         self.picked
             .as_ref()
-            .filter(|picked| &picked.pick == pick && picked.repository == shown.name)
+            .filter(|picked| {
+                &picked.pick == pick
+                    && picked.repository == shown.name
+                    && picked.checkout.as_deref() == checkout
+            })
             .map(|picked| (&picked.read, picked.looks.as_slice()))
     }
 
@@ -342,16 +449,11 @@ impl Changes {
         self.pick(Pick::Commit(id), cx);
     }
 
-    /// The folder of the repository shown, as [`repositories::of`] names it.
+    /// The folder of the checkout of the repository shown.
     fn shown_folder(&self) -> Option<PathBuf> {
-        let name = match &self.chosen {
-            Some(Choice(name)) => name.clone(),
-            None => self.shown().and_then(|shown| shown.name.clone()),
-        };
-        repositories::of(&self.folder)
-            .into_iter()
-            .find(|(named, _)| *named == name)
-            .map(|(_, folder)| folder)
+        self.shown()
+            .and_then(Repository::checkout)
+            .map(|checkout| checkout.folder().to_owned())
     }
 
     /// Reads what the human picked, of the repository shown, unless the
@@ -367,6 +469,7 @@ impl Changes {
             Some(Choice(name)) => name.clone(),
             None => self.shown().and_then(|shown| shown.name.clone()),
         };
+        let checkout = Some(folder.clone());
         self.picking = Some(cx.spawn(async move |this, cx| {
             let reading = pick.clone();
             let (read, looks) = cx
@@ -395,6 +498,7 @@ impl Changes {
                 changes.picked = Some(Picked {
                     pick,
                     repository,
+                    checkout,
                     read,
                     looks,
                 });
@@ -677,6 +781,18 @@ impl Changes {
                 Err(_) => Some(("!".to_owned(), FAILED)),
             };
             let picked = repository.name.clone();
+            let checkout = repository.checkout().map(|checkout| {
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(4.))
+                    .text_size(px(11.5))
+                    .text_color(rgb(FAINT))
+                    .when(matches!(checkout, Checkout::Worktree(_)), |label| {
+                        label.child(icon(Icon::Flow, 11., FAINT))
+                    })
+                    .child(checkout.label())
+            });
             div()
                 .id(("changed-repository", index))
                 .debug_selector(move || format!("changed-repository-{index}"))
@@ -699,6 +815,7 @@ impl Changes {
                     }
                 })
                 .child(name)
+                .children(checkout)
                 .children(mark.map(|(mark, color)| {
                     div()
                         .text_size(px(11.5))
@@ -722,6 +839,142 @@ impl Changes {
                     .children(chips),
             ),
         )
+    }
+
+    /// The checkout of the repository shown, under the repositories, once
+    /// what changed in it was read: a button saying what it goes by, and
+    /// whether it is a worktree, which opens the menu of its checkouts.
+    fn render_checkout(&self, cx: &mut Context<Self>) -> Option<impl IntoElement + use<>> {
+        let shown = self.shown()?;
+        shown.read.as_ref().ok()?;
+        let checkout = shown.checkout()?;
+        let button = div()
+            .id("checkout")
+            .debug_selector(|| "checkout".to_owned())
+            .flex_shrink_0()
+            .h(px(CHECKOUT_HEIGHT))
+            .flex()
+            .items_center()
+            .gap(px(6.))
+            .px(px(9.))
+            .rounded(px(8.))
+            .border_1()
+            .border_color(rgb(BORDER))
+            .bg(rgb(if self.checkout_menu { SELECTED } else { RAISED }))
+            .font_family(CODE_FONT)
+            .text_size(px(12.))
+            .whitespace_nowrap()
+            .cursor_pointer()
+            .hover(|style| style.bg(rgb(HOVER)))
+            .child(icon(checkout_icon(checkout), 12., DIM))
+            .child(checkout.label())
+            .children(checkout_tags(checkout))
+            .child(div().text_size(px(10.)).text_color(rgb(FAINT)).child("▾"))
+            .on_hint_mouse_down(cx.listener(|changes, event: &MouseDownEvent, _, cx| {
+                // The press that closed the menu, on the button, leaves it
+                // closed.
+                if changes.checkouts_closed_at.take() != Some(event.position) {
+                    changes.toggle_checkouts(cx);
+                }
+                cx.stop_propagation();
+            }));
+        let menu = self
+            .checkout_menu
+            .then(|| self.render_checkout_menu(shown, cx));
+        Some(
+            div().flex().px(px(INSET)).pt(px(8.)).child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .child(button)
+                    .children(menu.map(|menu| {
+                        deferred(
+                            anchored()
+                                .position_mode(AnchoredPositionMode::Local)
+                                .position(point(px(0.), px(CHECKOUT_HEIGHT + 4.)))
+                                .snap_to_window()
+                                .child(menu),
+                        )
+                        .with_priority(2)
+                    })),
+            ),
+        )
+    }
+
+    /// The menu of the checkouts of `shown`, its own first, each with
+    /// where it is, whether Cox made it, for which chat, or it was made by
+    /// hand, or is outside the folder, and how many files changed in it,
+    /// once counted; the one shown marked, and a click on another shows it.
+    fn render_checkout_menu(
+        &self,
+        shown: &Repository,
+        cx: &mut Context<Self>,
+    ) -> gpui::Stateful<gpui::Div> {
+        let heading = match &shown.name {
+            Some(name) => format!("CHECKOUTS OF {}", name.to_uppercase()),
+            None => "CHECKOUTS".to_owned(),
+        };
+        let rows = shown.checkouts.iter().enumerate().map(|(index, checkout)| {
+            let folder = checkout.folder().to_owned();
+            let counted = match self.counted.get(&folder) {
+                Some(Ok(0)) => "clean".to_owned(),
+                Some(Ok(1)) => "1 changed".to_owned(),
+                Some(Ok(count)) => format!("{count} changed"),
+                Some(Err(_)) => "!".to_owned(),
+                None => String::new(),
+            };
+            let label = div()
+                .min_w_0()
+                .flex()
+                .items_center()
+                .gap(px(8.))
+                .child(icon(checkout_icon(checkout), 12., DIM))
+                .child(
+                    div()
+                        .flex_shrink_0()
+                        .font_family(CODE_FONT)
+                        .text_size(px(12.5))
+                        .child(checkout.label()),
+                )
+                .child(
+                    div()
+                        .min_w_0()
+                        .overflow_hidden()
+                        .text_size(px(11.5))
+                        .text_color(rgb(FAINT))
+                        .child(ellipsis(where_is(&folder, &self.folder))),
+                )
+                .children(checkout_tags(checkout));
+            let name = shown.name.clone();
+            crate::ui::menu::item(("checkout-choice", index), label, &counted)
+                .when(index == shown.shown, |row| row.bg(rgb(SELECTED)))
+                .on_hint_click(cx.listener(move |changes, _, _, cx| {
+                    changes.show_checkout(name.clone(), folder.clone(), cx);
+                }))
+        });
+        crate::ui::menu::menu()
+            .id("checkouts")
+            .debug_selector(|| "checkouts".to_owned())
+            .min_w(px(320.))
+            .max_w(px(640.))
+            .max_h(px(360.))
+            .overflow_y_scroll()
+            .on_mouse_down_out(cx.listener(|changes, event: &MouseDownEvent, _, cx| {
+                changes.checkout_menu = false;
+                changes.checkouts_closed_at = Some(event.position);
+                cx.notify();
+            }))
+            .child(
+                div()
+                    .px(px(10.))
+                    .pt(px(4.))
+                    .pb(px(2.))
+                    .text_size(px(10.5))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(rgb(FAINT))
+                    .child(heading),
+            )
+            .children(rows)
     }
 
     /// The column of the commits of the repository shown, as the tab read
@@ -1240,6 +1493,56 @@ fn commit_meta(commit: &Commit) -> impl IntoElement {
         })
 }
 
+/// The icon of `checkout`: a branch's for a repository's own, a
+/// worktree's for another.
+fn checkout_icon(checkout: &Checkout) -> Icon {
+    match checkout {
+        Checkout::Own { .. } => Icon::Changes,
+        Checkout::Worktree(_) => Icon::Flow,
+    }
+}
+
+/// What marks `checkout`: for a worktree, the chat Cox made it for, or
+/// that it was made by hand, and whether it is outside the tab's folder.
+fn checkout_tags(checkout: &Checkout) -> Vec<gpui::Div> {
+    let Checkout::Worktree(worktree) = checkout else {
+        return Vec::new();
+    };
+    let tag = |said: String, color: u32| {
+        div()
+            .flex_shrink_0()
+            .px(px(5.))
+            .rounded(px(4.))
+            .border_1()
+            .border_color(rgb(BORDER))
+            .font_family(UI_FONT)
+            .text_size(px(10.5))
+            .text_color(rgb(color))
+            .child(said)
+    };
+    let made = match worktree.made_for {
+        Some(chat) => tag(format!("chat {chat}"), ACCENT),
+        None => tag("by hand".to_owned(), FAINT),
+    };
+    std::iter::once(made)
+        .chain(worktree.outside.then(|| tag("outside".to_owned(), ASKING)))
+        .collect()
+}
+
+/// Where `checkout`, a folder, is: from `folder`, the tab's, when it is
+/// in it, or else as people read a path.
+fn where_is(checkout: &Path, folder: &Path) -> String {
+    let canonical = |path: &Path| path.canonicalize().unwrap_or_else(|_| path.to_owned());
+    canonical(checkout)
+        .strip_prefix(canonical(folder))
+        .ok()
+        .filter(|within| !within.as_os_str().is_empty())
+        .map_or_else(
+            || shortened(checkout),
+            |within| within.display().to_string(),
+        )
+}
+
 /// The name of `folder`, its last part's.
 fn name_of(folder: &Path) -> String {
     folder.file_name().map_or_else(
@@ -1385,57 +1688,73 @@ fn drawn(text: &str) -> String {
 }
 
 /// Reads what changed in the tab of `cx` at once, and again now and
-/// then, for as long as the tab is, reading what the syntax says of it
-/// when it changed.
+/// then, for as long as the tab is (see [`look`]).
 fn follow(cx: &mut Context<Changes>) -> Task<()> {
     cx.spawn(async move |this, cx| {
-        loop {
-            let Ok(folder) = this.read_with(cx, |changes, _| changes.folder.clone()) else {
-                break;
-            };
-            let (read, histories) = cx
-                .background_executor()
-                .spawn(async move {
-                    let histories = repositories::of(&folder)
-                        .iter()
-                        .map(|(_, folder)| commits::history(folder).ok())
-                        .collect::<Vec<_>>();
-                    (repositories::read(&folder), histories)
-                })
-                .await;
-            let Ok(()) = this.update(cx, |changes, cx| {
-                if changes.histories != histories {
-                    changes.read_histories(histories, cx);
-                }
-                changes.follow_picked(cx);
-            }) else {
-                break;
-            };
-            let Ok(changed) = this.read_with(cx, |changes, _| changes.read.as_ref() != Some(&read))
-            else {
-                break;
-            };
-            if changed {
-                let (read, looks) = cx
-                    .background_executor()
-                    .spawn(async move {
-                        let looks = read
-                            .iter()
-                            .map(|shown| shown.read.as_ref().map_or_default(looks))
-                            .collect();
-                        (read, looks)
-                    })
-                    .await;
-                if this
-                    .update(cx, |changes, cx| changes.looked(read, looks, cx))
-                    .is_err()
-                {
-                    break;
-                }
-            }
+        while look(&this, cx).await {
             cx.background_executor().timer(LOOK_EVERY).await;
         }
     })
+}
+
+/// Reads what changed in the tab `this`, in the checkouts it chooses, and
+/// the commits there, reading what the syntax says of what changed when
+/// it changed, and shows them, unless the human chose other checkouts
+/// meanwhile; answers whether the tab is still there.
+async fn look(this: &WeakEntity<Changes>, cx: &mut AsyncApp) -> bool {
+    let Ok((folder, chosen, cwd)) = this.read_with(cx, |changes, _| {
+        let chosen = changes.checkouts.clone();
+        (changes.folder.clone(), chosen, changes.cwd.clone())
+    }) else {
+        return false;
+    };
+    let asked = chosen.clone();
+    let (read, histories) = cx
+        .background_executor()
+        .spawn(async move {
+            let read = repositories::read(&folder, &chosen, &cwd);
+            let histories = read
+                .iter()
+                .map(|repository| {
+                    let checkout = repository.checkout()?;
+                    commits::history(checkout.folder()).ok()
+                })
+                .collect::<Vec<_>>();
+            (read, histories)
+        })
+        .await;
+    let still = |changes: &Changes| changes.checkouts == asked;
+    let Ok(changed) = this.update(cx, |changes, cx| {
+        if !still(changes) {
+            return false;
+        }
+        if changes.histories != histories {
+            changes.read_histories(histories, cx);
+        }
+        changes.follow_picked(cx);
+        changes.read.as_ref() != Some(&read)
+    }) else {
+        return false;
+    };
+    if !changed {
+        return true;
+    }
+    let (read, looks) = cx
+        .background_executor()
+        .spawn(async move {
+            let looks = read
+                .iter()
+                .map(|shown| shown.read.as_ref().map_or_default(looks))
+                .collect();
+            (read, looks)
+        })
+        .await;
+    this.update(cx, |changes, cx| {
+        if still(changes) {
+            changes.looked(read, looks, cx);
+        }
+    })
+    .is_ok()
 }
 
 /// The head of the card of `file`, at `row` of the tab: how it changed,
@@ -1726,6 +2045,7 @@ impl Shows for Changes {
     fn kept(&self) -> KeptTab {
         KeptTab::Changes {
             folder: self.folder.clone(),
+            checkouts: self.checkouts.clone(),
         }
     }
 }
@@ -1764,6 +2084,7 @@ impl Render for Changes {
             .text_size(px(13.))
             .child(self.render_heading())
             .children(self.render_repositories(cx))
+            .children(self.render_checkout(cx))
             .child(
                 div()
                     .flex_1()

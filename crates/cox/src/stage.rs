@@ -407,8 +407,8 @@ impl Stage {
                     stage.files.update(cx, |files, cx| files.open_too(open, cx));
                     stage.push_files(show, cx);
                 }
-                KeptTab::Changes { folder } => {
-                    stage.push_changes(folder, show, window, cx);
+                KeptTab::Changes { folder, checkouts } => {
+                    stage.push_changes(folder, checkouts, show, window, cx);
                 }
                 KeptTab::Flow { call } => {
                     stage.push_flow(call, show, window, cx);

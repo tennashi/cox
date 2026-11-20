@@ -266,7 +266,7 @@ impl Stage {
         if let Some(index) = showing {
             self.show(index, window, cx);
         } else {
-            self.push_changes(folder, true, window, cx);
+            self.push_changes(folder, Vec::new(), true, window, cx);
             self.focus_shown(window, cx);
         }
     }
@@ -295,16 +295,18 @@ impl Stage {
     }
 
     /// Puts a tab showing what changed in the files of the repository of
-    /// `folder` after the others, shown if `show` is.
+    /// `folder` after the others, in the checkouts `checkouts` choose (see
+    /// [`Changes::choosing`]), shown if `show` is.
     pub(super) fn push_changes(
         &mut self,
         folder: PathBuf,
+        checkouts: Vec<coxd::repositories::Chosen>,
         show: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let cwd = self.cwd.clone();
-        let shown = cx.new(|cx| Changes::new(folder, &cwd, cx));
+        let shown = cx.new(|cx| Changes::new(folder, &cwd, cx).choosing(checkouts));
         let changes = cx.observe(&shown, |stage, _, cx| stage.changed(cx));
         let opens = cx.subscribe_in(
             &shown,

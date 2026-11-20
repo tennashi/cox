@@ -81,8 +81,15 @@ pub enum KeptTab {
     /// of files; it keeps none now.
     Files { open: Vec<PathBuf> },
     /// What changed in the files of the Git repository of a folder, by
-    /// its absolute path, as Git tells it.
-    Changes { folder: PathBuf },
+    /// its absolute path, as Git tells it, with the checkout of each of
+    /// its repositories the human chose to see, if they chose one: by the
+    /// name of the project's directory it is, or none for the repository
+    /// the folder is in, the checkout's folder.
+    Changes {
+        folder: PathBuf,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        checkouts: Vec<(Option<String>, PathBuf)>,
+    },
     /// The flow of one tool call through Cox, the call by the id the
     /// agent gave it.
     Flow { call: String },
@@ -124,5 +131,27 @@ mod tests {
         let json = serde_json::to_string(&owned).unwrap();
         assert!(json.contains(r#""owners":[7]"#), "{json}");
         assert_eq!(owned.owned(|chat| Some(chat + 1)).owner(0), Some(8));
+    }
+
+    #[test]
+    fn a_tab_of_changes_keeps_the_checkouts_chosen() {
+        let kept: KeptTab = serde_json::from_str(r#"{"changes":{"folder":"/p"}}"#).unwrap();
+        assert_eq!(
+            kept,
+            KeptTab::Changes {
+                folder: PathBuf::from("/p"),
+                checkouts: Vec::new(),
+            }
+        );
+        assert_eq!(
+            serde_json::to_string(&kept).unwrap(),
+            r#"{"changes":{"folder":"/p"}}"#
+        );
+        let chosen = KeptTab::Changes {
+            folder: PathBuf::from("/p"),
+            checkouts: vec![(Some("app".to_owned()), PathBuf::from("/p/worktrees/app/b"))],
+        };
+        let json = serde_json::to_string(&chosen).unwrap();
+        assert_eq!(serde_json::from_str::<KeptTab>(&json).unwrap(), chosen);
     }
 }
