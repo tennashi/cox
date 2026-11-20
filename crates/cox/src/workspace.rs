@@ -1521,6 +1521,8 @@ impl Workspace {
         self.view(key, cx);
         self.stage_shows(key, cx);
         self.sight(cx);
+        // The stages' pages mark the chat shown.
+        self.badge(cx);
         window.focus(&self.focus_handle(cx));
         cx.notify();
     }
@@ -1580,6 +1582,7 @@ impl Workspace {
                 .collect(),
             home: self.projects[0].folder.clone(),
             github: self.github.clone(),
+            shown: self.shown().map(Chat::key),
         });
         let count = self.rings().count();
         if count != self.badged {

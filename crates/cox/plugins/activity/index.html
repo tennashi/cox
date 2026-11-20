@@ -188,6 +188,12 @@
         background: var(--pane);
         border-radius: var(--radius) var(--radius) 0 0;
       }
+      /* The chat the window shows, by a bar down its left edge. */
+      .row.shown {
+        box-shadow: inset 2px 0 0 var(--accent);
+        border-top-left-radius: 0;
+        border-bottom-left-radius: 0;
+      }
       /* A step of a chat's plan that subagents came from, over them. */
       .from {
         display: flex;
