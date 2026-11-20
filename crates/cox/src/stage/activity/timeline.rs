@@ -10,21 +10,46 @@
 //! each line on a step and the reply, each subagent opened and done, the
 //! commits, the pull requests opened, merged and closed, and their CI
 //! ended, each turn's end, and how what ran after it went, the chat's
-//! goal and its triggers, with the end of what one that failed printed.
+//! goal and its triggers, with the end of what one that failed printed,
+//! and the commands its agent ran that ran long or failed, those it ran
+//! one after another together, under what it said before them. A command
+//! opens laid out to read, with what it printed, once the human opens it,
+//! as `cox://api/activity/command/<command>` (see [`command`]).
+//!
+//! A command ran long when it ran [`LONG`] or longer. Of 9,246 commands
+//! agents ran in 373 turns of real use, 13% did, or failed; the steps
+//! they were of made 2.1 lines a turn, 1 at the median, 7 at the 90th
+//! percentile. At 5 s, 18% would have, in 2.6 lines a turn.
 
-use cox_core::entry::{self, Check, Entry, QuestionAnswer, Revision};
-use cox_core::store::{ChatId, KeptAnswer, KeptStep, Resolved, ResolvedBy, Said, Store, TurnEnd};
+use std::path::{Path, PathBuf};
+
+use cox_core::entry::{self, Check, Entry, QuestionAnswer, Revision, ToolCallResult};
+use cox_core::store::{
+    ChatId, KeptAnswer, KeptCommand, KeptRun, KeptStep, Resolved, ResolvedBy, Said, Store, TurnEnd,
+};
 use coxd::daemon::wire::PullRow;
 use coxd::github::CheckState;
 use jiff::tz::TimeZone;
 use serde_json::{Value, json};
 
 use super::{Decided, Told};
+use crate::stage::commands;
+
+/// How long a command runs, in milliseconds, before the story tells it.
+const LONG: i64 = 10_000;
 
 /// The chat whose story the page asks for, as coxd keeps it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Deserialize)]
 pub struct Of {
     chat: ChatId,
+}
+
+/// A command a chat's agent ran, as the page asks to read it laid out:
+/// its chat, as coxd keeps it, and the number of its entry.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Deserialize)]
+pub struct OfCommand {
+    chat: ChatId,
+    number: usize,
 }
 
 /// What coxd keeps of a chat that its story is told from.
@@ -46,6 +71,9 @@ pub struct Kept {
     pub threads: Vec<(String, Vec<Said>)>,
     /// The chats its agent opened, the first first.
     pub subagents: Vec<Sub>,
+    /// The commands its agent ran that ran [`LONG`] or longer, or failed,
+    /// by their steps, as [`Store::ran`] reads them.
+    pub ran: Vec<KeptRun>,
 }
 
 /// A chat a chat's agent opened.
@@ -124,7 +152,72 @@ fn kept(store: &Store, chat: ChatId) -> anyhow::Result<Option<Kept>> {
                 resolved: kept.resolved,
             })
             .collect(),
+        ran: store.ran(chat, LONG)?,
     }))
+}
+
+/// The command `of` names, as JSON, laid out to read, with the last lines
+/// of what it printed, or null when coxd keeps no such command.
+#[must_use]
+pub fn command(of: &OfCommand) -> Value {
+    let read = coxd::storage::path(coxd::storage::Kept::Chats)
+        .ok_or_else(|| anyhow::anyhow!("no place keeps the chats"))
+        .and_then(|path| {
+            let store = Store::read(&path)?;
+            let Some(entry) = store.entry(of.chat, of.number)? else {
+                return Ok(None);
+            };
+            Ok(Some((entry, folder(&store, of.chat)?)))
+        });
+    match read {
+        Ok(Some((entry, folder))) => command_of(&entry, &folder),
+        Ok(None) => Value::Null,
+        Err(error) => {
+            tracing::warn!("a command of a chat is not read: {error:#}");
+            Value::Null
+        }
+    }
+}
+
+/// The folder `chat` works in, as `store` keeps it, which the paths of
+/// its commands read from, or the root, when it keeps no such chat.
+fn folder(store: &Store, chat: ChatId) -> anyhow::Result<PathBuf> {
+    let Some(kept) = store.chats()?.into_iter().find(|kept| kept.id == chat) else {
+        return Ok(PathBuf::from("/"));
+    };
+    if let Some(folder) = kept.folder {
+        return Ok(folder);
+    }
+    let project = store
+        .projects()?
+        .into_iter()
+        .find(|project| Some(project.id) == kept.project);
+    // A chat of Cox's own works in the home.
+    Ok(project.map_or_else(
+        || super::home().unwrap_or_else(|| PathBuf::from("/")),
+        |project| project.folder,
+    ))
+}
+
+/// `entry`, a command run in `folder`, as the page reads it opened: the
+/// command, as the agent gave it, to copy, laid out, and the last lines
+/// of what it printed; null for an entry of another kind.
+fn command_of(entry: &Entry, folder: &Path) -> Value {
+    let Entry::ToolCall {
+        title,
+        command: true,
+        content,
+        result,
+        ..
+    } = entry
+    else {
+        return Value::Null;
+    };
+    json!({
+        "line": title,
+        "shown": commands::laid_out(title, folder),
+        "printed": result.is_some().then(|| commands::printed(content)),
+    })
 }
 
 /// One thing in a chat's story, at a time.
@@ -194,6 +287,7 @@ pub fn story(kept: &Kept, told: &Told, zone: &TimeZone, now: i64) -> Value {
     }
     // After the turn's end they ran after, though kept as soon.
     events.extend(of_checks(kept));
+    events.extend(kept.ran.iter().filter_map(of_run));
     events.sort_by_key(|event| event.at);
     let ended = ended(kept, shown, &events);
     json!({
@@ -245,6 +339,40 @@ fn of_entries(kept: &Kept, zone: &TimeZone) -> Vec<Event> {
         );
     }
     events
+}
+
+/// What `run`, commands the agent ran one after another, tells, as of
+/// the first of them: what the agent said before them, if it said
+/// anything since the line it answers, how many it ran, and each of them
+/// that ran long or failed, by what it goes by, with how it ended and how
+/// long it ran, when coxd saw it end.
+fn of_run(run: &KeptRun) -> Option<Event> {
+    let first = run.commands.first()?;
+    let said = run
+        .said
+        .as_deref()
+        .and_then(commands::first_line)
+        .unwrap_or_default();
+    let ran: Vec<Value> = run.commands.iter().map(of_command).collect();
+    Some(Event::new(first.started, "ran", said).with(json!({ "of": run.of, "commands": ran })))
+}
+
+/// What `command`, of those the story tells, tells: the number of its
+/// entry, to read it laid out by, what the agent said it is for, its
+/// gist, how it ended, and how many seconds it ran, when coxd saw it end.
+fn of_command(command: &KeptCommand) -> Value {
+    let state = match command.result {
+        ToolCallResult::Completed => "done",
+        ToolCallResult::Failed => "failed",
+        ToolCallResult::Cancelled => "cancelled",
+    };
+    json!({
+        "number": command.number,
+        "about": command.about,
+        "gist": commands::gist(&command.line),
+        "state": state,
+        "secs": command.ended.map(|ended| (ended - command.started).max(0) / 1000),
+    })
 }
 
 /// How what ran as each turn of `kept` ended went, or as something else
@@ -527,6 +655,7 @@ mod tests {
         };
         let kept = Kept {
             chat,
+            ran: Vec::new(),
             name: "Speed up CI".to_owned(),
             opened: at(13, 48),
             resolved: None,
@@ -689,6 +818,7 @@ mod tests {
         };
         let kept = Kept {
             chat,
+            ran: Vec::new(),
             name: String::new(),
             opened: at(10, 0),
             resolved: None,
@@ -730,6 +860,120 @@ mod tests {
     }
 
     #[test]
+    fn tells_the_commands_that_ran_long_or_failed_step_by_step() {
+        use cox_core::entry::{Content, ToolCallResult};
+        use cox_core::store::KeptCommand;
+        let command =
+            |number, line: &str, about: Option<&str>, result, ran: Option<i64>| KeptCommand {
+                number,
+                line: line.to_owned(),
+                about: about.map(str::to_owned),
+                content: vec![Content::Text("ok".to_owned())],
+                result,
+                started: at(10, 3),
+                ended: ran.map(|ran| at(10, 3) + ran),
+            };
+        let kept = Kept {
+            chat: kept(7),
+            ran: vec![
+                KeptRun {
+                    said: Some("\nNow I test it all.\nThen I lint.".to_owned()),
+                    of: 4,
+                    commands: vec![
+                        command(
+                            5,
+                            "cd /src/app && cargo test",
+                            Some("Run the tests"),
+                            ToolCallResult::Completed,
+                            Some(42_500),
+                        ),
+                        command(8, "false", None, ToolCallResult::Failed, Some(200)),
+                    ],
+                },
+                // Kept by an older Cox, which kept no end.
+                KeptRun {
+                    said: None,
+                    of: 1,
+                    commands: vec![command(12, "make", None, ToolCallResult::Failed, None)],
+                },
+            ],
+            name: String::new(),
+            opened: at(10, 0),
+            resolved: None,
+            threads: Vec::new(),
+            subagents: Vec::new(),
+            steps: Vec::new(),
+            milestones: Vec::new(),
+            turns: vec![TurnEnd {
+                at: at(10, 9),
+                how: Ended::Done,
+            }],
+        };
+
+        let story = story(&kept, &Told::default(), &TimeZone::UTC, at(12, 0));
+
+        let expected: Vec<(String, String, String)> = [
+            ("10:03", "ran", "Now I test it all."),
+            ("10:03", "ran", ""),
+            ("10:09", "turn_end", "done"),
+        ]
+        .iter()
+        .map(|(when, kind, text)| ((*when).to_owned(), (*kind).to_owned(), (*text).to_owned()))
+        .collect();
+        assert_eq!(told(&story), expected);
+        assert_eq!(story["events"][0]["of"], 4);
+        assert_eq!(
+            story["events"][0]["commands"],
+            json!([
+                {
+                    "number": 5,
+                    "about": "Run the tests",
+                    "gist": "cargo test",
+                    "state": "done",
+                    "secs": 42,
+                },
+                { "number": 8, "about": null, "gist": "false", "state": "failed", "secs": 0 },
+            ])
+        );
+        assert_eq!(story["events"][1]["commands"][0]["secs"], Value::Null);
+    }
+
+    #[test]
+    fn a_command_opens_laid_out_with_the_end_of_what_it_printed() {
+        use cox_core::entry::{Content, ToolCallResult};
+        let printed: String = (1..=20)
+            .map(|line| format!("line {line}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+            + "\n";
+        let entry = |result| Entry::ToolCall {
+            id: "1".to_owned(),
+            title: "cd /src/app && cargo test".to_owned(),
+            command: true,
+            about: Some("Run the tests".to_owned()),
+            content: vec![Content::Text(format!("```console\n{printed}```"))],
+            result,
+        };
+
+        let opened = command_of(&entry(Some(ToolCallResult::Failed)), Path::new("/src/app"));
+
+        assert_eq!(opened["line"], "cd /src/app && cargo test", "to copy");
+        assert_eq!(opened["shown"][1]["code"][0][0], "cargo");
+        let printed = opened["printed"].as_str().unwrap();
+        assert!(printed.starts_with("line 7\n"), "the last lines: {printed}");
+        assert!(printed.ends_with("line 20"), "out of its fence: {printed}");
+        // While it runs, what it shows is what it is for.
+        assert_eq!(
+            command_of(&entry(None), Path::new("/src/app"))["printed"],
+            Value::Null
+        );
+        assert_eq!(
+            command_of(&Entry::Reply("hi".to_owned()), Path::new("/")),
+            Value::Null
+        );
+    }
+
+    #[test]
     fn tells_how_what_ran_as_each_turn_ended_went_after_the_turn() {
         use cox_core::entry::CheckState as Ran;
         let chat = kept(7);
@@ -740,6 +984,7 @@ mod tests {
         };
         let kept = Kept {
             chat,
+            ran: Vec::new(),
             name: String::new(),
             opened: at(10, 0),
             resolved: None,
@@ -820,6 +1065,7 @@ mod tests {
         let chat = kept(7);
         let mut kept = Kept {
             chat,
+            ran: Vec::new(),
             name: String::new(),
             opened: at(10, 0),
             resolved: None,

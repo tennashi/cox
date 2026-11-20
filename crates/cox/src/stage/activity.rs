@@ -48,7 +48,7 @@ use cox_acp::Microdollars;
 use coxd::chat::spent::Spent;
 use coxd::daemon::wire::{OnStepLine, PullRow};
 use coxd::github::CheckState;
-pub use timeline::{Of, timeline};
+pub use timeline::{Of, OfCommand, command, timeline};
 
 /// How many of what happened the page is told of, the last first.
 const HAPPENED: usize = 50;

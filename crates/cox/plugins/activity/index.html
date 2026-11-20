@@ -482,6 +482,185 @@
       .event .opener:hover {
         color: var(--link);
       }
+      /* The commands of a step the agent ran that ran long or failed,
+         each on a line of its own, under what it said before them: what
+         it said it is for, then the command, fainter, as its gist. */
+      .event.ran .said {
+        color: var(--foreground);
+      }
+      .event.ran .lines {
+        white-space: nowrap;
+      }
+      .event .command {
+        display: flex;
+        gap: var(--space-2);
+        align-items: baseline;
+        margin-top: 2px;
+        padding: 0 var(--space-1);
+        border-radius: var(--radius);
+        font: var(--small) / 1.6 var(--mono);
+        cursor: pointer;
+      }
+      .event .command:hover,
+      .event .command.open {
+        background: var(--accent-tint);
+      }
+      .event .command .ended {
+        flex: none;
+        color: var(--accent);
+      }
+      .event .command.failed .ended,
+      .event .command.failed .about,
+      .event .command.failed .gist {
+        color: var(--failed);
+      }
+      .event .command.cancelled .ended {
+        color: var(--faint);
+      }
+      .event .command .line {
+        flex: 1;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .event .command .about {
+        margin-right: var(--space-2);
+        font: var(--body) var(--sans);
+        color: var(--foreground);
+      }
+      .event .command .about + .gist {
+        color: var(--dim);
+      }
+      .event .command .secs {
+        flex: none;
+        color: var(--faint);
+      }
+      .event .under {
+        margin: 2px 0 var(--space-2);
+        border: 1px solid var(--card-edge);
+        border-radius: var(--radius);
+        overflow: hidden;
+      }
+      .event .under .printed {
+        margin: 0;
+        border: none;
+        border-top: 1px solid var(--border);
+        border-radius: 0;
+      }
+      /* A command laid out: a row for each command of a chain, after what
+         joins it to the one before, in a gutter at the left edge, and its
+         code indented as deep as the block it is in. */
+      .laid {
+        position: relative;
+        padding: var(--space-1) var(--space-2);
+        background: var(--ground);
+        font: var(--small) / 1.55 var(--mono);
+        color: var(--foreground);
+      }
+      .laid-row {
+        display: flex;
+      }
+      .laid .joint {
+        flex: none;
+        width: calc(3ch + var(--depth) * 2ch);
+        color: var(--faint);
+      }
+      .laid .code {
+        min-width: 0;
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+      }
+      .piece-fold {
+        display: inline-block;
+        margin: 0 0.5ch;
+        padding: 0 6px;
+        border-radius: 4px;
+        background: var(--button);
+        color: var(--dim);
+        font: var(--small) / 1.6 var(--sans);
+        cursor: pointer;
+        user-select: none;
+        box-shadow: 0 0 0 1px var(--control-edge);
+      }
+      .piece-fold:hover {
+        color: var(--foreground);
+      }
+      .piece-body {
+        margin: 2px 0 4px calc(var(--depth, 0) * 2ch + 3ch);
+        padding: 2px 0 2px 10px;
+        border-left: 2px solid var(--border);
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+        color: var(--dim);
+      }
+      .laid .copy {
+        position: absolute;
+        top: 4px;
+        right: 6px;
+        padding: 1px 8px;
+        border: 1px solid var(--control-edge);
+        border-radius: 4px;
+        background: var(--button);
+        color: var(--dim);
+        font: var(--small) var(--sans);
+        cursor: pointer;
+        opacity: 0;
+        box-shadow: var(--control-shadow);
+      }
+      .laid:hover .copy {
+        opacity: 1;
+      }
+      .laid .copy:hover {
+        color: var(--foreground);
+      }
+      /* The code's colors, as the code tabs draw them (and the Map). */
+      .hl-keyword,
+      .hl-variable-builtin,
+      .hl-tag,
+      .hl-punctuation-special {
+        color: #569cd6;
+      }
+      .hl-function {
+        color: #dcdcaa;
+      }
+      .hl-type,
+      .hl-type-builtin,
+      .hl-constructor {
+        color: #4ec9b0;
+      }
+      .hl-string,
+      .hl-literal {
+        color: #ce9178;
+      }
+      .hl-string-special,
+      .hl-escape {
+        color: #d7ba7d;
+      }
+      .hl-number,
+      .hl-constant-builtin {
+        color: #b5cea8;
+      }
+      .hl-comment {
+        color: #6a9955;
+      }
+      .hl-constant,
+      .hl-uri {
+        color: #4fc1ff;
+      }
+      .hl-property,
+      .hl-variable {
+        color: #9cdcfe;
+      }
+      .hl-attribute,
+      .hl-label {
+        color: #c586c0;
+      }
+      /* What sets up the environment, as `CARGO_TARGET_DIR=…`, which the
+         eye can pass over. */
+      .hl-quiet {
+        color: var(--faint);
+      }
       .event .printed {
         margin: var(--space-1) 0 var(--space-2);
         padding: var(--space-1) var(--space-2);

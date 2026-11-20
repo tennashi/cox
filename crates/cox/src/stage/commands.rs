@@ -30,6 +30,28 @@ pub fn called(line: &str, about: Option<&str>) -> String {
     about.map_or_else(|| layout::gist(line), str::to_owned)
 }
 
+/// The row of the command `line` that says most of what it does, on one
+/// line (see [`layout::gist`]).
+#[must_use]
+pub fn gist(line: &str) -> String {
+    layout::gist(line)
+}
+
+/// The command `line`, run in `folder`, laid out to read (see
+/// [`layout::told`]).
+#[must_use]
+pub fn laid_out(line: &str, folder: &Path) -> Value {
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    layout::told(line, folder, home.as_deref())
+}
+
+/// The last lines of what a command that shows `content` printed, as a
+/// page tells it.
+#[must_use]
+pub fn printed(content: &[Content]) -> String {
+    last_lines(&text_of(content))
+}
+
 /// How long a command runs before the page shows it big, with what it
 /// printed.
 const LONG: Duration = Duration::from_secs(5);
@@ -179,7 +201,7 @@ pub fn asked(entries: &[Entry]) -> Option<String> {
 
 /// The first line of `text` that says something, cut to [`SAID`]
 /// characters.
-fn first_line(text: &str) -> Option<String> {
+pub fn first_line(text: &str) -> Option<String> {
     let line = text.lines().map(str::trim).find(|line| !line.is_empty())?;
     let mut cut: String = line.chars().take(SAID).collect();
     if cut.len() < line.len() {
