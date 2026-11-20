@@ -1,36 +1,46 @@
 //! What goes on in a folder, as the stage's Activity page shows it, at
 //! `cox://api/activity` (see [`crate::stage::plugins`]): the human's
-//! inbox, where they look first when they open Cox or have a moment. It
-//! tells, in tiers, what is asked of them, the chats of the folder that
-//! ask them something, with what they ask, or whose turn ended while they
-//! were not looking, or CI ended on a pull request their agent opened;
-//! the plans, of the chats whose agents take a turn, or work in the
-//! background once it ended, or wait on CI, or whose plan, as the agent
-//! last sent it over ACP, is not done, or done while the human did not
-//! look yet, or lately, or that were marked done lately, each with what
-//! it does now, or runs in the background, its open pull requests, and
-//! the steps of its plan, and under it the subagents' chats its agent
-//! opened, and theirs, at any depth, each under the step it came from,
-//! if it tells (see [`linked`]), with the chats above them though these
-//! are not listed on their own (see [`planned`]); what was decided, the
-//! questions agents asked there that the human answered, each with what
-//! they chose and why, the last first; and what happened without them,
-//! the schedules that ran there, the pages of the wiki written from
-//! there, and the sources kept there, the last first. The home, where
-//! Cox lands, tells of every folder.
+//! inbox, where they look first when they open Cox or have a moment.
+//!
+//! On top, how it all stands: how many chats wait for the human, how many
+//! are at work, and how many steps got done over each of [`WINDOWS`], as
+//! the human picks one (see [`summaries`]). Then the chats,
+//! one line each: those that ask the human something, with what they ask,
+//! or whose turn ended while they were not looking, or CI ended on a pull
+//! request their agent opened (see [`waiting_in`]); and those whose
+//! agents take a turn, or work in the background once it ended, or wait
+//! on CI, or whose plan, as the agent last sent it over ACP, is not done,
+//! or was done, or marked done, lately (see [`planned`]). Each tells how
+//! it stands, the steps of its plan, how far it went, what it does now,
+//! or runs in the background, and its open pull requests; under it, the
+//! subagents' chats its agent opened, and theirs, at any depth, each
+//! under the step it came from, if it tells (see [`linked`]), with the
+//! chats above them though these are not listed on their own (see
+//! [`tree_of`]). The home, where Cox lands, tells of every folder.
+//!
+//! A chat's story, what it did when, is read for the chat alone, once the
+//! human opens its line (see [`timeline`]), and the thread of a step of
+//! its plan once they open the step (see [`thread`]), where a line they
+//! write goes to the chat (see [`say`]).
 //!
 //! The window tells this module how its chats stand as they change (see
 //! [`tell`]), since the stage's pages are served apart from it; the bar
 //! counts what waits on the Activity's button (see [`waiting`]). What a
-//! chat does now, and what it asks, come from what the window told the
-//! Commands page of its conversation (see [`commands::now`]). What was
-//! decided, and the plans, are read from the chats as coxd keeps them
-//! (see [`Store::answered`] and [`Store::plans`]), so they hold for chats
-//! the window never showed, and last as long as their conversations do:
-//! what was decided read again once a chat stops asking, as when the
-//! human answers, and once one goes, and the plans each time. A plan the
-//! human dismissed from the page stays hidden until the chat's agent
-//! sends another (see [`dismiss`]).
+//! chat does now, and what it asks, come from what the window told of its
+//! conversation (see [`commands::now`]). The plans are read from the chats
+//! as coxd keeps them (see [`Store::plans`]), so they hold for chats the
+//! window never showed, and last as long as their conversations do, each
+//! time the page reads; so is what was decided, the questions agents asked
+//! that the human answered (see [`Store::answered`]), read again once a
+//! chat stops asking, as when the human answers, and once one goes. A
+//! plan the human dismissed from the page stays hidden until the chat's
+//! agent sends another (see [`dismiss`]).
+//!
+//! The JSON tells more than the page draws now: what was decided, the
+//! last first, what happened without the human, the schedules that ran,
+//! the pages of the wiki written and the sources kept, and in each
+//! summary the lines of the chats that moved (see [`decided_in`] and
+//! [`summaries`]).
 
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
@@ -399,10 +409,10 @@ pub fn waiting(root: &Path) -> usize {
 }
 
 /// What goes on in the folder `root`, as JSON, from how the chats stand
-/// now, what they do and ask, as the Commands page was told, what they
-/// decided, the human's `wiki`, the folder's own, the sources at `raw`,
-/// and `triggers`, as [`coxd::trigger::told`] tells them, of which the
-/// schedules ran.
+/// now, what they do and ask, as the window told of their conversations,
+/// what they decided, the human's `wiki`, the folder's own, the sources at
+/// `raw`, and `triggers`, as [`coxd::trigger::told`] tells them, of which
+/// the schedules ran.
 #[must_use]
 pub fn told(root: &Path, wiki: &Path, raw: &Path, triggers: &Value) -> Value {
     let at = jiff::Timestamp::now().as_millisecond();
