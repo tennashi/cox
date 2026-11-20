@@ -9,14 +9,15 @@
 //! last sent it over ACP, is not done, or done while the human did not
 //! look yet, or lately, or that were marked done lately, each with what
 //! it does now, or runs in the background, its open pull requests, and
-//! the steps of its plan, each with the subagents' chats whose names
-//! read alike it (see [`linked`]), the other subagents at work under
-//! it; what was decided, the questions agents
-//! asked there that the human answered, each with what they chose and
-//! why, the last first; and what happened without them, the schedules
-//! that ran there, the pages of the wiki written from there, and the
-//! sources kept there, the last first. The home, where Cox lands, tells
-//! of every folder.
+//! the steps of its plan, and under it the subagents' chats its agent
+//! opened, and theirs, at any depth, each under the step it came from,
+//! if it tells (see [`linked`]), with the chats above them though these
+//! are not listed on their own (see [`planned`]); what was decided, the
+//! questions agents asked there that the human answered, each with what
+//! they chose and why, the last first; and what happened without them,
+//! the schedules that ran there, the pages of the wiki written from
+//! there, and the sources kept there, the last first. The home, where
+//! Cox lands, tells of every folder.
 //!
 //! The window tells this module how its chats stand as they change (see
 //! [`tell`]), since the stage's pages are served apart from it; the bar
@@ -35,7 +36,7 @@ use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-use cox_core::entry::{Entry, OnStep, QuestionAnswer, Step, StepsDone, alike};
+use cox_core::entry::{Entry, OnStep, QuestionAnswer, Step, StepState, StepsDone, alike};
 use cox_core::store::{ChatId, KeptAnswer, KeptPlan, Progress, ResolvedBy, Said, Store};
 use jiff::tz::TimeZone;
 use serde_json::{Value, json};
@@ -110,6 +111,9 @@ pub struct Chat {
     /// Whether it is marked done: it leaves the page, but for a step of
     /// the plan of the chat that opened it, and what it spent there.
     pub resolved: bool,
+    /// Whether it is marked done as its report reached the agent that
+    /// opened it.
+    pub reported: bool,
     /// Whether the human archived it: it waits for them only while it
     /// asks.
     pub archived: bool,
@@ -687,21 +691,69 @@ pub fn dismiss(asked: &str) {
 /// How alike a step of a plan must be to a subagent's chat, by its name,
 /// as [`alike`] measures it, for the chat to show under the step.
 const LINKED: f64 = 0.3;
+/// How long after a subagent's chat was opened, in milliseconds, a step
+/// of the plan of the chat that opened it may start and still be the
+/// step it came from: coxd may keep the plan the agent sent just before
+/// it opened the chat after the chat.
+const ALONGSIDE: i64 = 2_000;
 
-/// The step of `plan` each of `subagents` works on, by its place in the
-/// plan: the step its chat's name reads most alike, once alike enough.
-fn linked(plan: &[Step], subagents: &[&Chat]) -> Vec<Option<usize>> {
+/// The step of `plan` each of `subagents` came from, by its place in the
+/// plan: the step under way when its chat was opened, as `opened` tells
+/// when, or started [`ALONGSIDE`] it, the one whose text reads most alike
+/// its name, once alike enough, then the one started nearest the time,
+/// if more were; or else, as when the agent opened it between steps, the
+/// step its name reads most alike, once alike enough.
+fn linked(plan: &[Step], subagents: &[&Chat], opened: &[(ChatId, i64)]) -> Vec<Option<usize>> {
     subagents
         .iter()
         .map(|chat| {
-            plan.iter()
-                .enumerate()
-                .map(|(at, step)| (at, alike(&step.text, &chat.name)))
-                .filter(|(_, score)| *score >= LINKED)
-                .max_by(|one, other| one.1.total_cmp(&other.1))
-                .map(|(at, _)| at)
+            // How alike `step` reads to its name, once alike enough.
+            let alike = |step: &Step| {
+                Some(alike(&step.text, &chat.name))
+                    .filter(|score| *score >= LINKED)
+                    .unwrap_or_default()
+            };
+            let opened = chat
+                .kept
+                .and_then(|kept| opened.iter().find(|(id, _)| *id == kept))
+                .map(|(_, at)| *at);
+            opened
+                .and_then(|at| {
+                    plan.iter()
+                        .enumerate()
+                        .filter(|(_, step)| under_way(step, at))
+                        .max_by(|(_, one), (_, other)| {
+                            let apart =
+                                |step: &Step| step.started.map(|started| (started - at).abs());
+                            alike(one)
+                                .total_cmp(&alike(other))
+                                .then(apart(other).cmp(&apart(one)))
+                        })
+                        .map(|(at, _)| at)
+                })
+                .or_else(|| {
+                    plan.iter()
+                        .enumerate()
+                        .map(|(at, step)| (at, alike(step)))
+                        .filter(|(_, score)| *score > 0.0)
+                        .max_by(|one, other| one.1.total_cmp(&other.1))
+                        .map(|(at, _)| at)
+                })
         })
         .collect()
+}
+
+/// Whether `step` was under way at `at`, in milliseconds since the
+/// epoch: started by then, or [`ALONGSIDE`] it, and under way still, or
+/// done since.
+fn under_way(step: &Step, at: i64) -> bool {
+    step.started
+        .is_some_and(|started| started <= at + ALONGSIDE)
+        && match step.state {
+            StepState::InProgress => true,
+            StepState::Completed => step.since.is_some_and(|done| at <= done),
+            StepState::Pending => false,
+        }
 }
 
 /// The plans each chat's agent sent last, those the human dismissed,
@@ -823,19 +875,15 @@ fn waiting_in(told: &Told, root: &Path, now: &dyn Fn(u64) -> Option<commands::No
         .collect()
 }
 
-/// The chats of the folder `root`, or of every folder in the home, at
-/// work, or with a plan not done, or done not [`DONE_SHOWS`] ago, or
-/// marked done not as long ago, or while it asks the human or they did
-/// not look, as JSON: each with what
-/// it does now, as `now` says, and the steps of its plan, of `plans`,
-/// each with the subagents' chats that work on it, and after it its
-/// other subagents, all of them under a plan, those at work otherwise.
-fn planned(
-    told: &Told,
-    root: &Path,
-    plans: &Plans<'_>,
-    now: &dyn Fn(u64) -> Option<commands::Now>,
-) -> Vec<Value> {
+/// The chats of the folder `root`, or of every folder in the home, that
+/// the page lists, of `told`: those at work, or with a plan, of `plans`,
+/// not done, or done not [`DONE_SHOWS`] ago, or done while it asks the
+/// human or they did not look, or marked done not as long ago, or
+/// waiting on CI, the subagents that wait for the human, and each chat
+/// above one of them, as far as the chats that opened them show on the
+/// page, are not archived and are of the folder, for each to show under
+/// the chat that opened it.
+fn tree_of<'a>(told: &'a Told, root: &Path, plans: &Plans<'_>) -> Vec<&'a Chat> {
     let shown = |chat: &Chat| {
         chat.working
             || plans.done_lately(chat)
@@ -847,93 +895,160 @@ fn planned(
                         || chat.unread
                         || plans.at - plan.at < DONE_SHOWS)
             })
+            || chat.waits_on_ci()
+            || (chat.parent.is_some()
+                && !chat.resolved
+                && (chat.asking || (!chat.archived && chat.unread)))
     };
-    let listed_chats: Vec<&Chat> = told
+    let mut tree: Vec<&Chat> = told
         .chats
         .iter()
-        .filter(|chat| {
-            plans.stays(chat) && of_folder(told, chat, root) && (shown(chat) || chat.waits_on_ci())
-        })
+        .filter(|chat| plans.stays(chat) && of_folder(told, chat, root) && shown(chat))
         .collect();
-    let mut listed = Vec::new();
-    let mut under: Vec<(&Chat, usize)> = listed_chats
+    for at in 0..tree.len() {
+        let mut chat = tree[at];
+        while let Some(parent) = parent_of(told, chat).filter(|parent| {
+            !parent.archived && plans.stays(parent) && of_folder(told, parent, root)
+        }) {
+            // Those above it are in already, or come in with it.
+            if tree.iter().any(|other| other.key == parent.key) {
+                break;
+            }
+            tree.push(parent);
+            chat = parent;
+        }
+    }
+    tree
+}
+
+/// The chat of `told` whose agent opened `chat`, as far as the window
+/// lists it.
+fn parent_of<'a>(told: &'a Told, chat: &Chat) -> Option<&'a Chat> {
+    let parent = chat.parent?;
+    told.chats.iter().find(|other| other.key == parent)
+}
+
+/// The chats the page lists of the folder `root` (see [`tree_of`]), as
+/// JSON, as a tree, each under the chat whose agent opened it, at any
+/// depth: those under no step of its plan, of `plans`, right under it,
+/// then those under each step of it they came from (see [`linked`]), in
+/// the plan's order, and, under a plan, its subagents done too. Each tells
+/// what it does now, as `now` says, how it stands, the steps of its plan
+/// and how far it went, how deep it is, the chat it is under and the
+/// step, by its place in the plan.
+fn planned(
+    told: &Told,
+    root: &Path,
+    plans: &Plans<'_>,
+    now: &dyn Fn(u64) -> Option<commands::Now>,
+) -> Vec<Value> {
+    let tree = tree_of(told, root, plans);
+    let in_tree = |chat: &Chat| tree.iter().any(|other| other.key == chat.key);
+    // Each chat to list, how deep, and the chat and the step it is under.
+    let mut under: Vec<(&Chat, usize, Option<u64>, Option<usize>)> = told
+        .chats
         .iter()
         .rev()
-        .filter(|chat| {
-            !chat
-                .parent
-                .is_some_and(|parent| listed_chats.iter().any(|other| other.key == parent))
-        })
-        .map(|chat| (*chat, 0))
+        .filter(|chat| in_tree(chat) && !parent_of(told, chat).is_some_and(in_tree))
+        .map(|chat| (chat, 0, None, None))
         .collect();
-    while let Some((chat, depth)) = under.pop() {
-        let does = chat
-            .working
-            .then(|| now(chat.key))
-            .flatten()
-            .unwrap_or_default();
-        let plan = plans.of(chat);
-        let steps = plan.map_or(&[][..], |plan| plan.steps.as_slice());
+    let mut listed: Vec<Value> = Vec::new();
+    let mut seen: Vec<u64> = Vec::new();
+    while let Some((chat, depth, parent, step)) = under.pop() {
+        if seen.contains(&chat.key) {
+            continue;
+        }
+        seen.push(chat.key);
+        let steps = plans.of(chat).map_or(&[][..], |plan| plan.steps.as_slice());
         let subagents: Vec<&Chat> = told
             .chats
             .iter()
             .filter(|other| other.parent == Some(chat.key))
             .collect();
-        let links = linked(steps, &subagents);
-        listed.push(json!({
-            "key": chat.key,
-            "chat": chat.kept, "takes": takes_a_line(chat), "steers": chat.steers,
-            "name": chat.name,
-            "goal": chat.goal,
-            "depth": depth,
-            "working": chat.working,
-            "waits": waits_of(chat, depth),
-            "sketch": chat.cwd != chat.project,
-            "where": where_of(told, &chat.project),
-            "said": does.said,
-            "running": does.running.map(|(called, line)| json!({"called": called, "line": line})),
-            "pulls": pulls_of(chat),
-            "spent": spent_of(told, chat),
-            "background": chat
-                .background
-                .iter()
-                .map(|background| {
-                    json!({
-                        "what": background.what(),
-                        "command": background.is_command(),
-                    })
-                })
-                .collect::<Vec<_>>(),
-            "plan": steps_of(told, steps, plans.on_of(chat), &subagents, &links, now),
-            // How far the plan went, which the page tells rather than
-            // count again.
-            "progress": StepsDone::count(steps),
-            "finished": StepsDone::count(steps).finished(),
-            // Only a plan that keeps a chat listed on its own is
-            // dismissed: one at work shows anyway.
-            "dismiss": plan
-                .filter(|_| !chat.working && !steps.is_empty())
-                .map(|plan| json!({ "chat": plan.chat, "plan": plan.number })),
-        }));
+        let links = linked(steps, &subagents, plans.opened);
+        let mut row = row_of(told, chat, depth, plans, now);
+        row["parent"] = json!(parent);
+        row["step"] = json!(step);
+        listed.push(row);
+        let mut children: Vec<(&Chat, Option<usize>)> = subagents
+            .into_iter()
+            .zip(links)
+            .filter(|(other, link)| {
+                link.is_some() || (plans.stays(other) && (!steps.is_empty() || in_tree(other)))
+            })
+            .collect();
+        // Those under no step first, then those under each, in order.
+        children.sort_by_key(|(_, link)| *link);
         under.extend(
-            subagents
-                .iter()
-                .zip(&links)
+            children
+                .into_iter()
                 .rev()
-                .filter(|(other, link)| {
-                    link.is_none()
-                        && plans.stays(other)
-                        && (!steps.is_empty() || listed_chats.contains(other))
-                })
-                .map(|(other, _)| (*other, depth + 1)),
+                .map(|(other, link)| (other, depth + 1, Some(chat.key), link)),
         );
     }
     listed
 }
 
+/// What the page tells of `chat`, listed `depth` under the chat at the
+/// top of its, as JSON: what it does now, as `now` says, how it stands,
+/// and its plan, of `plans`, with how far it went.
+fn row_of(
+    told: &Told,
+    chat: &Chat,
+    depth: usize,
+    plans: &Plans<'_>,
+    now: &dyn Fn(u64) -> Option<commands::Now>,
+) -> Value {
+    let does = chat
+        .working
+        .then(|| now(chat.key))
+        .flatten()
+        .unwrap_or_default();
+    let plan = plans.of(chat);
+    let steps = plan.map_or(&[][..], |plan| plan.steps.as_slice());
+    json!({
+        "key": chat.key,
+        "chat": chat.kept, "takes": takes_a_line(chat), "steers": chat.steers,
+        "name": chat.name,
+        "goal": chat.goal,
+        "depth": depth,
+        "working": chat.working,
+        "waits": waits_of(told, chat, depth),
+        "reported": chat.reported,
+        "sketch": chat.cwd != chat.project,
+        "where": where_of(told, &chat.project),
+        "said": does.said,
+        "running": does.running.map(|(called, line)| json!({"called": called, "line": line})),
+        "pulls": pulls_of(chat),
+        "spent": spent_of(told, chat),
+        "background": chat
+            .background
+            .iter()
+            .map(|background| {
+                json!({
+                    "what": background.what(),
+                    "command": background.is_command(),
+                })
+            })
+            .collect::<Vec<_>>(),
+        "plan": steps_of(steps, plans.on_of(chat)),
+        // How far the plan went, which the page tells rather than count
+        // again.
+        "progress": StepsDone::count(steps),
+        "finished": StepsDone::count(steps).finished(),
+        // Only a plan that keeps a chat listed on its own is dismissed:
+        // one at work shows anyway.
+        "dismiss": plan
+            .filter(|_| !chat.working && !steps.is_empty())
+            .map(|plan| json!({ "chat": plan.chat, "plan": plan.number })),
+    })
+}
+
 /// What `chat`, listed `depth` under the chat at the top of its, waits
-/// on, in words, or `None` while it is at work: marked done, it is done.
-fn waits_of(chat: &Chat, depth: usize) -> Option<&'static str> {
+/// on, in words, or `None` while it is at work: marked done, it is done;
+/// with subagents under it at work, of `told`, at any depth, it waits on
+/// them.
+fn waits_of(told: &Told, chat: &Chat, depth: usize) -> Option<&'static str> {
     if chat.resolved {
         Some("done")
     } else if chat.working {
@@ -944,6 +1059,8 @@ fn waits_of(chat: &Chat, depth: usize) -> Option<&'static str> {
         Some("finished a turn")
     } else if chat.waits_on_ci() {
         Some("waits on CI")
+    } else if works_under(told, chat) {
+        Some("waits on subagents")
     } else if depth > 0 {
         Some("finished")
     } else {
@@ -951,14 +1068,30 @@ fn waits_of(chat: &Chat, depth: usize) -> Option<&'static str> {
     }
 }
 
+/// Whether a subagent under `chat`, of `told`, at any depth, is at work.
+fn works_under(told: &Told, chat: &Chat) -> bool {
+    told.chats
+        .iter()
+        .filter(|other| other.working)
+        .any(|other| {
+            let mut above = parent_of(told, other);
+            // As deep as the window lists chats, for a loop not to go round.
+            for _ in 0..told.chats.len() {
+                match above {
+                    Some(parent) if parent.key == chat.key => return true,
+                    Some(parent) => above = parent_of(told, parent),
+                    None => return false,
+                }
+            }
+            false
+        })
+}
+
 /// The chat of `told` at the top of `chat`'s: the one whose agent opened
 /// the one that opened it, and so on, as far as the window lists them.
 fn top_of<'a>(told: &'a Told, chat: &'a Chat) -> &'a Chat {
     let mut top = chat;
-    while let Some(parent) = top
-        .parent
-        .and_then(|parent| told.chats.iter().find(|other| other.key == parent))
-    {
+    while let Some(parent) = parent_of(told, top) {
         top = parent;
     }
     top
@@ -1184,40 +1317,13 @@ fn spent_of(told: &Told, chat: &Chat) -> Value {
     })
 }
 
-/// The steps of a plan, as JSON, each with its id, how many lines the
-/// human wrote on it, as `on` counts them, those of `subagents` that
-/// `links` link to it, what they do now, as `now` says, and what they
-/// spent, with the chats under them, of `told`.
-fn steps_of(
-    told: &Told,
-    steps: &[Step],
-    on: &[(u64, usize)],
-    subagents: &[&Chat],
-    links: &[Option<usize>],
-    now: &dyn Fn(u64) -> Option<commands::Now>,
-) -> Vec<Value> {
+/// The steps of a plan, as JSON, each with its id and how many lines the
+/// human wrote on it, as `on` counts them: the subagents that came from
+/// it are listed under it on their own (see [`planned`]).
+fn steps_of(steps: &[Step], on: &[(u64, usize)]) -> Vec<Value> {
     steps
         .iter()
-        .enumerate()
-        .map(|(at, step)| {
-            let chats: Vec<Value> = subagents
-                .iter()
-                .zip(links)
-                .filter(|(_, link)| **link == Some(at))
-                .map(|(chat, _)| {
-                    json!({
-                        "key": chat.key,
-                        "name": chat.name,
-                        "working": chat.working,
-                        "pulls": pulls_of(chat),
-                        "spent": spent_of(told, chat),
-                        "said": chat
-                            .working
-                            .then(|| now(chat.key).and_then(|now| now.said))
-                            .flatten(),
-                    })
-                })
-                .collect();
+        .map(|step| {
             let written = step
                 .id
                 .and_then(|id| on.iter().find(|(on, _)| *on == id))
@@ -1227,7 +1333,6 @@ fn steps_of(
                 "state": step.state,
                 "id": step.id,
                 "on": written,
-                "chats": chats,
             })
         })
         .collect()
@@ -1523,7 +1628,6 @@ fn kept_sources(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cox_core::entry::StepState;
     use coxd::testing::TempDir;
 
     const NO_MOVED: Progress = Progress {
@@ -1572,10 +1676,49 @@ mod tests {
             pulls: Vec::new(),
             spent: None,
             resolved: false,
+            reported: false,
             archived: false,
             steers: false,
             on_steps: Vec::new(),
         }
+    }
+
+    /// The chats `json` lists, a line each, stepped in as deep as each
+    /// is, under the line of the chat above it, which it tells it is
+    /// under, with the step of that chat's plan it came from, if it tells,
+    /// how it waits and whether it reported.
+    fn tree(json: &Value) -> Vec<String> {
+        let mut above: Vec<Value> = Vec::new();
+        json["plans"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|chat| {
+                let depth = usize::try_from(chat["depth"].as_u64().unwrap()).unwrap();
+                above.truncate(depth);
+                let parent = above.last().cloned().unwrap_or(Value::Null);
+                assert_eq!(
+                    chat["parent"], parent,
+                    "{} is under the line above",
+                    chat["key"]
+                );
+                above.push(chat["key"].clone());
+                let step = chat["step"]
+                    .as_u64()
+                    .map_or_else(String::new, |step| format!(" on {step}"));
+                let reported = if chat["reported"] == true {
+                    ", reported"
+                } else {
+                    ""
+                };
+                format!(
+                    "{}{}{step}: {}{reported}",
+                    "  ".repeat(depth),
+                    chat["key"],
+                    chat["waits"]
+                )
+            })
+            .collect()
     }
 
     #[test]
@@ -2209,39 +2352,171 @@ mod tests {
 
         let json = told_of(&told, &root, &[], &plans, &now, &places);
 
-        let rows: Vec<(u64, u64)> = json["plans"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|chat| {
-                (
-                    chat["key"].as_u64().unwrap(),
-                    chat["depth"].as_u64().unwrap(),
-                )
-            })
-            .collect();
-        // A subagent whose name reads as a step shows under the step, not
-        // again under the chat; the others show under the chat, done or
-        // not, while it has a plan.
+        // Under the chat, its subagents that came from no step of its
+        // plan first, done or not, while it has a plan, then those whose
+        // names read as a step, under the step, in the plan's order.
         assert_eq!(
-            rows,
-            [(2, 0), (4, 1), (11, 1), (5, 0), (6, 0), (8, 0), (10, 0)]
+            tree(&json),
+            [
+                "2: null",
+                "  4: null",
+                r#"  11: "finished""#,
+                "  3 on 0: null",
+                r#"  9 on 1: "finished""#,
+                r#"5: "waits""#,
+                r#"6: "finished a turn""#,
+                r#"8: "asks you""#,
+                r#"10: "waits""#,
+            ]
         );
-        let plan = &json["plans"][0]["plan"];
-        assert_eq!(plan[0]["state"], "in_progress");
-        assert_eq!(
-            plan[0]["chats"],
-            json!([{ "key": 3, "name": "Add the --shout flag", "working": true, "pulls": [], "spent": null, "said": "step of 3" }])
-        );
-        assert_eq!(
-            plan[1]["chats"],
-            json!([{ "key": 9, "name": "README docs update", "working": false, "pulls": [], "spent": null, "said": null }])
-        );
-        assert_eq!(plan[2]["chats"], json!([]));
-        assert_eq!(json["plans"][2]["waits"], "finished");
-        assert_eq!(json["plans"][3]["waits"], "waits");
+        assert_eq!(json["plans"][0]["plan"][0]["state"], "in_progress");
+        assert_eq!(json["plans"][3]["said"], "step of 3");
         // Only the chats at work count as at work.
         assert_eq!(json["busy"], 3);
+    }
+
+    #[test]
+    fn subagents_show_under_the_chats_and_the_steps_they_came_from_at_any_depth() {
+        let root = TempDir::new();
+        let listed = |key: u64, name: &str, working: bool, parent: Option<u64>| {
+            let mut listed = chat(key, &root, &root, false, false);
+            listed.name = name.to_owned();
+            listed.working = working;
+            listed.parent = parent;
+            listed.kept = Some(kept(key));
+            listed
+        };
+        let mut reported = listed(6, "Update the docs", false, Some(1));
+        (reported.resolved, reported.reported) = (true, true);
+        let mut asking = listed(7, "Pick a name", false, Some(1));
+        asking.asking = true;
+        // 1, with no plan, opened 2, 6 and 7; 2 opened 3 while it tested,
+        // and 5 before it had a plan; 3 opened 4 while it ran on Linux.
+        let told = Told {
+            chats: vec![
+                listed(1, "orchestrate the release", false, None),
+                listed(2, "Add the --shout flag", true, Some(1)),
+                listed(3, "Test the --shout flag", true, Some(2)),
+                listed(4, "Run them on Linux", true, Some(3)),
+                listed(5, "Look up the conventions", false, Some(2)),
+                reported,
+                asking,
+            ],
+            home: root.join("home"),
+            ..Told::default()
+        };
+        let at = 10 * DONE_SHOWS;
+        // So many seconds ago.
+        let ago = |seconds: i64| at - seconds * 1000;
+        let step = |text: &str, state: StepState, started: Option<i64>, since: i64| Step {
+            text: text.to_owned(),
+            state,
+            since: Some(ago(since)),
+            started: started.map(ago),
+            id: None,
+        };
+        let plan = |chat: u64, steps: Vec<Step>| KeptPlan {
+            chat: kept(chat),
+            number: 1,
+            steps,
+            at,
+        };
+        let kept_plans = [
+            plan(
+                2,
+                vec![
+                    step("Read the code", StepState::Completed, Some(100), 90),
+                    step("Add the flag", StepState::Completed, Some(90), 60),
+                    step("Test it", StepState::InProgress, Some(60), 60),
+                    step("Commit", StepState::Pending, None, 100),
+                ],
+            ),
+            plan(
+                3,
+                vec![
+                    step("Write the tests", StepState::Completed, Some(50), 30),
+                    step("Run them on Linux", StepState::InProgress, Some(30), 30),
+                    step("Run them on macOS", StepState::Pending, None, 50),
+                ],
+            ),
+            plan(4, vec![step("Build", StepState::InProgress, Some(20), 20)]),
+        ];
+        let opened = [(kept(3), ago(50)), (kept(4), ago(20)), (kept(5), ago(200))];
+        let moved = Progress {
+            resolved: vec![(
+                kept(6),
+                cox_core::store::Resolved {
+                    at: at - 10,
+                    by: ResolvedBy::Agent,
+                },
+            )],
+            ..NO_MOVED
+        };
+        let plans = Plans {
+            kept: &kept_plans,
+            opened: &opened,
+            moved: &moved,
+            at,
+            ..NO_PLANS
+        };
+        let places = Places {
+            wiki: &root.join("wiki"),
+            raw: &root.join("raw"),
+            triggers: &json!({}),
+        };
+
+        let json = told_of(&told, &root, &[], &plans, &|_| None, &places);
+
+        // The chat with no plan shows above the subagents it waits on.
+        assert_eq!(
+            tree(&json),
+            [
+                r#"1: "waits on subagents""#,
+                "  2: null",
+                r#"    5: "finished""#,
+                "    3 on 2: null",
+                "      4 on 1: null",
+                r#"  6: "done", reported"#,
+                r#"  7: "asks you""#,
+            ]
+        );
+        // Only the chats at work count as at work.
+        assert_eq!(json["busy"], 3);
+    }
+
+    #[test]
+    fn the_chat_above_a_subagent_at_work_shows_unless_archived() {
+        let root = TempDir::new();
+        let listed = |key: u64, parent: Option<u64>, working: bool, archived: bool| {
+            let mut listed = chat(key, &root, &root, false, false);
+            (listed.parent, listed.working, listed.archived) = (parent, working, archived);
+            listed
+        };
+        // 1 and 3, with no plan and not at work, opened 2 and 4, at work;
+        // the human archived 3.
+        let told = Told {
+            chats: vec![
+                listed(1, None, false, false),
+                listed(2, Some(1), true, false),
+                listed(3, None, false, true),
+                listed(4, Some(3), true, false),
+            ],
+            home: root.join("home"),
+            ..Told::default()
+        };
+        let places = Places {
+            wiki: &root.join("wiki"),
+            raw: &root.join("raw"),
+            triggers: &json!({}),
+        };
+
+        let json = told_of(&told, &root, &[], &NO_PLANS, &|_| None, &places);
+
+        assert_eq!(
+            tree(&json),
+            [r#"1: "waits on subagents""#, "  2: null", "4: null"]
+        );
+        assert_eq!(json["busy"], 2);
     }
 
     #[test]
@@ -2775,7 +3050,69 @@ mod tests {
             named("全体のレビュー"),
         ];
         let chats: Vec<&Chat> = chats.iter().collect();
-        assert_eq!(linked(&plan, &chats), [Some(1), Some(2), Some(0), None]);
+        assert_eq!(
+            linked(&plan, &chats, &[]),
+            [Some(1), Some(2), Some(0), None]
+        );
+    }
+
+    #[test]
+    fn a_subagent_links_to_the_step_under_way_when_it_was_opened() {
+        // So many seconds after the epoch.
+        let second = |seconds: i64| seconds * 1000;
+        let step = |text: &str, state: StepState, started: Option<i64>, since: i64| Step {
+            text: text.to_owned(),
+            state,
+            since: Some(second(since)),
+            started: started.map(second),
+            id: None,
+        };
+        let plan = [
+            step("Add the flag", StepState::Completed, Some(10), 20),
+            step("Test it", StepState::Completed, Some(20), 40),
+            step("Write the docs", StepState::InProgress, Some(30), 30),
+            step("Push", StepState::InProgress, Some(35), 35),
+            step("Tag it", StepState::Pending, None, 0),
+        ];
+        let root = Path::new("/p");
+        let opened = |key: u64, name: &str| {
+            let mut opened = chat(key, root, root, false, false);
+            name.clone_into(&mut opened.name);
+            opened.kept = Some(kept(key));
+            opened
+        };
+        let chats = [
+            // While the flag was added, though it reads as the tests.
+            opened(1, "Test the flag"),
+            // While the tests and the docs were under way: the docs, as
+            // it reads so.
+            opened(2, "Docs for the flag"),
+            // While three were: the one started nearest, as none reads so.
+            opened(3, "Look around"),
+            // Before any step: the step it reads as.
+            opened(4, "Tag it"),
+            // Not kept by coxd, so not known when: as it reads.
+            chat(5, root, root, false, false),
+            // As the flag was done and the tests started, kept just after
+            // the chat was opened: the tests.
+            opened(6, "Look again"),
+            // Just before the first step started, kept after the chat was
+            // opened: that step, not one started later.
+            opened(7, "Look first"),
+        ];
+        let at = [
+            (kept(1), second(15)),
+            (kept(2), second(32)),
+            (kept(3), second(38)),
+            (kept(4), second(5)),
+            (kept(6), second(20) - 1),
+            (kept(7), second(10) - 6),
+        ];
+        let chats: Vec<&Chat> = chats.iter().collect();
+        assert_eq!(
+            linked(&plan, &chats, &at),
+            [Some(0), Some(2), Some(3), Some(4), None, Some(1), Some(0)]
+        );
     }
 
     #[test]

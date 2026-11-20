@@ -49,7 +49,7 @@ use std::sync::Arc;
 
 use cox_core::goal::Goal;
 use cox_core::list::List;
-use cox_core::store::{ChatId, Named, ProjectId, Resolved};
+use cox_core::store::{ChatId, Named, ProjectId, Resolved, ResolvedBy};
 use gpui::{
     App, Context, Entity, FocusHandle, Focusable, Image, ImageFormat, KeyBinding,
     PathPromptOptions, Pixels, Point, SharedString, Subscription, Task, Window, actions,
@@ -1564,6 +1564,9 @@ impl Workspace {
                     pulls: chat.pulls.clone(),
                     spent: chat.spent.clone(),
                     resolved: chat.is_resolved(),
+                    reported: chat
+                        .resolved
+                        .is_some_and(|resolved| resolved.by == ResolvedBy::Agent),
                     archived,
                     steers: chat.steers,
                     on_steps: chat.on_steps.clone(),

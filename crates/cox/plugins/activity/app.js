@@ -9,7 +9,11 @@
 // in one bar. Below, one line a chat, grouped by project in the home:
 // how it stands, its plan as a bar, how far it got, and what it does
 // now, those waiting for the human first, those done or stopped last,
-// stepped back. A click on its name shows the chat, by going to
+// stepped back; under it, stepped in, the subagents its agent opened,
+// those that came from a step of its plan under the step, and theirs
+// under them, as deep as they go, which a click on how many there are
+// folds away, as those three deep are at first. A click on its name
+// shows the chat, by going to
 // `cox://chat/<key>`; a click elsewhere on the line opens it, and its
 // story is read, from `cox://api/activity/timeline/<chat>`, for it alone:
 // when it started, what it did when, and when and how it ended, then its
@@ -46,6 +50,14 @@ const stories = new Map();
 /// The step whose thread shows, by its chat, as coxd keeps it, and its
 /// id, or null.
 let threaded = null;
+
+/// How deep a chat is, under the chat at the top of its, whose subagents
+/// are folded away at first.
+const FOLDED = 2;
+/// Whether the subagents under a chat are folded away, by its key, as the
+/// human last chose.
+const folds = new Map();
+const folded = (chat) => folds.get(chat.key) ?? chat.depth >= FOLDED;
 
 const esc = (s) =>
   String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
@@ -107,6 +119,7 @@ function standing(chat) {
   const waits = chat.waits ?? chat.why;
   if (waits === "asks you" || waits === "finished a turn") return { as: "yours", says: waits };
   if (waits === "waits on CI") return { as: "ci", says: waits };
+  if (waits === "waits on subagents") return { as: "subs", says: waits };
   // A chat only waiting, whose CI ended while the human did not look.
   if (!chat.plans && chat.why) return { as: "yours", says: chat.why };
   // Its plan done, a subagent that finished, or a chat marked done.
@@ -114,9 +127,11 @@ function standing(chat) {
   return { as: "stopped", says: "stopped" };
 }
 
-/// The chats of the page, one each: those with a plan or at work, and
-/// those that only wait for the human, each with how it stands, how far
-/// its plan went, as Cox counted it, and the step under way.
+/// The chats of the page, one each: those with a plan or at work, the
+/// subagents under them and the chats above them, and those that only
+/// wait for the human, each with how it stands, how far its plan went,
+/// as Cox counted it, the step under way, the subagents its agent opened,
+/// in the order Cox told them, and all those under it, at any depth.
 function chats() {
   const all = told.plans.map((chat) => ({ ...chat, plans: true }));
   for (const waiting of told.waiting) {
@@ -124,7 +139,7 @@ function chats() {
     if (planned) Object.assign(planned, { asks: waiting.asks, why: waiting.why });
     else all.push({ ...waiting, plan: [], pulls: [], background: [], depth: 0 });
   }
-  return all.map((chat) => {
+  const chats = all.map((chat) => {
     const plan = chat.plan ?? [];
     return {
       ...chat,
@@ -132,19 +147,30 @@ function chats() {
       progress: chat.progress ?? { done: 0, of: 0 },
       under: plan.find((step) => step.state === "in_progress"),
       next: plan.find((step) => step.state === "pending"),
+      subs: [],
     };
   });
+  for (const chat of chats) chats.find((one) => one.key === chat.parent)?.subs.push(chat);
+  const below = (chat) => chat.subs.flatMap((sub) => [sub, ...below(sub)]);
+  for (const chat of chats) chat.below = below(chat);
+  return chats;
 }
 
 /// The order chats stand in: the human's turn first, done or stopped
 /// last.
-const ORDER = { yours: 0, work: 1, ci: 2, stopped: 3, done: 4 };
+const ORDER = { yours: 0, work: 1, subs: 2, ci: 3, stopped: 4, done: 5 };
+
+/// How many of the subagents under `chat`, at any depth, are at work.
+const busyUnder = (chat) => chat.below.filter((sub) => sub.working).length;
 
 /// What `chat` does now, in a line.
 function now(chat) {
   if (chat.stands.as === "yours" && chat.asks) return chat.asks;
   if (chat.running) return `$ ${chat.running.called}`;
   if (chat.stands.as === "work" && chat.under) return chat.under.text;
+  if (chat.stands.as === "subs") return `waits on ${many(busyUnder(chat), "subagent", "subagents")} at work`;
+  if (chat.reported) return "↲ reported";
+  if (chat.waits === "finished") return "finished, not reported yet";
   if (chat.stands.as === "stopped" && chat.next) return `next: ${chat.next.text}`;
   if (chat.said) return chat.said;
   return chat.stands.says;
@@ -157,20 +183,60 @@ const counted = (progress) => `${progress.done}/${progress.of}`;
 const bar = (plan) =>
   `<span class="bar">${plan.map((step) => `<i class="${esc(step.state)}" title="${esc(step.text)}"></i>`).join("")}</span>`;
 
-/// The line of `chat`, and what opens under it.
-function row(chat) {
+/// The line of `chat`, its name stepped in `indent` times, with what
+/// folds away the subagents under it, or shows them, and, while they are
+/// folded away, how many there are and are at work, and what opens under
+/// it.
+function row(chat, indent) {
   const open = opened.has(chat.key);
-  const subagents = (chat.plan ?? []).flatMap((step) => step.chats).length;
+  const hidden = folded(chat);
+  const busy = busyUnder(chat);
+  const title = `${hidden ? "shows" : "folds away"} ${many(chat.below.length, "subagent", "subagents")} under it`;
+  const fold = chat.subs.length
+    ? `<button class="fold" data-fold="${chat.key}" title="${title}">${hidden ? "▸" : "▾"}</button>`
+    : `<span class="fold"></span>`;
+  const more =
+    chat.subs.length && hidden
+      ? `<button class="fold more" data-fold="${chat.key}" title="${title}">+${chat.below.length}${busy ? ` · ${busy} at work` : ""}</button>`
+      : "";
   const named =
-    `<a href="cox://chat/${chat.key}" title="shows the chat">${chat.depth || chat.sketch ? "↳ " : ""}${esc(chat.name)}</a>${hint(chat)}` +
-    (subagents ? ` <span class="aside">+${many(subagents, "subagent", "subagents")}</span>` : "");
+    `${fold}<span class="dot"></span>` +
+    `<a href="cox://chat/${chat.key}" title="shows the chat">${chat.sketch ? "↳ " : ""}${esc(chat.name)}</a>${hint(chat)}${more}`;
   const plan = chat.plan ?? [];
   return (
-    `<div class="row ${chat.stands.as}${open ? " open" : ""}${chat.depth ? " under" : ""}" data-key="${chat.key}" title="${esc(chat.stands.says)}">` +
-    `<span class="dot"></span><span class="name">${named}</span>` +
-    `${plan.length ? bar(plan) : "<span></span>"}<span class="steps">${plan.length ? counted(chat.progress) : ""}</span>` +
+    `<div class="row ${chat.stands.as}${open ? " open" : ""}" style="--indent: ${indent}" data-key="${chat.key}" title="${esc(chat.stands.says)}">` +
+    `<span class="name">${named}</span>` +
+    `${plan.length ? bar(plan) : `<span class="bar"></span>`}<span class="steps">${plan.length ? counted(chat.progress) : ""}</span>` +
     `<span class="now">${esc(now(chat))}</span></div>` +
     (open ? opening(chat) : "")
+  );
+}
+
+/// The lines of `chat`, stepped in `indent` times, and, unless they are
+/// folded away, of the subagents under it, stepped in once more: those
+/// that came from no step of its plan first, then those that came from
+/// each, under a line of the step, in the plan's order.
+function lines(chat, indent) {
+  const drawn = row(chat, indent);
+  if (!chat.subs.length || folded(chat)) return drawn;
+  const plan = chat.plan ?? [];
+  const from = (at) => chat.subs.filter((sub) => (sub.step ?? null) === at);
+  return (
+    drawn +
+    from(null)
+      .map((sub) => lines(sub, indent + 1))
+      .join("") +
+    plan
+      .map((step, at) => {
+        const subs = from(at);
+        if (!subs.length) return "";
+        const [mark, named] = STATES[step.state] ?? ["?", step.state];
+        return (
+          `<div class="from ${esc(step.state)}" style="--indent: ${indent + 1}"><span class="mark" title="${named}">${mark}</span><span class="text">${esc(step.text)}</span></div>` +
+          subs.map((sub) => lines(sub, indent + 2)).join("")
+        );
+      })
+      .join("")
   );
 }
 
@@ -210,7 +276,7 @@ const TURN_ENDS = {
 /// What `event` of a chat's story says, as HTML, with the chats its
 /// subagents are, of `chat`, to link to.
 function says(event, chat) {
-  const sub = (chat.plan ?? []).flatMap((step) => step.chats).find((sub) => sub.name === event.text);
+  const sub = chat.subs.find((sub) => sub.name === event.text);
   const subagent = sub ? `<a href="cox://chat/${sub.key}" title="shows the chat">${esc(event.text)}</a>` : esc(event.text);
   switch (event.kind) {
     case "start":
@@ -300,6 +366,7 @@ function ending(chat, story, days) {
     case "asks":
       return line("yours", "?", "Waits for your answer", `since ${long(ended.at, Date.now())}`, ended.clock ?? ended.when);
     case "done":
+      if (chat.stands.as === "subs") return line("work", "◌", "Waits on its subagents", `${busyUnder(chat)} at work · ended its turn ${ago}`, ended.clock ?? ended.when);
       if (chat.finished) return line("done", "✓", "Done", took, ended.clock ?? ended.when);
       if (chat.stands.as === "yours") return line("yours", "●", "Finished a turn", ago, ended.clock ?? ended.when);
       return line("stopped", "■", chat.progress.of ? `Stopped at ${counted(chat.progress)}` : "Stopped", `after ${long(since, ended.at)} · ${ago}`, ended.clock ?? ended.when);
@@ -371,8 +438,8 @@ const STATES = {
   completed: ["✓", "done"],
 };
 
-/// The steps of `chat`'s plan, each with the subagents' chats that work
-/// on it, and its thread, which a click on it opens.
+/// The steps of `chat`'s plan, each with its thread, which a click on it
+/// opens: the subagents that came from it show under the chat's line.
 function steps(chat) {
   const plan = chat.plan ?? [];
   if (!plan.length) return "";
@@ -385,15 +452,9 @@ function steps(chat) {
         ? `<span class="text opens${shows ? " shown" : ""}" data-step="${esc(JSON.stringify({ chat: chat.chat, step: step.id }))}" title="${shows ? "closes" : "opens"} the thread of this step">${esc(step.text)}</span>` +
           (step.on ? ` <span class="on" title="${many(step.on, "line", "lines")} you wrote on this step">✎ ${step.on}</span>` : "")
         : `<span class="text">${esc(step.text)}</span>`;
-      const subs = step.chats
-        .map(
-          (sub) =>
-            `<a class="sub" href="cox://chat/${sub.key}" title="shows the chat">↳ ${esc(sub.name)}${hint(sub)}${sub.working ? " · at work" : ""}${sub.said ? ` · ${esc(sub.said)}` : ""}</a>`,
-        )
-        .join("");
       return (
         `<div class="step ${esc(step.state)}"><span class="mark" title="${named}">${mark}</span>` +
-        `<span>${text}${shows ? thread(chat) : ""}${subs}</span></div>`
+        `<span>${text}${shows ? thread(chat) : ""}</span></div>`
       );
     })
     .join("");
@@ -439,12 +500,13 @@ function numbers(all) {
     .map((summary) => `<button class="pick${summary === shown ? " picked" : ""}" data-window="${esc(summary.window)}">${esc(summary.window)}</button>`)
     .join("");
   const yours = all.filter((chat) => chat.stands.as === "yours").length;
-  const tops = all.filter((chat) => !chat.depth);
-  const steps = tops.flatMap((chat) => chat.plan ?? []);
+  // Every plan on the page, the subagents' at any depth too.
+  const planned = all.filter((chat) => (chat.plan ?? []).length);
+  const steps = planned.flatMap((chat) => chat.plan);
   const rank = { completed: 0, in_progress: 1, pending: 2 };
   steps.sort((one, other) => (rank[one.state] ?? 3) - (rank[other.state] ?? 3));
   // How far all the plans went, as Cox counted each.
-  const done = tops.reduce((sum, chat) => sum + chat.progress.done, 0);
+  const done = planned.reduce((sum, chat) => sum + chat.progress.done, 0);
   return (
     `<div class="numbers">` +
     `<div class="number yours"><div class="count">${yours}</div><div class="what">${yours === 1 ? "waits" : "wait"} for you</div></div>` +
@@ -452,7 +514,7 @@ function numbers(all) {
     `<div class="number"><div class="count">${shown?.steps ?? 0}</div><div class="what">${shown?.steps === 1 ? "step" : "steps"} done in ${picks}</div></div>` +
     `</div>` +
     (steps.length
-      ? `<div class="overall"><span>${done} of ${many(tops.reduce((sum, chat) => sum + chat.progress.of, 0), "step", "steps")}</span>${bar(steps)}<span>${many(tops.length, "chat", "chats")}</span></div>`
+      ? `<div class="overall"><span>${done} of ${many(planned.reduce((sum, chat) => sum + chat.progress.of, 0), "step", "steps")}</span>${bar(steps)}<span>${many(planned.length, "chat", "chats")}</span></div>`
       : "")
   );
 }
@@ -480,24 +542,14 @@ function drawn() {
   }
   const all = chats();
   // A subagent's line stays under the chat that opened it.
-  const tops = all.filter((chat) => !chat.depth);
-  const under = (top) => {
-    const at = told.plans.findIndex((chat) => chat.key === top.key);
-    const rest = [];
-    for (const chat of told.plans.slice(at + 1)) {
-      if (!chat.depth) break;
-      rest.push(all.find((one) => one.key === chat.key));
-    }
-    return rest.filter(Boolean);
-  };
+  const tops = all.filter((chat) => chat.parent == null);
   tops.sort((one, other) => ORDER[one.stands.as] - ORDER[other.stands.as]);
-  const lines = (chats) => chats.map((chat) => row(chat) + under(chat).map(row).join("")).join("");
   const places = told.home ? [...new Set(tops.map((chat) => chat.where ?? ""))] : [""];
   const groups = tops.length
     ? places
         .map((place) => {
           const of = tops.filter((chat) => !told.home || (chat.where ?? "") === place);
-          return `<div class="group">${told.home ? `<h2>${esc(place || "~")}</h2>` : ""}${lines(of)}</div>`;
+          return `<div class="group">${told.home ? `<h2>${esc(place || "~")}</h2>` : ""}${of.map((chat) => lines(chat, 0)).join("")}</div>`;
         })
         .join("")
     : `<div class="none">No chat ${told.home ? "" : "here "}is at work, has a plan to finish, or waits for you.</div>`;
@@ -526,6 +578,13 @@ app.addEventListener("click", (event) => {
     threaded = threaded && threaded.chat === asked.chat && threaded.step === asked.step ? null : asked;
     draw();
     load();
+    return;
+  }
+  const fold = event.target.closest("[data-fold]");
+  if (fold) {
+    const chat = chats().find((chat) => chat.key === Number(fold.dataset.fold));
+    if (chat) folds.set(chat.key, !folded(chat));
+    draw();
     return;
   }
   const button = event.target.closest("[data-dismiss]");
