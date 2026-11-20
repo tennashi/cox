@@ -202,6 +202,13 @@ pub enum ChatRequest {
         chat: i64,
         answer: oneshot::Sender<Result<String, String>>,
     },
+    /// Mark the chat of the chat's project kept as `chat` done, as the
+    /// human's Resolve does, unless it is this chat, at work or asking
+    /// the human; answer what was marked, or why it cannot be.
+    ResolveChat {
+        chat: i64,
+        answer: oneshot::Sender<Result<String, String>>,
+    },
     /// Show the human `about`, what the chat's project is as proposed, for
     /// them to set or let be, with `why`, if the agent said; answer what
     /// the project is now, if it says, or why it cannot be proposed.
@@ -1161,7 +1168,7 @@ mod tests {
         let cwd = Path::new("/");
         let listed = answer_now(&ask("tools/list", &json!({})), cwd, &sent).unwrap();
         // Cox's own, the Android emulator's, and the Mac's windows' on macOS.
-        let tools = 24 + 7 + if cfg!(target_os = "macos") { 6 } else { 0 };
+        let tools = 25 + 7 + if cfg!(target_os = "macos") { 6 } else { 0 };
         assert_eq!(listed["result"]["tools"].as_array().unwrap().len(), tools);
         let called = ask("tools/call", &json!({ "name": "no_such_tool" }));
         let called = answer_now(&called, cwd, &sent).unwrap();
