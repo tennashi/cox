@@ -423,6 +423,7 @@ mod tests {
             pulls: Vec::new(),
             spent: None,
             resolved: false,
+            reported: false,
             archived: false,
             steers: false,
             on_steps: Vec::new(),

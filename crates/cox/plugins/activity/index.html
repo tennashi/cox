@@ -21,6 +21,10 @@
         --space-3: 12px;
         --space-4: 24px;
         --radius: 6px;
+        /* How far each subagent's name steps in from the chat's above,
+           and how wide what folds them away is, with the space after. */
+        --indent-step: 16px;
+        --fold: 16px;
       }
       html,
       body {
@@ -152,6 +156,7 @@
       }
       .group {
         margin-bottom: var(--space-4);
+        container-type: inline-size;
       }
       .group h2 {
         font-size: var(--small);
@@ -164,10 +169,12 @@
         color: var(--dim);
         padding: var(--space-2);
       }
-      /* A chat: one line, which a click opens. */
+      /* A chat: one line, which a click opens, its name stepped in as
+         deep as it is under the chat at the top of its, and the rest in
+         columns, alike at every depth. */
       .row {
         display: grid;
-        grid-template-columns: 8px minmax(0, 1.1fr) minmax(48px, 110px) 32px minmax(0, 1.4fr);
+        grid-template-columns: minmax(0, 1.4fr) minmax(48px, 110px) 32px minmax(0, 1.2fr);
         align-items: center;
         gap: var(--space-3);
         padding: 6px var(--space-2);
@@ -181,12 +188,30 @@
         background: var(--pane);
         border-radius: var(--radius) var(--radius) 0 0;
       }
-      .row.under {
-        padding-left: calc(var(--space-2) + 16px);
+      /* A step of a chat's plan that subagents came from, over them. */
+      .from {
+        display: flex;
+        align-items: baseline;
+        gap: var(--space-1);
+        padding: 2px var(--space-2);
+        padding-left: calc(var(--space-2) + var(--indent) * var(--indent-step) + var(--fold));
+        color: var(--faint);
+        font-size: var(--small);
+        min-width: 0;
+      }
+      .from .text {
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .from.in_progress .mark {
+        color: var(--accent);
       }
       .dot {
+        flex: none;
         width: 8px;
         height: 8px;
+        margin-right: 6px;
         border-radius: 50%;
         background: var(--disabled);
       }
@@ -211,21 +236,55 @@
         width: 5px;
         height: 5px;
       }
+      /* Not at work itself, but the subagents under it are. */
+      .subs .dot {
+        background: none;
+        border: 1.5px dashed var(--accent);
+        width: 5px;
+        height: 5px;
+      }
       @keyframes turn {
         to {
           transform: rotate(360deg);
         }
       }
       .name {
+        display: flex;
+        align-items: center;
+        gap: var(--space-1);
+        min-width: 0;
+        padding-left: calc(var(--indent, 0) * var(--indent-step));
         font-weight: 600;
         white-space: nowrap;
+      }
+      .name a,
+      .name .hint {
+        min-width: 0;
         overflow: hidden;
         text-overflow: ellipsis;
+      }
+      /* How many subagents are under a chat, which folds them away. */
+      .fold {
+        flex: none;
+        width: calc(var(--fold) - var(--space-1));
+        color: var(--faint);
+        font-size: var(--small);
+        font-weight: normal;
+        background: none;
+        border: 0;
+        padding: 0;
+        cursor: pointer;
+      }
+      .fold.more {
+        width: auto;
+        padding: 0 2px;
+      }
+      .fold:hover {
+        color: var(--link);
       }
       .name a:hover {
         color: var(--link);
       }
-      .name .aside,
       .hint {
         color: var(--faint);
         font-weight: normal;
@@ -292,7 +351,37 @@
       .columns.alone {
         grid-template-columns: minmax(0, 1fr);
       }
+      /* Narrow, a chat's line goes on two, its name over how far it got
+         and what it does, and each step in is shorter. */
       @container (max-width: 480px) {
+        .row,
+        .from {
+          --indent-step: 10px;
+        }
+        .row {
+          grid-template-columns: auto minmax(0, 1fr) auto;
+          grid-template-areas: "name name steps" "bar now now";
+          row-gap: 2px;
+          column-gap: var(--space-2);
+        }
+        .row .name {
+          grid-area: name;
+        }
+        /* Under the name, past what folds and the dot. */
+        .row .bar {
+          grid-area: bar;
+          width: 64px;
+          margin-left: calc(var(--indent, 0) * var(--indent-step) + var(--fold) + 18px);
+        }
+        .row .bar:empty {
+          width: 0;
+        }
+        .row .steps {
+          grid-area: steps;
+        }
+        .row .now {
+          grid-area: now;
+        }
         .columns {
           grid-template-columns: minmax(0, 1fr);
         }
@@ -465,14 +554,6 @@
       .on {
         color: var(--faint);
         font-size: var(--small);
-      }
-      .sub {
-        display: block;
-        color: var(--dim);
-        font-size: var(--small);
-      }
-      .sub:hover {
-        color: var(--link);
       }
       .thread {
         margin: var(--space-1) 0 var(--space-2);
