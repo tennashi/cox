@@ -17,7 +17,14 @@
 // `cox://chat/<key>`; a click elsewhere on the line opens it, and its
 // story is read, from `cox://api/activity/timeline/<chat>`, for it alone:
 // when it started, what it did when, and when and how it ended, then its
-// steps, each of which opens its thread with a click. A thread tells
+// steps, each of which opens its thread with a click. A check that failed
+// as a turn ended, the chat's goal or a trigger, opens what it printed,
+// at the end, with a click. The commands the agent ran that ran long or
+// failed show under what it said before them, those it ran one after
+// another together; a click on one opens it laid out to read, read from
+// `cox://api/activity/command/<command>` (see
+// `stage::commands::layout`), with a button that copies it as the agent
+// gave it, and the last lines of what it printed. A thread tells
 // what the human wrote on the step and what the agent replied, with a
 // line to write another, which goes to the chat as the human's next
 // line, on the step, as one typed in the chat goes: into the turn the
@@ -50,6 +57,17 @@ const stories = new Map();
 /// The step whose thread shows, by its chat, as coxd keeps it, and its
 /// id, or null.
 let threaded = null;
+
+/// The lines of the stories that show what they printed, as a check that
+/// failed, by their key (see `printedKey`).
+const unfolded = new Set();
+
+/// The commands of the stories opened, by the JSON that names them, and
+/// what was read of each, laid out, or null when Cox keeps no such
+/// command; the texts they fold that the human opened, by their key.
+const commandsOpened = new Set();
+const commandsRead = new Map();
+const piecesOpened = new Set();
 
 /// How deep a chat is, under the chat at the top of its, whose subagents
 /// are folded away at first.
@@ -257,6 +275,8 @@ const MARKS = {
   pull_merged: "#",
   pull_closed: "#",
   ci: "◇",
+  check: "◇",
+  ran: "$",
   turn_end: "·",
   running: "◌",
 };
@@ -272,6 +292,93 @@ const TURN_ENDS = {
   closed: "The agent closed",
   other: "Ended its turn",
 };
+
+/// How a check that ran as a turn ended went, as a line says it.
+const CHECKED = { passed: "passed", failed: "failed", broken: "could not run", running: "runs" };
+
+/// What tells the line of `event`, of the story of `chat`, from the other
+/// lines, for it to show what it printed as the story is read again.
+const printedKey = (chat, event) => `${chat.chat}/${event.at}/${event.kind}/${event.text}`;
+
+/// What `event` of `chat`'s story printed, a click away, under what it
+/// says: as a check that failed, or could not run, says why.
+function printed(event, chat) {
+  if (event.said == null) return "";
+  const key = printedKey(chat, event);
+  const open = unfolded.has(key);
+  const what = event.state === "broken" ? "why" : "what it printed";
+  return (
+    ` <span class="opener" data-printed="${esc(key)}" title="${open ? "hides" : "shows"} ${what}">${open ? "▾" : "▸"} ${what}</span>` +
+    (open ? `<pre class="printed">${esc(event.said)}</pre>` : "")
+  );
+}
+
+/// How long a command ran, from its seconds, as "42s" or "1m 3s".
+function took(secs) {
+  if (!secs) return "";
+  return secs < 60 ? `${secs}s` : `${Math.floor(secs / 60)}m ${secs % 60}s`;
+}
+
+/// How each way a command ended is marked.
+const ENDED = { done: "✓", failed: "✗", cancelled: "–" };
+
+/// A stretch of a command, colored as the code tabs color it.
+const stretch = ([text, what]) => (what ? `<span class="hl-${what.replace(/\./g, "-")}">${esc(text)}</span>` : esc(text));
+
+/// The command `read`, laid out, as Cox read it for the human to open,
+/// under the key `key`, with a button that copies it as the agent gave
+/// it: a row for each command of a chain, after what joins it to the one
+/// before, the bodies of loops indented, what it feeds a program folded,
+/// a click away.
+function laidOut(read, key) {
+  const laid = read.shown ?? [{ depth: 0, joint: null, code: [[read.line, null]] }];
+  const rows = laid
+    .map((row, r) => {
+      const bodies = [];
+      const code = row.code
+        .map((piece, p) => {
+          if (!piece.fold) return stretch(piece);
+          const pieceKey = `${key}/${r}/${p}`;
+          const open = piecesOpened.has(pieceKey);
+          const { language, lines } = piece.fold;
+          if (open) bodies.push(lines);
+          const label = `${language ? `${language} · ` : ""}${many(lines.length, "line", "lines")}`;
+          return `<span class="piece-fold" data-piece="${esc(pieceKey)}" title="${open ? "folds" : "shows"} the text">${open ? "▾" : "▸"} ${esc(label)}</span>`;
+        })
+        .join("");
+      const shown = bodies
+        .map((lines) => `<div class="piece-body" style="--depth:${row.depth}">${lines.map((line) => `<div>${line.map(stretch).join("") || " "}</div>`).join("")}</div>`)
+        .join("");
+      return `<div class="laid-row" style="--depth:${row.depth}"><span class="joint">${esc(row.joint ?? "")}</span><span class="code">${code}</span></div>${shown}`;
+    })
+    .join("");
+  return `<div class="laid"><button class="copy" data-copy="${esc(key)}" title="copies the command as the agent gave it">Copy</button>${rows}</div>`;
+}
+
+/// `command`, of the commands of `chat`'s story, on a line of its own:
+/// how it ended, what the agent said it is for, its gist, and how long
+/// it ran, and, once the human opened it, it laid out, and the last lines
+/// of what it printed.
+function ranCommand(chat, command) {
+  const key = JSON.stringify({ chat: chat.chat, number: command.number });
+  const open = commandsOpened.has(key);
+  const named = command.about
+    ? `<span class="about">${esc(command.about)}</span><span class="gist">${esc(command.gist)}</span>`
+    : `<span class="gist">${esc(command.gist)}</span>`;
+  const read = commandsRead.get(key);
+  const under = !open
+    ? ""
+    : read === undefined
+      ? `<div class="none">Reading the command…</div>`
+      : read === null
+        ? `<div class="none">Cox keeps no such command.</div>`
+        : `<div class="under">${laidOut(read, key)}<pre class="printed">${esc(read.printed) || "(printed nothing)"}</pre></div>`;
+  return (
+    `<div class="command ${esc(command.state)}${open ? " open" : ""}" data-command="${esc(key)}" title="${open ? "folds" : "shows"} the command and what it printed">` +
+    `<span class="ended">${ENDED[command.state] ?? "?"}</span><span class="line">${named}</span><span class="secs">${took(command.secs)}</span></div>` +
+    under
+  );
+}
 
 /// What `event` of a chat's story says, as HTML, with the chats its
 /// subagents are, of `chat`, to link to.
@@ -309,6 +416,14 @@ function says(event, chat) {
       return `<span class="number">#${event.number}</span> closed`;
     case "ci":
       return `CI ${esc(event.text)} on <span class="number">#${event.number}</span>`;
+    case "ran": {
+      const shown = event.commands.length;
+      const of = event.of > shown ? `${shown} of ${many(event.of, "command", "commands")}` : many(shown, "command", "commands");
+      const head = event.text ? `<span class="said">${esc(event.text)}</span>` : "Ran";
+      return `${head} <span class="lines">${of}</span>${event.commands.map((command) => ranCommand(chat, command)).join("")}`;
+    }
+    case "check":
+      return `Check <b>${esc(event.text)}</b> ${esc(CHECKED[event.state] ?? event.state)}${event.on ? ` on ${esc(event.on)}` : ""}${printed(event, chat)}`;
     case "turn_end":
       return esc(TURN_ENDS[event.text] ?? "Ended its turn");
     default:
@@ -331,8 +446,11 @@ function revised(event) {
   return `<span class="revised">${lines.join("")}<span class="lines">${esc(far)}</span></span>`;
 }
 
-/// Whether `event` tells of something that failed: CI, or a turn.
-const failed = (event) => (event.kind === "ci" || event.kind === "turn_end") && event.text === "failed";
+/// Whether `event` tells of something that failed: CI, a turn, or a
+/// check that failed or could not run.
+const failed = (event) =>
+  ((event.kind === "ci" || event.kind === "turn_end") && event.text === "failed") ||
+  (event.kind === "check" && (event.state === "failed" || event.state === "broken"));
 
 /// A line of the day `time` is of, before the first line of the story
 /// that is of another day than the line before it, as `days` follows it,
@@ -580,6 +698,40 @@ app.addEventListener("click", (event) => {
     load();
     return;
   }
+  const copying = event.target.closest("[data-copy]");
+  if (copying) {
+    const read = commandsRead.get(copying.dataset.copy);
+    if (!read) return;
+    copy(read.line).then(() => {
+      copying.textContent = "Copied";
+      setTimeout(() => (copying.textContent = "Copy"), 1200);
+    });
+    return;
+  }
+  const piece = event.target.closest("[data-piece]");
+  if (piece) {
+    const key = piece.dataset.piece;
+    if (!piecesOpened.delete(key)) piecesOpened.add(key);
+    draw();
+    return;
+  }
+  const command = event.target.closest("[data-command]");
+  if (command) {
+    const key = command.dataset.command;
+    if (!commandsOpened.delete(key)) {
+      commandsOpened.add(key);
+      if (!commandsRead.has(key)) readCommand(key);
+    }
+    draw();
+    return;
+  }
+  const opener = event.target.closest("[data-printed]");
+  if (opener) {
+    const key = opener.dataset.printed;
+    if (!unfolded.delete(key)) unfolded.add(key);
+    draw();
+    return;
+  }
   const fold = event.target.closest("[data-fold]");
   if (fold) {
     const chat = chats().find((chat) => chat.key === Number(fold.dataset.fold));
@@ -608,6 +760,30 @@ app.addEventListener("click", (event) => {
   }
   draw();
 });
+
+/// Reads the command `key` names, laid out, and draws it.
+async function readCommand(key) {
+  const text = await read(`${API}/command/${encodeURIComponent(key)}`);
+  commandsRead.set(key, text ? JSON.parse(text) : null);
+  draw();
+}
+
+/// Copies `text`: through the page's clipboard, or, where the page may not
+/// write to it, as a selection is copied.
+async function copy(text) {
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch {
+    const area = document.createElement("textarea");
+    area.value = text;
+    area.style.position = "fixed";
+    area.style.opacity = "0";
+    document.body.append(area);
+    area.select();
+    document.execCommand("copy");
+    area.remove();
+  }
+}
 
 /// Sends what the human wrote on the step whose thread shows.
 function send(form) {

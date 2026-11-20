@@ -112,7 +112,8 @@ pub(super) fn agent_tool() -> Value {
             make a Git worktree of one of the project's directories, on a branch, in \
             `worktrees` in the project's folder, for the subagent to work in from the start, \
             as for work that goes on to a pull request; Cox takes it away once the subagent \
-            is done and it holds nothing that is not elsewhere."
+            is done and it holds nothing that is not elsewhere, and makes it again if the \
+            subagent goes on with agent_continue."
             .replace("{NOT_CLAUDES_OWN}", NOT_CLAUDES_OWN),
         "inputSchema": {
             "type": "object",

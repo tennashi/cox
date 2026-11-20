@@ -1030,7 +1030,7 @@ impl Workspace {
         let link = self.link.clone();
         let agents = self.agents.clone();
         let view = cx.new(|cx| ChatView::new(key, link, row, agents, cx));
-        // The list of chats redraws as the chat changes, and the Commands
+        // The list of chats redraws as the chat changes, and the Activity
         // pages follow what its agent runs.
         cx.observe(&view, move |workspace, _, cx| {
             workspace.tell_commands(key, cx);

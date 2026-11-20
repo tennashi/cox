@@ -763,18 +763,18 @@ fn intercept(event: &KeystrokeEvent, window: &mut Window, cx: &mut App) {
 /// Puts the cursor of the input with the keyboard where `place` says, to
 /// type there in insert mode.
 fn insert_at(place: Place, window: &mut Window, cx: &mut App) {
-    use crate::ui::input::{End, Home, Newline, Right, Up};
+    use crate::ui::input::{LineEnd, LineStart, Newline, Right, Up};
     match place {
         Place::Cursor => {}
         Place::After => window.dispatch_action(Box::new(Right), cx),
-        Place::LineStart => window.dispatch_action(Box::new(Home), cx),
-        Place::LineEnd => window.dispatch_action(Box::new(End), cx),
+        Place::LineStart => window.dispatch_action(Box::new(LineStart), cx),
+        Place::LineEnd => window.dispatch_action(Box::new(LineEnd), cx),
         Place::LineBelow => {
-            window.dispatch_action(Box::new(End), cx);
+            window.dispatch_action(Box::new(LineEnd), cx);
             window.dispatch_action(Box::new(Newline), cx);
         }
         Place::LineAbove => {
-            window.dispatch_action(Box::new(Home), cx);
+            window.dispatch_action(Box::new(LineStart), cx);
             window.dispatch_action(Box::new(Newline), cx);
             window.dispatch_action(Box::new(Up), cx);
         }

@@ -9,21 +9,47 @@
 //! it went moved, each question asked and what was chosen,
 //! each line on a step and the reply, each subagent opened and done, the
 //! commits, the pull requests opened, merged and closed, and their CI
-//! ended, and each turn's end.
+//! ended, each turn's end, and how what ran after it went, the chat's
+//! goal and its triggers, with the end of what one that failed printed,
+//! and the commands its agent ran that ran long or failed, those it ran
+//! one after another together, under what it said before them. A command
+//! opens laid out to read, with what it printed, once the human opens it,
+//! as `cox://api/activity/command/<command>` (see [`command`]).
+//!
+//! A command ran long when it ran [`LONG`] or longer. Of 9,246 commands
+//! agents ran in 373 turns of real use, 13% did, or failed; the steps
+//! they were of made 2.1 lines a turn, 1 at the median, 7 at the 90th
+//! percentile. At 5 s, 18% would have, in 2.6 lines a turn.
 
-use cox_core::entry::{Entry, QuestionAnswer, Revision};
-use cox_core::store::{ChatId, KeptAnswer, KeptStep, Resolved, ResolvedBy, Said, Store, TurnEnd};
+use std::path::{Path, PathBuf};
+
+use cox_core::entry::{self, Check, Entry, QuestionAnswer, Revision, ToolCallResult};
+use cox_core::store::{
+    ChatId, KeptCommand, KeptRun, KeptStep, Resolved, ResolvedBy, Said, Store, TurnEnd,
+};
 use coxd::daemon::wire::PullRow;
 use coxd::github::CheckState;
 use jiff::tz::TimeZone;
 use serde_json::{Value, json};
 
-use super::{Decided, Told};
+use super::Told;
+use crate::stage::commands;
+
+/// How long a command runs, in milliseconds, before the story tells it.
+const LONG: i64 = 10_000;
 
 /// The chat whose story the page asks for, as coxd keeps it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Deserialize)]
 pub struct Of {
     chat: ChatId,
+}
+
+/// A command a chat's agent ran, as the page asks to read it laid out:
+/// its chat, as coxd keeps it, and the number of its entry.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Deserialize)]
+pub struct OfCommand {
+    chat: ChatId,
+    number: usize,
 }
 
 /// What coxd keeps of a chat that its story is told from.
@@ -45,6 +71,9 @@ pub struct Kept {
     pub threads: Vec<(String, Vec<Said>)>,
     /// The chats its agent opened, the first first.
     pub subagents: Vec<Sub>,
+    /// The commands its agent ran that ran [`LONG`] or longer, or failed,
+    /// by their steps, as [`Store::ran`] reads them.
+    pub ran: Vec<KeptRun>,
 }
 
 /// A chat a chat's agent opened.
@@ -123,7 +152,72 @@ fn kept(store: &Store, chat: ChatId) -> anyhow::Result<Option<Kept>> {
                 resolved: kept.resolved,
             })
             .collect(),
+        ran: store.ran(chat, LONG)?,
     }))
+}
+
+/// The command `of` names, as JSON, laid out to read, with the last lines
+/// of what it printed, or null when coxd keeps no such command.
+#[must_use]
+pub fn command(of: &OfCommand) -> Value {
+    let read = coxd::storage::path(coxd::storage::Kept::Chats)
+        .ok_or_else(|| anyhow::anyhow!("no place keeps the chats"))
+        .and_then(|path| {
+            let store = Store::read(&path)?;
+            let Some(entry) = store.entry(of.chat, of.number)? else {
+                return Ok(None);
+            };
+            Ok(Some((entry, folder(&store, of.chat)?)))
+        });
+    match read {
+        Ok(Some((entry, folder))) => command_of(&entry, &folder),
+        Ok(None) => Value::Null,
+        Err(error) => {
+            tracing::warn!("a command of a chat is not read: {error:#}");
+            Value::Null
+        }
+    }
+}
+
+/// The folder `chat` works in, as `store` keeps it, which the paths of
+/// its commands read from, or the root, when it keeps no such chat.
+fn folder(store: &Store, chat: ChatId) -> anyhow::Result<PathBuf> {
+    let Some(kept) = store.chats()?.into_iter().find(|kept| kept.id == chat) else {
+        return Ok(PathBuf::from("/"));
+    };
+    if let Some(folder) = kept.folder {
+        return Ok(folder);
+    }
+    let project = store
+        .projects()?
+        .into_iter()
+        .find(|project| Some(project.id) == kept.project);
+    // A chat of Cox's own works in the home.
+    Ok(project.map_or_else(
+        || super::home().unwrap_or_else(|| PathBuf::from("/")),
+        |project| project.folder,
+    ))
+}
+
+/// `entry`, a command run in `folder`, as the page reads it opened: the
+/// command, as the agent gave it, to copy, laid out, and the last lines
+/// of what it printed; null for an entry of another kind.
+fn command_of(entry: &Entry, folder: &Path) -> Value {
+    let Entry::ToolCall {
+        title,
+        command: true,
+        content,
+        result,
+        ..
+    } = entry
+    else {
+        return Value::Null;
+    };
+    json!({
+        "line": title,
+        "shown": commands::laid_out(title, folder),
+        "printed": result.is_some().then(|| commands::printed(content)),
+    })
 }
 
 /// One thing in a chat's story, at a time.
@@ -167,7 +261,7 @@ impl Event {
 /// goes on.
 pub fn story(kept: &Kept, told: &Told, zone: &TimeZone, now: i64) -> Value {
     let shown = told.chats.iter().find(|chat| chat.kept == Some(kept.chat));
-    let mut events = of_entries(kept, zone);
+    let mut events = of_entries(kept);
     for (step, said) in &kept.threads {
         for said in said {
             events.push(
@@ -191,6 +285,9 @@ pub fn story(kept: &Kept, told: &Told, zone: &TimeZone, now: i64) -> Value {
     for turn in &kept.turns {
         events.push(Event::new(turn.at, "turn_end", turn.how.word().to_owned()));
     }
+    // After the turn's end they ran after, though kept as soon.
+    events.extend(of_checks(kept));
+    events.extend(kept.ran.iter().filter_map(of_run));
     events.sort_by_key(|event| event.at);
     let ended = ended(kept, shown, &events);
     json!({
@@ -211,17 +308,16 @@ pub fn story(kept: &Kept, told: &Told, zone: &TimeZone, now: i64) -> Value {
     })
 }
 
-/// What the milestone entries and the steps of `kept` tell, the times of
-/// the answers as they read in `zone`: the first line, each step started
-/// and done, each change of the plan, each question asked and answered,
-/// and the commits.
-fn of_entries(kept: &Kept, zone: &TimeZone) -> Vec<Event> {
+/// What the milestone entries and the steps of `kept` tell: the first
+/// line, each step started and done, each change of the plan, each
+/// question asked and answered, and the commits.
+fn of_entries(kept: &Kept) -> Vec<Event> {
     let mut events = Vec::new();
     for (at, entry) in &kept.milestones {
         match entry {
             Entry::Human(line) => events.push(Event::new(*at, "start", line.clone())),
             Entry::PlanRevised(revision) => events.push(of_revision(*at, revision)),
-            Entry::Question { .. } => events.extend(of_question(kept, *at, entry, zone)),
+            Entry::Question { .. } => events.extend(of_question(*at, entry)),
             Entry::Commits(commits) => {
                 events.extend(commits.iter().map(|commit| {
                     Event::new(*at, "commit", commit.subject.clone())
@@ -244,6 +340,82 @@ fn of_entries(kept: &Kept, zone: &TimeZone) -> Vec<Event> {
     events
 }
 
+/// What `run`, commands the agent ran one after another, tells, as of
+/// the first of them: what the agent said before them, if it said
+/// anything since the line it answers, how many it ran, and each of them
+/// that ran long or failed, by what it goes by, with how it ended and how
+/// long it ran, when coxd saw it end.
+fn of_run(run: &KeptRun) -> Option<Event> {
+    let first = run.commands.first()?;
+    let said = run
+        .said
+        .as_deref()
+        .and_then(commands::first_line)
+        .unwrap_or_default();
+    let ran: Vec<Value> = run.commands.iter().map(of_command).collect();
+    Some(Event::new(first.started, "ran", said).with(json!({ "of": run.of, "commands": ran })))
+}
+
+/// What `command`, of those the story tells, tells: the number of its
+/// entry, to read it laid out by, what the agent said it is for, its
+/// gist, how it ended, and how many seconds it ran, when coxd saw it end.
+fn of_command(command: &KeptCommand) -> Value {
+    let state = match command.result {
+        ToolCallResult::Completed => "done",
+        ToolCallResult::Failed => "failed",
+        ToolCallResult::Cancelled => "cancelled",
+    };
+    json!({
+        "number": command.number,
+        "about": command.about,
+        "gist": commands::gist(&command.line),
+        "state": state,
+        "secs": command.ended.map(|ended| (ended - command.started).max(0) / 1000),
+    })
+}
+
+/// How what ran as each turn of `kept` ended went, or as something else
+/// happened in it, as its goal being met: each of the chat's goal and its
+/// triggers that ran, or runs, with how it went, and, for one that failed
+/// or could not run, the end of what it printed, or why, and the event
+/// it ran on, if it ran on one. One whose turn did not come, as one after
+/// one that failed, tells nothing.
+fn of_checks(kept: &Kept) -> Vec<Event> {
+    let mut events = Vec::new();
+    for (at, entry) in &kept.milestones {
+        let on = match entry {
+            Entry::Event { on, .. } => Some(on.as_str()),
+            _ => None,
+        };
+        for check in entry.checks().unwrap_or_default() {
+            events.extend(of_check(*at, check, on));
+        }
+    }
+    events
+}
+
+/// What `check`, which ran `at` then, on the event `on`, if it ran on
+/// one, tells, once its turn came.
+fn of_check(at: i64, check: &Check, on: Option<&str>) -> Option<Event> {
+    let state = match check.state {
+        entry::CheckState::Waiting => return None,
+        entry::CheckState::Running => "running",
+        entry::CheckState::Passed => "passed",
+        entry::CheckState::Failed => "failed",
+        entry::CheckState::Broken => "broken",
+    };
+    let said = matches!(
+        check.state,
+        entry::CheckState::Failed | entry::CheckState::Broken
+    )
+    .then_some(check.said.as_deref())
+    .flatten();
+    Some(
+        Event::new(at, "check", check.name.clone())
+            .with(json!({ "state": state, "said": said, "on": on })),
+    )
+}
+
 /// What the receipt of how the plan changed, written `at` then, tells:
 /// how many steps came and went, and how much of the plan was done
 /// before and after, then each step, and whether less is done than
@@ -260,9 +432,9 @@ fn of_revision(at: i64, revision: &Revision) -> Event {
     }))
 }
 
-/// What `question`, asked in `kept` `at` then, tells: that it was asked,
-/// and what the human chose, or that they declined, once they answered.
-fn of_question(kept: &Kept, at: i64, question: &Entry, zone: &TimeZone) -> Vec<Event> {
+/// What `question`, asked `at` then, tells: that it was asked, and what
+/// the human chose, or that they declined, once they answered.
+fn of_question(at: i64, question: &Entry) -> Vec<Event> {
     let Entry::Question {
         message,
         questions,
@@ -285,15 +457,7 @@ fn of_question(kept: &Kept, at: i64, question: &Entry, zone: &TimeZone) -> Vec<E
     let answered = answered_at.unwrap_or(at);
     match answer {
         Some(QuestionAnswer::Given(_)) => {
-            let kept = KeptAnswer {
-                chat: kept.chat,
-                name: kept.name.clone(),
-                project: None,
-                folder: None,
-                at: answered,
-                entry: question.clone(),
-            };
-            events.extend(Decided::of(&kept, zone).into_iter().map(|decided| {
+            events.extend(Decided::of(question).into_iter().map(|decided| {
                 Event::new(answered, "answered", decided.choice).with(json!({
                     "question": decided.question,
                     "why": decided.why,
@@ -307,6 +471,80 @@ fn of_question(kept: &Kept, at: i64, question: &Entry, zone: &TimeZone) -> Vec<E
         None => {}
     }
     events
+}
+
+/// What the human decided, answering a question an agent asked: one of
+/// its questions, with what they chose.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Decided {
+    question: String,
+    /// The labels of the options the human chose, or their own words when
+    /// they chose none.
+    choice: String,
+    /// What the agent said choosing those options means, which is why
+    /// the human chose them.
+    why: Option<String>,
+    /// The human's own words beside the options they chose.
+    other: Option<String>,
+}
+
+impl Decided {
+    /// What was decided by `entry`, each of its questions the human
+    /// answered, if it is a question they answered.
+    fn of(entry: &Entry) -> Vec<Self> {
+        let Entry::Question {
+            message,
+            questions,
+            answer: Some(QuestionAnswer::Given(picked)),
+            ..
+        } = entry
+        else {
+            return Vec::new();
+        };
+        let message = message.trim();
+        questions
+            .iter()
+            .zip(picked)
+            .filter_map(|(question, picked)| {
+                let chosen: Vec<_> = picked
+                    .chosen
+                    .iter()
+                    .filter_map(|&index| question.options.get(index))
+                    .collect();
+                let mut other = picked
+                    .other
+                    .clone()
+                    .filter(|other| !other.trim().is_empty());
+                let choice = if chosen.is_empty() {
+                    other.take()?
+                } else {
+                    chosen
+                        .iter()
+                        .map(|option| option.label.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                };
+                let why: Vec<&str> = chosen
+                    .iter()
+                    .filter_map(|option| option.description.as_deref())
+                    .collect();
+                let asked = question
+                    .text
+                    .clone()
+                    .or_else(|| {
+                        (questions.len() == 1 && !message.is_empty()).then(|| message.to_owned())
+                    })
+                    .or_else(|| question.header.clone())
+                    .unwrap_or_else(|| message.to_owned());
+                Some(Self {
+                    question: asked,
+                    choice,
+                    why: (!why.is_empty()).then(|| why.join("; ")),
+                    other,
+                })
+            })
+            .collect()
+    }
 }
 
 /// What the pull request of `row` tells, as coxd last read it: when it
@@ -482,6 +720,7 @@ mod tests {
         };
         let kept = Kept {
             chat,
+            ran: Vec::new(),
             name: "Speed up CI".to_owned(),
             opened: at(13, 48),
             resolved: None,
@@ -624,6 +863,72 @@ mod tests {
     }
 
     #[test]
+    fn a_question_answered_is_decided_with_why_and_a_declined_one_is_not() {
+        let option = |label: &str, description: Option<&str>| QuestionOption {
+            label: label.to_owned(),
+            description: description.map(str::to_owned),
+        };
+        let question = Question {
+            header: Some("Approach".to_owned()),
+            text: None,
+            options: vec![
+                option("Derive", Some("One source of truth")),
+                option("Record", Some("A table of its own")),
+            ],
+            multiple: false,
+            other: true,
+        };
+        let words = Question {
+            header: Some("Name".to_owned()),
+            text: Some("What is it called?".to_owned()),
+            options: Vec::new(),
+            multiple: false,
+            other: true,
+        };
+        let asked = |answer| Entry::Question {
+            message: "Which way do we go?".to_owned(),
+            questions: vec![question.clone(), words.clone()],
+            answer: Some(answer),
+            answered_at: None,
+        };
+        let given = QuestionAnswer::Given(vec![
+            Picked {
+                chosen: vec![0],
+                other: Some("but keep it cheap".to_owned()),
+            },
+            Picked {
+                chosen: Vec::new(),
+                other: Some("inbox".to_owned()),
+            },
+        ]);
+
+        let decided = Decided::of(&asked(given));
+
+        assert_eq!(
+            decided,
+            [
+                // Of several questions, one without words of its own is
+                // asked by its label, the message being for them all.
+                Decided {
+                    question: "Approach".to_owned(),
+                    choice: "Derive".to_owned(),
+                    why: Some("One source of truth".to_owned()),
+                    other: Some("but keep it cheap".to_owned()),
+                },
+                Decided {
+                    question: "What is it called?".to_owned(),
+                    choice: "inbox".to_owned(),
+                    why: None,
+                    other: None,
+                },
+            ]
+        );
+        assert_eq!(Decided::of(&asked(QuestionAnswer::Declined)), []);
+        let skipped = QuestionAnswer::Given(vec![Picked::default(), Picked::default()]);
+        assert_eq!(Decided::of(&asked(skipped)), []);
+    }
+
+    #[test]
     fn tells_each_change_of_the_plan_with_why_how_far_it_went_moved() {
         let chat = kept(7);
         let revision = Revision {
@@ -644,6 +949,7 @@ mod tests {
         };
         let kept = Kept {
             chat,
+            ran: Vec::new(),
             name: String::new(),
             opened: at(10, 0),
             resolved: None,
@@ -685,10 +991,212 @@ mod tests {
     }
 
     #[test]
+    fn tells_the_commands_that_ran_long_or_failed_step_by_step() {
+        use cox_core::entry::{Content, ToolCallResult};
+        use cox_core::store::KeptCommand;
+        let command =
+            |number, line: &str, about: Option<&str>, result, ran: Option<i64>| KeptCommand {
+                number,
+                line: line.to_owned(),
+                about: about.map(str::to_owned),
+                content: vec![Content::Text("ok".to_owned())],
+                result,
+                started: at(10, 3),
+                ended: ran.map(|ran| at(10, 3) + ran),
+            };
+        let kept = Kept {
+            chat: kept(7),
+            ran: vec![
+                KeptRun {
+                    said: Some("\nNow I test it all.\nThen I lint.".to_owned()),
+                    of: 4,
+                    commands: vec![
+                        command(
+                            5,
+                            "cd /src/app && cargo test",
+                            Some("Run the tests"),
+                            ToolCallResult::Completed,
+                            Some(42_500),
+                        ),
+                        command(8, "false", None, ToolCallResult::Failed, Some(200)),
+                    ],
+                },
+                // Kept by an older Cox, which kept no end.
+                KeptRun {
+                    said: None,
+                    of: 1,
+                    commands: vec![command(12, "make", None, ToolCallResult::Failed, None)],
+                },
+            ],
+            name: String::new(),
+            opened: at(10, 0),
+            resolved: None,
+            threads: Vec::new(),
+            subagents: Vec::new(),
+            steps: Vec::new(),
+            milestones: Vec::new(),
+            turns: vec![TurnEnd {
+                at: at(10, 9),
+                how: Ended::Done,
+            }],
+        };
+
+        let story = story(&kept, &Told::default(), &TimeZone::UTC, at(12, 0));
+
+        let expected: Vec<(String, String, String)> = [
+            ("10:03", "ran", "Now I test it all."),
+            ("10:03", "ran", ""),
+            ("10:09", "turn_end", "done"),
+        ]
+        .iter()
+        .map(|(when, kind, text)| ((*when).to_owned(), (*kind).to_owned(), (*text).to_owned()))
+        .collect();
+        assert_eq!(told(&story), expected);
+        assert_eq!(story["events"][0]["of"], 4);
+        assert_eq!(
+            story["events"][0]["commands"],
+            json!([
+                {
+                    "number": 5,
+                    "about": "Run the tests",
+                    "gist": "cargo test",
+                    "state": "done",
+                    "secs": 42,
+                },
+                { "number": 8, "about": null, "gist": "false", "state": "failed", "secs": 0 },
+            ])
+        );
+        assert_eq!(story["events"][1]["commands"][0]["secs"], Value::Null);
+    }
+
+    #[test]
+    fn a_command_opens_laid_out_with_the_end_of_what_it_printed() {
+        use cox_core::entry::{Content, ToolCallResult};
+        let printed: String = (1..=20)
+            .map(|line| format!("line {line}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+            + "\n";
+        let entry = |result| Entry::ToolCall {
+            id: "1".to_owned(),
+            title: "cd /src/app && cargo test".to_owned(),
+            command: true,
+            about: Some("Run the tests".to_owned()),
+            content: vec![Content::Text(format!("```console\n{printed}```"))],
+            result,
+        };
+
+        let opened = command_of(&entry(Some(ToolCallResult::Failed)), Path::new("/src/app"));
+
+        assert_eq!(opened["line"], "cd /src/app && cargo test", "to copy");
+        assert_eq!(opened["shown"][1]["code"][0][0], "cargo");
+        let printed = opened["printed"].as_str().unwrap();
+        assert!(printed.starts_with("line 7\n"), "the last lines: {printed}");
+        assert!(printed.ends_with("line 20"), "out of its fence: {printed}");
+        // While it runs, what it shows is what it is for.
+        assert_eq!(
+            command_of(&entry(None), Path::new("/src/app"))["printed"],
+            Value::Null
+        );
+        assert_eq!(
+            command_of(&Entry::Reply("hi".to_owned()), Path::new("/")),
+            Value::Null
+        );
+    }
+
+    #[test]
+    fn tells_how_what_ran_as_each_turn_ended_went_after_the_turn() {
+        use cox_core::entry::CheckState as Ran;
+        let chat = kept(7);
+        let check = |name: &str, state, said: Option<&str>| entry::Check {
+            name: name.to_owned(),
+            state,
+            said: said.map(str::to_owned),
+        };
+        let kept = Kept {
+            chat,
+            ran: Vec::new(),
+            name: String::new(),
+            opened: at(10, 0),
+            resolved: None,
+            threads: Vec::new(),
+            subagents: Vec::new(),
+            steps: Vec::new(),
+            // Kept as the turn ended, in the same millisecond.
+            milestones: vec![
+                (
+                    at(10, 5),
+                    Entry::Checks(vec![
+                        check("goal", Ran::Failed, Some("test a ... FAILED")),
+                        check("lint", Ran::Waiting, None),
+                    ]),
+                ),
+                (
+                    at(10, 9),
+                    Entry::Checks(vec![
+                        check("goal", Ran::Passed, Some("test result: ok")),
+                        check("lint", Ran::Running, None),
+                    ]),
+                ),
+                (
+                    at(10, 10),
+                    Entry::Event {
+                        on: "goal.met".to_owned(),
+                        checks: vec![check("docs", Ran::Broken, Some("no agent"))],
+                    },
+                ),
+            ],
+            turns: vec![
+                TurnEnd {
+                    at: at(10, 5),
+                    how: Ended::Done,
+                },
+                TurnEnd {
+                    at: at(10, 9),
+                    how: Ended::Done,
+                },
+            ],
+        };
+
+        let story = story(&kept, &Told::default(), &TimeZone::UTC, at(12, 0));
+
+        let expected: Vec<(String, String, String)> = [
+            ("10:05", "turn_end", "done"),
+            ("10:05", "check", "goal"),
+            ("10:09", "turn_end", "done"),
+            ("10:09", "check", "goal"),
+            ("10:09", "check", "lint"),
+            ("10:10", "check", "docs"),
+        ]
+        .iter()
+        .map(|(when, kind, text)| ((*when).to_owned(), (*kind).to_owned(), (*text).to_owned()))
+        .collect();
+        assert_eq!(told(&story), expected);
+        let checks: Vec<(&Value, &Value, &Value)> = story["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|event| event["kind"] == "check")
+            .map(|event| (&event["state"], &event["said"], &event["on"]))
+            .collect();
+        assert_eq!(
+            checks,
+            [
+                // What one that failed printed, at the end, opens under it.
+                (&json!("failed"), &json!("test a ... FAILED"), &Value::Null),
+                (&json!("passed"), &Value::Null, &Value::Null),
+                (&json!("running"), &Value::Null, &Value::Null),
+                (&json!("broken"), &json!("no agent"), &json!("goal.met")),
+            ]
+        );
+    }
+
+    #[test]
     fn a_chat_ends_marked_done_asking_or_stopped_and_goes_on_while_at_work() {
         let chat = kept(7);
         let mut kept = Kept {
             chat,
+            ran: Vec::new(),
             name: String::new(),
             opened: at(10, 0),
             resolved: None,
