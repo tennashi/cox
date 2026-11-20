@@ -482,3 +482,66 @@ fn a_chat_working_in_a_worktree_sees_it_at_first(cx: &mut TestAppContext) {
     cx.run_until_parked();
     assert_eq!(shown(&changes, cx), [("app/a.txt".to_owned(), 1, 0)]);
 }
+
+#[gpui::test]
+fn compares_a_repository_with_the_branch_the_human_chooses(cx: &mut TestAppContext) {
+    let origin = repository("compare-origin", "one\n");
+    git(&origin, &["branch", "--quiet", "-M", "main"]);
+    git(&origin, &["checkout", "--quiet", "-b", "release"]);
+    std::fs::write(origin.join("r.txt"), "r\n").unwrap();
+    commit(&origin, "Release");
+    git(&origin, &["checkout", "--quiet", "main"]);
+    let folder = scratch::made("changes-compare").canonicalize().unwrap();
+    let clone = folder.to_string_lossy();
+    git(&origin, &["clone", "--quiet", ".", &clone]);
+    git(
+        &folder,
+        &["checkout", "--quiet", "-b", "work", "origin/release"],
+    );
+    std::fs::write(folder.join("w.txt"), "w\n").unwrap();
+    commit(&folder, "Work");
+
+    let (changes, _, cx) = open(cx, &folder, &folder);
+    let base = |changes: &Entity<Changes>, cx: &mut VisualTestContext| {
+        changes.read_with(cx, |changes, _| {
+            let history = changes.history().unwrap();
+            (history.base.clone(), history.chosen.clone())
+        })
+    };
+    // Cox finds the remote's default branch.
+    assert!(matches!(
+        base(&changes, cx),
+        (cox_git::commits::Base::Branched { from, .. }, None) if from == "origin/main"
+    ));
+
+    click("base", cx);
+    assert!(cx.debug_bounds("bases").is_some());
+    let offered = commits::bases(&folder);
+    let release = offered.iter().position(|name| name == "origin/release");
+    let release = format!("base-choice-{}", release.unwrap()).leak();
+    click(release, cx);
+    assert!(matches!(
+        base(&changes, cx),
+        (cox_git::commits::Base::Branched { from, .. }, Some(chosen))
+            if from == "origin/release" && chosen == "origin/release"
+    ));
+    // Everything since the branch chosen shows, which the repository keeps.
+    assert_eq!(
+        changes.read_with(cx, |changes, _| changes.shown_pick()),
+        Pick::Everything
+    );
+    assert_eq!(shown_now(&changes, cx), [("w.txt".to_owned(), 1, 0)]);
+    assert_eq!(
+        commits::chosen_base(&folder).as_deref(),
+        Some("origin/release")
+    );
+
+    click("base", cx);
+    click("base-found", cx);
+    assert!(matches!(base(&changes, cx), (_, None)));
+    assert_eq!(commits::chosen_base(&folder), None);
+    assert_eq!(
+        shown_now(&changes, cx),
+        [("r.txt".to_owned(), 1, 0), ("w.txt".to_owned(), 1, 0)]
+    );
+}

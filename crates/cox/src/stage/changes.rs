@@ -29,7 +29,10 @@
 //! repositories, from a menu of them, each marked as Cox's, made by hand,
 //! or outside the folder, with how many files changed in it. A chat that
 //! works in one of them sees that one at first. The tab keeps what the
-//! human chose.
+//! human chose. Beside it, the branch its commits started after, which
+//! everything is since, as Cox found it, or as the human chose it from a
+//! menu of the repository's branches, which the repository keeps (see
+//! [`cox_git::commits::BASE`]).
 //!
 //! The tab looks again now and then, so that it shows what the agent
 //! changes as it works. It draws only the rows in sight, so a long list
@@ -96,8 +99,8 @@ const TEXT_END: f32 = 12.;
 /// How wide the column of commits is.
 const HISTORY_WIDTH: f32 = 236.;
 
-/// How tall the button of the checkout shown is.
-const CHECKOUT_HEIGHT: f32 = 26.;
+/// How tall a button that opens a menu under the repositories is.
+const MENU_BUTTON_HEIGHT: f32 = 26.;
 
 /// What the syntax says the stretches of a line are, as bytes of the line
 /// as it is drawn.
@@ -175,8 +178,8 @@ pub struct Changes {
     /// The checkout of each repository the human chose to see, once they
     /// chose one (see [`repositories::read`]).
     checkouts: Vec<repositories::Chosen>,
-    /// Whether the menu of the checkouts of the repository shown is open.
-    checkout_menu: bool,
+    /// The menu open under the repositories, if one is.
+    menu: Option<Menu>,
     /// How many files changed in each checkout of the repository shown, by
     /// its folder, as the tab counted them as its menu opened.
     counted: HashMap<PathBuf, Result<usize, String>>,
@@ -184,9 +187,14 @@ pub struct Changes {
     counting: Option<Task<()>>,
     /// What reads what changed at once, as the human chose a checkout.
     looking: Option<Task<()>>,
-    /// Where the press was that closed the menu of the checkouts, which on
-    /// its button leaves it closed.
-    checkouts_closed_at: Option<Point<Pixels>>,
+    /// The menu that a press closed, and where the press was, which on its
+    /// button leaves it closed.
+    closed: Option<(Menu, Point<Pixels>)>,
+    /// The branches the repository shown can be compared with, as the tab
+    /// read them as their menu opened; none until then.
+    bases: Option<Vec<String>>,
+    /// What reads them, or keeps the one the human chose, while it does.
+    basing: Option<Task<()>>,
     /// The tab's name: "Changes", and the folder's name when it is not
     /// where the chat works.
     title: String,
@@ -234,6 +242,15 @@ pub struct Changes {
 /// [`Repository::name`]).
 struct Choice(Option<String>);
 
+/// A menu under the repositories, which its button opens.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Menu {
+    /// The checkouts of the repository shown.
+    Checkouts,
+    /// The branches to compare it with.
+    Bases,
+}
+
 /// A row of the tab: the file at an index of the repository shown, or a
 /// line of it.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -267,11 +284,13 @@ impl Changes {
             folder,
             cwd: cwd.to_owned(),
             checkouts: Vec::new(),
-            checkout_menu: false,
+            menu: None,
             counted: HashMap::new(),
             counting: None,
             looking: None,
-            checkouts_closed_at: None,
+            closed: None,
+            bases: None,
+            basing: None,
             title,
             read: None,
             chosen: None,
@@ -317,21 +336,69 @@ impl Changes {
     pub fn show_checkout(&mut self, name: Option<String>, folder: PathBuf, cx: &mut Context<Self>) {
         self.checkouts.retain(|(chosen, _)| *chosen != name);
         self.checkouts.push((name.clone(), folder));
-        self.checkout_menu = false;
         self.show(name, cx);
         self.looking = Some(cx.spawn(async move |this, cx| {
             look(&this, cx).await;
         }));
     }
 
-    /// Opens the menu of the checkouts of the repository shown, counting
-    /// the files that changed in each, or closes it.
-    fn toggle_checkouts(&mut self, cx: &mut Context<Self>) {
-        self.checkout_menu = !self.checkout_menu;
+    /// Compares the repository shown with the branch `base`, as the human
+    /// chose it, or, with none, with the one Cox finds, and shows everything
+    /// since, once the repository keeps it.
+    pub fn compare_with(&mut self, base: Option<String>, cx: &mut Context<Self>) {
+        self.menu = None;
         cx.notify();
-        if !self.checkout_menu {
+        let Some(folder) = self.shown_folder() else {
             return;
+        };
+        self.basing = Some(cx.spawn(async move |this, cx| {
+            let kept = cx
+                .background_executor()
+                .spawn(async move { commits::choose_base(&folder, base.as_deref()) })
+                .await;
+            if let Err(error) = kept {
+                tracing::warn!("the branch to compare with is not kept: {error}");
+            }
+            if look(&this, cx).await {
+                let _ = this.update(cx, |changes, cx| changes.pick(Pick::Everything, cx));
+            }
+        }));
+    }
+
+    /// Opens `menu`, reading what it lists, or closes it, if it is open.
+    fn toggle(&mut self, menu: Menu, cx: &mut Context<Self>) {
+        let open = self.menu != Some(menu);
+        self.menu = open.then_some(menu);
+        cx.notify();
+        if open {
+            match menu {
+                Menu::Checkouts => self.count_checkouts(cx),
+                Menu::Bases => self.read_bases(cx),
+            }
         }
+    }
+
+    /// Reads the branches the repository shown can be compared with.
+    fn read_bases(&mut self, cx: &mut Context<Self>) {
+        self.bases = None;
+        let Some(folder) = self.shown_folder() else {
+            return;
+        };
+        self.basing = Some(cx.spawn(async move |this, cx| {
+            let bases = cx
+                .background_executor()
+                .spawn(async move { commits::bases(&folder) })
+                .await;
+            let _ = this.update(cx, |changes, cx| {
+                changes.bases = Some(bases);
+                cx.notify();
+            });
+        }));
+    }
+
+    /// Counts the files that changed in each checkout of the repository
+    /// shown.
+    fn count_checkouts(&mut self, cx: &mut Context<Self>) {
         let folders: Vec<PathBuf> = self.shown().map_or_default(|shown| {
             shown
                 .checkouts
@@ -377,7 +444,7 @@ impl Changes {
     /// top, as the human chose it, as it shows at first.
     pub fn show(&mut self, name: Option<String>, cx: &mut Context<Self>) {
         self.chosen = Some(Choice(name));
-        self.checkout_menu = false;
+        self.menu = None;
         self.pick = None;
         self.picked = None;
         self.relist(false);
@@ -841,18 +908,76 @@ impl Changes {
         )
     }
 
-    /// The checkout of the repository shown, under the repositories, once
-    /// what changed in it was read: a button saying what it goes by, and
-    /// whether it is a worktree, which opens the menu of its checkouts.
-    fn render_checkout(&self, cx: &mut Context<Self>) -> Option<impl IntoElement + use<>> {
+    /// The row under the repositories, once what changed in the one shown
+    /// was read: a button saying what its checkout goes by, and whether it
+    /// is a worktree, which opens the menu of its checkouts; then, but in a
+    /// sketch, which is compared with where it started, the branch its
+    /// commits started after, which opens the menu of the branches to
+    /// compare it with.
+    fn render_compared(&self, cx: &mut Context<Self>) -> Option<impl IntoElement + use<>> {
         let shown = self.shown()?;
         shown.read.as_ref().ok()?;
         let checkout = shown.checkout()?;
-        let button = div()
-            .id("checkout")
-            .debug_selector(|| "checkout".to_owned())
+        let button = self
+            .menu_button("checkout", Menu::Checkouts, cx)
+            .child(icon(checkout_icon(checkout), 12., DIM))
+            .child(checkout.label())
+            .children(checkout_tags(checkout))
+            .child(caret());
+        let checkouts =
+            (self.menu == Some(Menu::Checkouts)).then(|| self.render_checkouts_menu(shown, cx));
+        let compared = self
+            .history()
+            .filter(|history| !matches!(history.base, Base::Start(_) | Base::Nothing))
+            .map(|history| {
+                let label = match &history.base {
+                    Base::Branched { from, .. } => div().child(from.clone()),
+                    _ => div().text_color(rgb(FAINT)).child("choose a branch"),
+                };
+                let button = self
+                    .menu_button("base", Menu::Bases, cx)
+                    .child(icon(Icon::Changes, 12., DIM))
+                    .child(label)
+                    .when(history.chosen.is_none(), |button| {
+                        button.child(tag("found".to_owned(), FAINT))
+                    })
+                    .child(caret());
+                let bases = (self.menu == Some(Menu::Bases))
+                    .then(|| self.render_bases_menu(shown, history, cx));
+                [
+                    div()
+                        .flex_shrink_0()
+                        .text_size(px(12.))
+                        .text_color(rgb(FAINT))
+                        .child("compared with"),
+                    under(button, bases),
+                ]
+            });
+        Some(
+            div()
+                .flex()
+                .items_center()
+                .gap(px(8.))
+                .px(px(INSET))
+                .pt(px(8.))
+                .child(under(button, checkouts))
+                .children(compared.into_iter().flatten()),
+        )
+    }
+
+    /// A button of the row under the repositories, found as `id`, which
+    /// opens `menu`, or closes it.
+    fn menu_button(
+        &self,
+        id: &'static str,
+        menu: Menu,
+        cx: &mut Context<Self>,
+    ) -> gpui::Stateful<gpui::Div> {
+        div()
+            .id(id)
+            .debug_selector(move || id.to_owned())
             .flex_shrink_0()
-            .h(px(CHECKOUT_HEIGHT))
+            .h(px(MENU_BUTTON_HEIGHT))
             .flex()
             .items_center()
             .gap(px(6.))
@@ -860,52 +985,63 @@ impl Changes {
             .rounded(px(8.))
             .border_1()
             .border_color(rgb(BORDER))
-            .bg(rgb(if self.checkout_menu { SELECTED } else { RAISED }))
+            .bg(rgb(if self.menu == Some(menu) {
+                SELECTED
+            } else {
+                RAISED
+            }))
             .font_family(CODE_FONT)
             .text_size(px(12.))
             .whitespace_nowrap()
             .cursor_pointer()
             .hover(|style| style.bg(rgb(HOVER)))
-            .child(icon(checkout_icon(checkout), 12., DIM))
-            .child(checkout.label())
-            .children(checkout_tags(checkout))
-            .child(div().text_size(px(10.)).text_color(rgb(FAINT)).child("▾"))
-            .on_hint_mouse_down(cx.listener(|changes, event: &MouseDownEvent, _, cx| {
-                // The press that closed the menu, on the button, leaves it
+            .on_hint_mouse_down(cx.listener(move |changes, event: &MouseDownEvent, _, cx| {
+                // The press that closed the menu, on its button, leaves it
                 // closed.
-                if changes.checkouts_closed_at.take() != Some(event.position) {
-                    changes.toggle_checkouts(cx);
+                if changes.closed.take() != Some((menu, event.position)) {
+                    changes.toggle(menu, cx);
                 }
                 cx.stop_propagation();
-            }));
-        let menu = self
-            .checkout_menu
-            .then(|| self.render_checkout_menu(shown, cx));
-        Some(
-            div().flex().px(px(INSET)).pt(px(8.)).child(
+            }))
+    }
+
+    /// A menu under the repositories, `menu`, found as `id`, headed
+    /// `heading`, which a press anywhere else closes.
+    fn menu_list(
+        id: &'static str,
+        menu: Menu,
+        heading: String,
+        cx: &mut Context<Self>,
+    ) -> gpui::Stateful<gpui::Div> {
+        crate::ui::menu::menu()
+            .id(id)
+            .debug_selector(move || id.to_owned())
+            .min_w(px(320.))
+            .max_w(px(640.))
+            .max_h(px(360.))
+            .overflow_y_scroll()
+            .on_mouse_down_out(cx.listener(move |changes, event: &MouseDownEvent, _, cx| {
+                changes.menu = None;
+                changes.closed = Some((menu, event.position));
+                cx.notify();
+            }))
+            .child(
                 div()
-                    .flex()
-                    .flex_col()
-                    .child(button)
-                    .children(menu.map(|menu| {
-                        deferred(
-                            anchored()
-                                .position_mode(AnchoredPositionMode::Local)
-                                .position(point(px(0.), px(CHECKOUT_HEIGHT + 4.)))
-                                .snap_to_window()
-                                .child(menu),
-                        )
-                        .with_priority(2)
-                    })),
-            ),
-        )
+                    .px(px(10.))
+                    .pt(px(4.))
+                    .pb(px(2.))
+                    .text_size(px(10.5))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(rgb(FAINT))
+                    .child(heading),
+            )
     }
 
     /// The menu of the checkouts of `shown`, its own first, each with
     /// where it is, whether Cox made it, for which chat, or it was made by
     /// hand, or is outside the folder, and how many files changed in it,
     /// once counted; the one shown marked, and a click on another shows it.
-    fn render_checkout_menu(
+    fn render_checkouts_menu(
         &self,
         shown: &Repository,
         cx: &mut Context<Self>,
@@ -952,28 +1088,77 @@ impl Changes {
                     changes.show_checkout(name.clone(), folder.clone(), cx);
                 }))
         });
-        crate::ui::menu::menu()
-            .id("checkouts")
-            .debug_selector(|| "checkouts".to_owned())
-            .min_w(px(320.))
-            .max_w(px(640.))
-            .max_h(px(360.))
-            .overflow_y_scroll()
-            .on_mouse_down_out(cx.listener(|changes, event: &MouseDownEvent, _, cx| {
-                changes.checkout_menu = false;
-                changes.checkouts_closed_at = Some(event.position);
-                cx.notify();
-            }))
-            .child(
+        let rows: Vec<_> = rows.collect();
+        Self::menu_list("checkouts", Menu::Checkouts, heading, cx).children(rows)
+    }
+
+    /// The menu of the branches to compare `shown` with, whose commits
+    /// `history` read: first to let Cox find it, as it did unless the
+    /// human chose one, then each branch, once read, the remote's default
+    /// first; the one compared with marked, and a click on another
+    /// compares with it.
+    fn render_bases_menu(
+        &self,
+        shown: &Repository,
+        history: &History,
+        cx: &mut Context<Self>,
+    ) -> gpui::Stateful<gpui::Div> {
+        let heading = match &shown.name {
+            Some(name) => format!("COMPARE {} WITH", name.to_uppercase()),
+            None => "COMPARE WITH".to_owned(),
+        };
+        let found = crate::ui::menu::item(
+            "base-found",
+            div()
+                .flex()
+                .items_center()
+                .gap(px(8.))
+                .child("Found by Cox")
+                .child(
+                    div()
+                        .text_size(px(11.5))
+                        .text_color(rgb(FAINT))
+                        .child("the remote's default branch, or the upstream"),
+                ),
+            "",
+        )
+        .when(history.chosen.is_none(), |row| row.bg(rgb(SELECTED)))
+        .on_hint_click(cx.listener(|changes, _, _, cx| changes.compare_with(None, cx)));
+        let rows: Vec<AnyElement> = match &self.bases {
+            None => vec![
                 div()
                     .px(px(10.))
-                    .pt(px(4.))
-                    .pb(px(2.))
-                    .text_size(px(10.5))
-                    .font_weight(FontWeight::SEMIBOLD)
+                    .py(px(6.))
+                    .text_size(px(12.))
                     .text_color(rgb(FAINT))
-                    .child(heading),
-            )
+                    .child("Reading the branches…")
+                    .into_any_element(),
+            ],
+            Some(bases) => bases
+                .iter()
+                .enumerate()
+                .map(|(index, base)| {
+                    let chosen = history.chosen.as_ref() == Some(base);
+                    let picked = base.clone();
+                    crate::ui::menu::item(
+                        ("base-choice", index),
+                        div()
+                            .font_family(CODE_FONT)
+                            .text_size(px(12.5))
+                            .child(base.clone()),
+                        "",
+                    )
+                    .when(chosen, |row| row.bg(rgb(SELECTED)))
+                    .on_hint_click(cx.listener(move |changes, _, _, cx| {
+                        changes.compare_with(Some(picked.clone()), cx);
+                    }))
+                    .into_any_element()
+                })
+                .collect(),
+        };
+        Self::menu_list("bases", Menu::Bases, heading, cx)
+            .child(found)
+            .child(crate::ui::menu::parting())
             .children(rows)
     }
 
@@ -1502,23 +1687,50 @@ fn checkout_icon(checkout: &Checkout) -> Icon {
     }
 }
 
+/// `button`, with `menu` under it, if it is open, kept in the window.
+fn under(button: gpui::Stateful<gpui::Div>, menu: Option<gpui::Stateful<gpui::Div>>) -> gpui::Div {
+    div()
+        .flex_shrink_0()
+        .flex()
+        .flex_col()
+        .child(button)
+        .children(menu.map(|menu| {
+            deferred(
+                anchored()
+                    .position_mode(AnchoredPositionMode::Local)
+                    .position(point(px(0.), px(MENU_BUTTON_HEIGHT + 4.)))
+                    .snap_to_window()
+                    .child(menu),
+            )
+            .with_priority(2)
+        }))
+}
+
+/// The mark at the end of a button that opens a menu.
+fn caret() -> gpui::Div {
+    div().text_size(px(10.)).text_color(rgb(FAINT)).child("▾")
+}
+
+/// A word that marks what a button or a row of a menu names, as `said`,
+/// in `color`.
+fn tag(said: String, color: u32) -> gpui::Div {
+    div()
+        .flex_shrink_0()
+        .px(px(5.))
+        .rounded(px(4.))
+        .border_1()
+        .border_color(rgb(BORDER))
+        .font_family(UI_FONT)
+        .text_size(px(10.5))
+        .text_color(rgb(color))
+        .child(said)
+}
+
 /// What marks `checkout`: for a worktree, the chat Cox made it for, or
 /// that it was made by hand, and whether it is outside the tab's folder.
 fn checkout_tags(checkout: &Checkout) -> Vec<gpui::Div> {
     let Checkout::Worktree(worktree) = checkout else {
         return Vec::new();
-    };
-    let tag = |said: String, color: u32| {
-        div()
-            .flex_shrink_0()
-            .px(px(5.))
-            .rounded(px(4.))
-            .border_1()
-            .border_color(rgb(BORDER))
-            .font_family(UI_FONT)
-            .text_size(px(10.5))
-            .text_color(rgb(color))
-            .child(said)
     };
     let made = match worktree.made_for {
         Some(chat) => tag(format!("chat {chat}"), ACCENT),
@@ -2084,7 +2296,7 @@ impl Render for Changes {
             .text_size(px(13.))
             .child(self.render_heading())
             .children(self.render_repositories(cx))
-            .children(self.render_checkout(cx))
+            .children(self.render_compared(cx))
             .child(
                 div()
                     .flex_1()
