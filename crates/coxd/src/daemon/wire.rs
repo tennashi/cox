@@ -655,6 +655,14 @@ pub enum ToDaemon {
     /// The human set what `project` is, or, blank, that it says nothing
     /// of what it is.
     SetAbout { project: ProjectId, about: String },
+    /// The human chose to compare the directory `directory` of the project
+    /// in `folder`, '' for the project's folder, with the branch `base`, in
+    /// what changed, or, with none, with the one Cox finds.
+    CompareWith {
+        folder: PathBuf,
+        directory: String,
+        base: Option<String>,
+    },
     /// Put the project kept as `project` away, off the rail, its chats
     /// going on as they were, or bring it back.
     ArchiveProject { project: ProjectId, archived: bool },

@@ -31,8 +31,9 @@
 //! works in one of them sees that one at first. The tab keeps what the
 //! human chose. Beside it, the branch its commits started after, which
 //! everything is since, as Cox found it, or as the human chose it from a
-//! menu of the repository's branches, which the repository keeps (see
-//! [`cox_git::commits::BASE`]).
+//! menu of the repository's branches, which coxd keeps for the directory
+//! of the project it is, apart from the repository, whose settings Cox
+//! leaves be (see [`CompareWith`]).
 //!
 //! The tab looks again now and then, so that it shows what the agent
 //! changes as it works. It draws only the rows in sight, so a long list
@@ -126,6 +127,18 @@ pub struct Chosen {
     pub line: Option<usize>,
 }
 
+/// The human chose to compare a directory of a project with the branch
+/// `base`, in what changed, or, with none, with the one Cox finds, for
+/// coxd to keep (see [`cox_core::store::Store::bases`]): the directory
+/// `directory` of the project in `folder`, as the store has it, '' for
+/// the project's folder.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CompareWith {
+    pub folder: PathBuf,
+    pub directory: String,
+    pub base: Option<String>,
+}
+
 /// The human asks to see the turn of a chat a commit was made in: the
 /// chat, by the number Cox keeps it by, and the entry that started the
 /// turn, by its place in the conversation.
@@ -193,8 +206,16 @@ pub struct Changes {
     /// The branches the repository shown can be compared with, as the tab
     /// read them as their menu opened; none until then.
     bases: Option<Vec<String>>,
-    /// What reads them, or keeps the one the human chose, while it does.
+    /// What reads them, or reads what changed since the one the human
+    /// chose, while it does.
     basing: Option<Task<()>>,
+    /// The project's folder and directory the store keeps what the human
+    /// chose of each repository by, as the tab last read it, if it is a
+    /// project's (see [`repositories::directory_of`]).
+    kept_as: Vec<Option<KeptAs>>,
+    /// The branch the human chose to compare each repository with, by its
+    /// name, or none to let Cox find it, until the store keeps it so.
+    comparing: HashMap<Option<String>, Option<String>>,
     /// The tab's name: "Changes", and the folder's name when it is not
     /// where the chat works.
     title: String,
@@ -270,6 +291,7 @@ impl Row {
 
 impl EventEmitter<Chosen> for Changes {}
 impl EventEmitter<ShowTurn> for Changes {}
+impl EventEmitter<CompareWith> for Changes {}
 
 impl Changes {
     /// A tab showing what changed in the repositories of `folder` (see
@@ -291,6 +313,8 @@ impl Changes {
             closed: None,
             bases: None,
             basing: None,
+            kept_as: Vec::new(),
+            comparing: HashMap::new(),
             title,
             read: None,
             chosen: None,
@@ -348,21 +372,34 @@ impl Changes {
     pub fn compare_with(&mut self, base: Option<String>, cx: &mut Context<Self>) {
         self.menu = None;
         cx.notify();
-        let Some(folder) = self.shown_folder() else {
+        let Some(index) = self.shown_index() else {
             return;
         };
+        let name = self.repositories()[index].name.clone();
+        // A repository of no project's is compared so while the tab is.
+        if let Some(Some((folder, directory))) = self.kept_as.get(index) {
+            cx.emit(CompareWith {
+                folder: folder.clone(),
+                directory: directory.clone(),
+                base: base.clone(),
+            });
+        }
+        self.comparing.insert(name, base);
         self.basing = Some(cx.spawn(async move |this, cx| {
-            let kept = cx
-                .background_executor()
-                .spawn(async move { commits::choose_base(&folder, base.as_deref()) })
-                .await;
-            if let Err(error) = kept {
-                tracing::warn!("the branch to compare with is not kept: {error}");
-            }
             if look(&this, cx).await {
                 let _ = this.update(cx, |changes, cx| changes.pick(Pick::Everything, cx));
             }
         }));
+    }
+
+    /// The branch the repository shown is compared with, if the human chose
+    /// one.
+    fn shown_base(&self) -> Option<String> {
+        let shown = self.shown()?;
+        match self.comparing.get(&shown.name) {
+            Some(chosen) => chosen.clone(),
+            None => self.history()?.chosen.clone(),
+        }
     }
 
     /// Opens `menu`, reading what it lists, or closes it, if it is open.
@@ -537,12 +574,13 @@ impl Changes {
             None => self.shown().and_then(|shown| shown.name.clone()),
         };
         let checkout = Some(folder.clone());
+        let base = self.shown_base();
         self.picking = Some(cx.spawn(async move |this, cx| {
             let reading = pick.clone();
             let (read, looks) = cx
                 .background_executor()
                 .spawn(async move {
-                    let read = read_pick(&folder, &reading);
+                    let read = read_pick(&folder, base.as_deref(), &reading);
                     let looks = read.as_ref().map_or_default(looks);
                     (read, looks)
                 })
@@ -1459,10 +1497,11 @@ fn first_pick(history: Option<&History>) -> Pick {
     }
 }
 
-/// What changed in the repository at `folder`, as `pick` says.
-fn read_pick(folder: &Path, pick: &Pick) -> Result<Diff, String> {
+/// What changed in the repository at `folder`, as `pick` says, compared
+/// with the branch `base`, if the human chose one.
+fn read_pick(folder: &Path, base: Option<&str>, pick: &Pick) -> Result<Diff, String> {
     match pick {
-        Pick::Everything => commits::everything(folder)?
+        Pick::Everything => commits::everything_with(folder, base)?
             .ok_or_else(|| "Nothing tells where the commits start.".to_owned()),
         Pick::Uncommitted => commits::uncommitted(folder),
         Pick::Commit(id) => commits::diff_of(folder, id),
@@ -1914,32 +1953,51 @@ fn follow(cx: &mut Context<Changes>) -> Task<()> {
 /// it changed, and shows them, unless the human chose other checkouts
 /// meanwhile; answers whether the tab is still there.
 async fn look(this: &WeakEntity<Changes>, cx: &mut AsyncApp) -> bool {
-    let Ok((folder, chosen, cwd)) = this.read_with(cx, |changes, _| {
+    let Ok((folder, chosen, cwd, comparing)) = this.read_with(cx, |changes, _| {
         let chosen = changes.checkouts.clone();
-        (changes.folder.clone(), chosen, changes.cwd.clone())
+        let comparing = changes.comparing.clone();
+        (
+            changes.folder.clone(),
+            chosen,
+            changes.cwd.clone(),
+            comparing,
+        )
     }) else {
         return false;
     };
-    let asked = chosen.clone();
-    let (read, histories) = cx
+    // Where the store is, as this thread was told.
+    let store = coxd::storage::path(coxd::storage::Kept::Chats);
+    let asked = (chosen.clone(), comparing.clone());
+    let (read, histories, kept_as, kept) = cx
         .background_executor()
         .spawn(async move {
             let read = repositories::read(&folder, &chosen, &cwd);
+            let (kept_as, kept) = kept_bases(store.as_deref(), &folder, &read);
             let histories = read
                 .iter()
-                .map(|repository| {
+                .zip(&kept)
+                .map(|(repository, kept)| {
                     let checkout = repository.checkout()?;
-                    commits::history(checkout.folder()).ok()
+                    let base = comparing.get(&repository.name).unwrap_or(kept);
+                    commits::history_with(checkout.folder(), base.as_deref()).ok()
                 })
                 .collect::<Vec<_>>();
-            (read, histories)
+            (read, histories, kept_as, kept)
         })
         .await;
-    let still = |changes: &Changes| changes.checkouts == asked;
+    let still =
+        |changes: &Changes| (&changes.checkouts, &changes.comparing) == (&asked.0, &asked.1);
     let Ok(changed) = this.update(cx, |changes, cx| {
         if !still(changes) {
             return false;
         }
+        // What the store keeps now is what the human chose.
+        for (repository, kept) in read.iter().zip(&kept) {
+            if changes.comparing.get(&repository.name) == Some(kept) {
+                changes.comparing.remove(&repository.name);
+            }
+        }
+        changes.kept_as = kept_as;
         if changes.histories != histories {
             changes.read_histories(histories, cx);
         }
@@ -1962,11 +2020,53 @@ async fn look(this: &WeakEntity<Changes>, cx: &mut AsyncApp) -> bool {
         })
         .await;
     this.update(cx, |changes, cx| {
-        if still(changes) {
+        if changes.checkouts == asked.0 {
             changes.looked(read, looks, cx);
         }
     })
     .is_ok()
+}
+
+/// The project's folder and the name of its directory a repository is, as
+/// the store keeps what the human chose of it by (see
+/// [`repositories::directory_of`]).
+type KeptAs = (PathBuf, String);
+
+/// The project's folder and directory the store at `store` keeps what the
+/// human chose of each repository of `read`, of the tab of `folder`, by,
+/// if it is a project's, and the branch the human chose to compare it
+/// with there, if they chose one; none of either where the store cannot
+/// be read.
+fn kept_bases(
+    store: Option<&Path>,
+    folder: &Path,
+    read: &[Repository],
+) -> (Vec<Option<KeptAs>>, Vec<Option<String>>) {
+    let store = store.and_then(|store| cox_core::store::Store::read(store).ok());
+    let projects: Vec<PathBuf> = store
+        .as_ref()
+        .and_then(|store| store.projects().ok())
+        .map_or_default(|projects| projects.into_iter().map(|project| project.folder).collect());
+    let kept_as: Vec<Option<KeptAs>> = read
+        .iter()
+        .map(|repository| repositories::directory_of(&projects, folder, repository.name.as_deref()))
+        .collect();
+    let mut bases: HashMap<PathBuf, Vec<(String, String)>> = HashMap::new();
+    let kept = kept_as
+        .iter()
+        .map(|kept_as| {
+            let (project, directory) = kept_as.as_ref()?;
+            let store = store.as_ref()?;
+            let of_project = bases
+                .entry(project.clone())
+                .or_insert_with(|| store.bases(project).unwrap_or_default());
+            of_project
+                .iter()
+                .find(|(named, _)| named == directory)
+                .map(|(_, base)| base.clone())
+        })
+        .collect();
+    (kept_as, kept)
 }
 
 /// The head of the card of `file`, at `row` of the tab: how it changed,

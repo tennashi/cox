@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::Duration;
 
-use cox::stage::changes::{Changes, Chosen, Pick, ShowTurn};
+use cox::stage::changes::{Changes, Chosen, CompareWith, Pick, ShowTurn};
 use cox::stage::tab::Shows as _;
 use cox_git::changes::{Diff, Since};
 use cox_git::commits::{self, Turn};
@@ -501,12 +501,36 @@ fn compares_a_repository_with_the_branch_the_human_chooses(cx: &mut TestAppConte
     std::fs::write(folder.join("w.txt"), "w\n").unwrap();
     commit(&folder, "Work");
 
+    // The repository is a project's folder, whose store this thread has.
+    let data = scratch::made("changes-compare-data");
+    coxd::storage::keep_on_this_thread(Some(data));
+    let path = coxd::storage::path(coxd::storage::Kept::Chats).unwrap();
+    let store = cox_core::store::Store::open(&path).unwrap();
+    let project = store.project(&folder, "compare").unwrap();
+
     let (changes, _, cx) = open(cx, &folder, &folder);
+    let told = Rc::new(RefCell::new(Vec::new()));
+    let heard = Rc::clone(&told);
+    cx.update(|_, cx| {
+        cx.subscribe(&changes, move |_, compare: &CompareWith, _| {
+            heard.borrow_mut().push(compare.clone());
+        })
+        .detach();
+    });
     let base = |changes: &Entity<Changes>, cx: &mut VisualTestContext| {
         changes.read_with(cx, |changes, _| {
             let history = changes.history().unwrap();
             (history.base.clone(), history.chosen.clone())
         })
+    };
+    let looked_again = |cx: &mut VisualTestContext| {
+        cx.executor().advance_clock(Duration::from_secs(3));
+        cx.run_until_parked();
+    };
+    let compared = |base: Option<&str>| CompareWith {
+        folder: folder.clone(),
+        directory: String::new(),
+        base: base.map(str::to_owned),
     };
     // Cox finds the remote's default branch.
     assert!(matches!(
@@ -520,28 +544,38 @@ fn compares_a_repository_with_the_branch_the_human_chooses(cx: &mut TestAppConte
     let release = offered.iter().position(|name| name == "origin/release");
     let release = format!("base-choice-{}", release.unwrap()).leak();
     click(release, cx);
+    // Everything since the branch chosen shows at once, which coxd is told
+    // to keep for the project's folder.
     assert!(matches!(
         base(&changes, cx),
         (cox_git::commits::Base::Branched { from, .. }, Some(chosen))
             if from == "origin/release" && chosen == "origin/release"
     ));
-    // Everything since the branch chosen shows, which the repository keeps.
     assert_eq!(
         changes.read_with(cx, |changes, _| changes.shown_pick()),
         Pick::Everything
     );
     assert_eq!(shown_now(&changes, cx), [("w.txt".to_owned(), 1, 0)]);
-    assert_eq!(
-        commits::chosen_base(&folder).as_deref(),
-        Some("origin/release")
-    );
+    assert_eq!(*told.borrow(), [compared(Some("origin/release"))]);
+    // As coxd keeps it, the tab reads it so.
+    store
+        .keep_base(project, "", Some("origin/release"))
+        .unwrap();
+    looked_again(cx);
+    assert!(matches!(base(&changes, cx), (_, Some(chosen)) if chosen == "origin/release"));
 
     click("base", cx);
     click("base-found", cx);
     assert!(matches!(base(&changes, cx), (_, None)));
-    assert_eq!(commits::chosen_base(&folder), None);
     assert_eq!(
         shown_now(&changes, cx),
         [("r.txt".to_owned(), 1, 0), ("w.txt".to_owned(), 1, 0)]
     );
+    assert_eq!(told.borrow().last(), Some(&compared(None)));
+    store.keep_base(project, "", None).unwrap();
+    looked_again(cx);
+    assert!(matches!(base(&changes, cx), (_, None)));
+    // The repository's own settings are left be.
+    assert!(!git(&folder, &["config", "--list", "--local"]).contains("cox."));
+    coxd::storage::keep_on_this_thread(None);
 }

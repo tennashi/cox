@@ -172,6 +172,26 @@ impl Daemon {
         self.tell_listing();
     }
 
+    /// Keeps the branch `base` as the one the human chose to compare the
+    /// directory `directory` of the project in `folder` with, or, with
+    /// none, forgets the one they chose, for the tabs of what changed to
+    /// read.
+    pub(super) fn compare_with(&mut self, folder: &Path, directory: &str, base: Option<&str>) {
+        let Some(id) = self
+            .project_at(folder)
+            .and_then(|index| self.projects[index].id)
+        else {
+            tracing::warn!(
+                "{} is no project's folder: the branch to compare {directory:?} with is not kept",
+                folder.display()
+            );
+            return;
+        };
+        if let Err(error) = self.store.keep_base(id, directory, base) {
+            tracing::error!("the branch to compare with is not kept: {error:#}");
+        }
+    }
+
     /// Shows `about`, what the agent of the chat `key` proposes its
     /// project is, on a card in the chat's conversation, and answers what
     /// the project is now, if it says, or why it cannot be proposed.

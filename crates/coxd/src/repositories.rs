@@ -267,6 +267,40 @@ struct Shared {
     main: bool,
 }
 
+/// The project's folder and the name of its directory the repository of
+/// `folder` named `name` (see [`Repository::name`]) is, as a project in
+/// `projects`, by their folders, has it: the directory `name` of the
+/// project in `folder`; or, for none, '' of the project `folder` is, as a
+/// repository itself, or else the directory of a project whose worktree
+/// `folder` is. None when it is no project's.
+#[must_use]
+pub fn directory_of(
+    projects: &[PathBuf],
+    folder: &Path,
+    name: Option<&str>,
+) -> Option<(PathBuf, String)> {
+    let project = |folder: &Path| {
+        let folder = canonical(folder);
+        projects
+            .iter()
+            .find(|project| canonical(project) == folder)
+            .cloned()
+    };
+    if let Some(name) = name {
+        return project(folder).map(|project| (project, name.to_owned()));
+    }
+    if let Some(project) = project(folder) {
+        return Some((project, String::new()));
+    }
+    let main = checkout_at(folder)?.common.parent()?.to_owned();
+    let directories = main.parent()?;
+    if directories.file_name()? != DIRECTORIES {
+        return None;
+    }
+    let name = main.file_name()?.to_str()?.to_owned();
+    project(directories.parent()?).map(|project| (project, name))
+}
+
 /// The checkout `folder` is in, if it is in one.
 fn checkout_at(folder: &Path) -> Option<Shared> {
     let told = cox_git::git::run(
@@ -509,6 +543,26 @@ mod tests {
         // Nor does a checkout that is gone.
         std::fs::remove_dir_all(&search).unwrap();
         assert_eq!(count(&project, &chosen(&search), &project), Ok(1));
+    }
+
+    #[test]
+    fn a_repository_is_kept_as_a_directory_of_its_project_wherever_its_checkout_is() {
+        let project = TempDir::new();
+        let app = project.join(DIRECTORIES).join("app");
+        committed(&app);
+        let search = project.join("worktrees/app/search");
+        worktree(&app, &search, "search");
+        let elsewhere = TempDir::new();
+        committed(&elsewhere);
+        let projects = [project.to_path_buf()];
+        let kept = |folder: &Path, name: Option<&str>| directory_of(&projects, folder, name);
+
+        let as_app = Some((project.to_path_buf(), "app".to_owned()));
+        assert_eq!(kept(&project, Some("app")), as_app);
+        // A chat working in the worktree has it as the folder's own.
+        assert_eq!(kept(&search, None), as_app);
+        assert_eq!(kept(&elsewhere, None), None);
+        assert_eq!(kept(&elsewhere, Some("app")), None);
     }
 
     #[test]

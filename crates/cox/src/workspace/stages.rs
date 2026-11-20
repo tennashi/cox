@@ -12,7 +12,7 @@ use gpui::{App, Context, Window};
 use super::{Chat, NO_TAB, NO_TERMINAL, Staged, Workspace};
 use crate::chat::view::StageView;
 use crate::stage::Stage;
-use crate::stage::changes::ShowTurn;
+use crate::stage::changes::{CompareWith, ShowTurn};
 use crate::stage::owners::ShowChat;
 use coxd::agent::mcp::ToolRequest;
 use coxd::chat::conversation::State;
@@ -119,6 +119,14 @@ impl Workspace {
             },
         );
         self.shows_chats.push(turns);
+        let compares = cx.subscribe(&stage, |workspace, _, compare: &CompareWith, _| {
+            workspace.tell(ToDaemon::CompareWith {
+                folder: compare.folder.clone(),
+                directory: compare.directory.clone(),
+                base: compare.base.clone(),
+            });
+        });
+        self.shows_chats.push(compares);
         self.tell_names();
         self.at_work(cx);
     }
