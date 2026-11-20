@@ -1954,6 +1954,80 @@ fn colon_quit_and_the_rest_go_to_the_stage(cx: &mut TestAppContext) {
     assert_eq!(keys::shown_input(cx, &workspace), "");
 }
 
+/// A stage whose one tab is a [`FakePage`] in `context`, which keeps
+/// what Vim's keys ask of the stage in `keyed`.
+fn stage_of(
+    context: &'static str,
+    keyed: &Keyed,
+    tab: &Rc<RefCell<Option<Entity<FakePage>>>>,
+) -> FakeStages {
+    use gpui::AppContext as _;
+
+    let asked = keyed.clone();
+    let tab = tab.clone();
+    let built: fake_daemon::Built = Rc::new(move |_, _, cx| {
+        let page = cx.new(|cx| FakePage {
+            focus: cx.focus_handle(),
+            asked: Vec::new(),
+            context,
+        });
+        *tab.borrow_mut() = Some(page.clone());
+        let asked = asked.clone();
+        cox::chat::view::StageView {
+            view: page.clone().into(),
+            panel: cx.new(|_| cox::ui::Panel::default()),
+            by_keys: Rc::new(move |tabs, window, cx| {
+                if tabs == Tabs::Focus {
+                    window.focus(&page.read(cx).focus);
+                }
+                asked.borrow_mut().push(tabs);
+            }),
+            shows_files: Rc::new(|_| false),
+            diagrams: Rc::new(|_, _, _| {}),
+            runs: Rc::new(|_, _, _| None),
+        }
+    });
+    FakeStages {
+        built: Some(built),
+        ..FakeStages::default()
+    }
+}
+
+#[gpui::test]
+fn t_opens_the_stage_s_menu_from_a_program_s_tab_in_normal_mode_only(cx: &mut TestAppContext) {
+    cx.update(|cx| cox::vim::turn(true, cx));
+    for (context, region) in [
+        ("Terminal", cox::vim::Region::Terminal),
+        ("Android", cox::vim::Region::Android),
+    ] {
+        let keyed = Keyed::default();
+        let tab = Rc::new(RefCell::new(None));
+        let (workspace, cx) = keys::open_window_on(
+            cx,
+            scratch::folder(&format!("t-{context}")),
+            stage_of(context, &keyed, &tab),
+        );
+        keys::press(cx, &workspace, "secondary-n escape ctrl-w h");
+        assert!(in_part(cx, context));
+        assert_eq!(mode(cx), Some(Mode::Normal), "come to by keys, {context}");
+        let page = tab.borrow().clone().expect("the stage was built");
+        asked(&page, cx);
+
+        keys::press(cx, &workspace, "t");
+        assert_eq!(*keyed.borrow(), [Tabs::Focus, Tabs::Menu], "{context}");
+        assert_eq!(asked(&page, cx), Vec::<String>::new(), "{context}");
+
+        // A click on the tab types in it.
+        cx.update(|window, cx| cox::vim::typing(region, window, cx));
+        cx.run_until_parked();
+        assert_eq!(mode(cx), Some(Mode::Insert), "{context}");
+        keyed.borrow_mut().clear();
+        keys::press(cx, &workspace, "t");
+        assert_eq!(*keyed.borrow(), [], "{context}");
+        assert_eq!(asked(&page, cx), ["key t"], "the program's, {context}");
+    }
+}
+
 #[gpui::test]
 fn t_on_a_page_and_open_with_words_ask_the_stage_to_search(cx: &mut TestAppContext) {
     use gpui::AppContext as _;

@@ -362,6 +362,7 @@ const SEARCHERS: Within = |region| region.is(Kind::Searcher);
 const PICKERS: Within = |region| region.is(Kind::Picker);
 const MOVERS: Within = |region| region.is(Kind::Mover);
 const PROGRAMS: Within = Region::runs_a_program;
+const TABS: Within = |region| region.is(Kind::Tab);
 
 /// The line at the window's foot.
 const LINE: Within = |region| region == Region::Command;
@@ -669,7 +670,7 @@ impl Keymap {
         send(PAGE, &["g", "i"], Sent::FocusField),
         send(PAGE, &["y", "y"], Sent::CopyAddress),
         send(PAGE, &["o"], Sent::Address),
-        act(PAGE, &["t"], Act::Menu),
+        act(TABS, &["t"], Act::Menu),
         bind(Mode::Insert, ADDRESS, &["escape"], Command::Normal),
         bind(Mode::Normal, PARTS, &[":"], Command::Line(Prompt::Ex)),
         bind(
@@ -931,6 +932,45 @@ mod tests {
             Keymap::VIM.answer(Mode::Insert, Region::Chat, &["ctrl-w"]),
             Answer::None
         );
+    }
+
+    #[test]
+    fn t_opens_the_stage_s_menu_from_every_tab_but_a_playground_in_normal_mode() {
+        let menu = Answer::Act(Command::Window(Act::Menu));
+        for region in [
+            Region::Page,
+            Region::Terminal,
+            Region::Code,
+            Region::Document,
+            Region::Tree,
+            Region::Changes,
+            Region::Android,
+            Region::Devices,
+            Region::Flow,
+            Region::Windows,
+            Region::MacWindow,
+            Region::Diagram,
+        ] {
+            assert_eq!(
+                Keymap::VIM.answer(Mode::Normal, region, &["t"]),
+                menu,
+                "{region:?}"
+            );
+        }
+        for region in [Region::Terminal, Region::Android, Region::Page] {
+            assert_eq!(
+                Keymap::VIM.answer(Mode::Insert, region, &["t"]),
+                Answer::None,
+                "the program's or the field's in insert mode, {region:?}"
+            );
+        }
+        for region in [Region::Playground, Region::Chat, Region::Rail] {
+            assert_ne!(
+                Keymap::VIM.answer(Mode::Normal, region, &["t"]),
+                menu,
+                "{region:?}"
+            );
+        }
     }
 
     #[test]

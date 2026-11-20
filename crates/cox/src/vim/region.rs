@@ -65,6 +65,10 @@ pub enum Kind {
     /// A part of the window `ctrl-w` and the stage's tabs' keys work in:
     /// not an input, screen or menu that opens over them.
     Part,
+    /// A tab of the stage, where `t` opens the menu of the stage's +, as
+    /// a page's Vimperator keys do: every tab but a playground, whose
+    /// normal mode edits its code.
+    Tab,
     /// A part `f` draws hints in: not a page, which draws its own, nor a
     /// screen over them.
     Hinter,
@@ -169,7 +173,8 @@ impl Region {
     #[expect(clippy::too_many_lines, reason = "one arm for each region")]
     pub const fn props(self) -> Props {
         use Kind::{
-            Fields, Form, Hinted, Hinter, Line, Modeless, Mover, Part, Picker, Searcher, Visual,
+            Fields, Form, Hinted, Hinter, Line, Modeless, Mover, Part, Picker, Searcher, Tab,
+            Visual,
         };
         const NORMAL: Option<Mode> = Some(Mode::Normal);
         const INSERT: Option<Mode> = Some(Mode::Insert);
@@ -257,7 +262,7 @@ impl Region {
             },
             Self::Page => Props {
                 context: crate::stage::page::KEY_CONTEXT,
-                is: &[Part, Hinted, Searcher, Mover],
+                is: &[Part, Tab, Hinted, Searcher, Mover],
                 ..Props::NONE
             },
             Self::Address => Props {
@@ -268,70 +273,70 @@ impl Region {
             },
             Self::Terminal => Props {
                 context: crate::stage::terminal::KEY_CONTEXT,
-                is: &[Part, Hinter, Hinted, Searcher, Mover],
+                is: &[Part, Tab, Hinter, Hinted, Searcher, Mover],
                 enters_in: NORMAL,
                 program: Some(Program::Every),
                 hints: STAGE,
             },
             Self::Code => Props {
                 context: crate::stage::code::KEY_CONTEXT,
-                is: &[Part, Hinter, Hinted, Searcher, Mover, Visual],
+                is: &[Part, Tab, Hinter, Hinted, Searcher, Mover, Visual],
                 enters_in: NORMAL,
                 hints: STAGE,
                 ..Props::NONE
             },
             Self::Document => Props {
                 context: crate::stage::document::KEY_CONTEXT,
-                is: &[Part, Hinter, Hinted, Searcher, Mover],
+                is: &[Part, Tab, Hinter, Hinted, Searcher, Mover],
                 enters_in: NORMAL,
                 hints: STAGE,
                 ..Props::NONE
             },
             Self::Tree => Props {
                 context: crate::stage::tree::KEY_CONTEXT,
-                is: &[Part, Hinter, Hinted, Mover],
+                is: &[Part, Tab, Hinter, Hinted, Mover],
                 enters_in: NORMAL,
                 hints: STAGE,
                 ..Props::NONE
             },
             Self::Changes => Props {
                 context: crate::stage::changes::KEY_CONTEXT,
-                is: &[Part, Hinter, Hinted, Mover],
+                is: &[Part, Tab, Hinter, Hinted, Mover],
                 enters_in: NORMAL,
                 hints: STAGE,
                 ..Props::NONE
             },
             Self::Android => Props {
                 context: crate::stage::android::KEY_CONTEXT,
-                is: &[Part, Hinter, Hinted],
+                is: &[Part, Tab, Hinter, Hinted],
                 enters_in: NORMAL,
                 program: Some(Program::Plain),
                 hints: STAGE,
             },
             Self::Devices => Props {
                 context: crate::stage::devices::KEY_CONTEXT,
-                is: &[Part, Hinter, Hinted],
+                is: &[Part, Tab, Hinter, Hinted],
                 enters_in: NORMAL,
                 hints: STAGE,
                 ..Props::NONE
             },
             Self::Flow => Props {
                 context: crate::stage::flow::KEY_CONTEXT,
-                is: &[Part, Hinter, Hinted],
+                is: &[Part, Tab, Hinter, Hinted],
                 enters_in: NORMAL,
                 hints: STAGE,
                 ..Props::NONE
             },
             Self::Windows => Props {
                 context: crate::stage::windows::KEY_CONTEXT,
-                is: &[Part, Hinter, Hinted],
+                is: &[Part, Tab, Hinter, Hinted],
                 enters_in: NORMAL,
                 hints: STAGE,
                 ..Props::NONE
             },
             Self::MacWindow => Props {
                 context: crate::stage::mac_window::KEY_CONTEXT,
-                is: &[Part, Hinter, Hinted],
+                is: &[Part, Tab, Hinter, Hinted],
                 enters_in: NORMAL,
                 hints: STAGE,
                 ..Props::NONE
@@ -345,7 +350,7 @@ impl Region {
             },
             Self::Diagram => Props {
                 context: crate::stage::diagram::KEY_CONTEXT,
-                is: &[Part, Hinter, Hinted],
+                is: &[Part, Tab, Hinter, Hinted],
                 enters_in: NORMAL,
                 hints: STAGE,
                 ..Props::NONE
