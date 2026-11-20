@@ -56,6 +56,10 @@ actions!(
         SelectDown,
         SelectToHome,
         SelectToEnd,
+        LineStart,
+        LineEnd,
+        SelectToLineStart,
+        SelectToLineEnd,
         WordLeft,
         WordRight,
         SelectWordLeft,
@@ -114,6 +118,9 @@ pub fn bind_keys(cx: &mut App) {
     ]);
     if cfg!(target_os = "macos") {
         // As text fields on macOS take them, Emacs's Control keys too.
+        // Command+Left and Right go to the ends of the row the cursor is
+        // on, but Control+A and E, as Cocoa's, to those of its line,
+        // between line breaks, however many rows it wraps into.
         cx.bind_keys([
             KeyBinding::new("alt-left", WordLeft, Some(KEY_CONTEXT)),
             KeyBinding::new("alt-right", WordRight, Some(KEY_CONTEXT)),
@@ -130,8 +137,10 @@ pub fn bind_keys(cx: &mut App) {
             KeyBinding::new("cmd-shift-up", SelectToTextStart, Some(KEY_CONTEXT)),
             KeyBinding::new("cmd-shift-down", SelectToTextEnd, Some(KEY_CONTEXT)),
             KeyBinding::new("cmd-backspace", DeleteToHome, Some(KEY_CONTEXT)),
-            KeyBinding::new("ctrl-a", Home, Some(KEY_CONTEXT)),
-            KeyBinding::new("ctrl-e", End, Some(KEY_CONTEXT)),
+            KeyBinding::new("ctrl-a", LineStart, Some(KEY_CONTEXT)),
+            KeyBinding::new("ctrl-e", LineEnd, Some(KEY_CONTEXT)),
+            KeyBinding::new("ctrl-shift-a", SelectToLineStart, Some(KEY_CONTEXT)),
+            KeyBinding::new("ctrl-shift-e", SelectToLineEnd, Some(KEY_CONTEXT)),
             KeyBinding::new("ctrl-k", DeleteToEnd, Some(KEY_CONTEXT)),
         ]);
     } else {
@@ -411,6 +420,34 @@ impl LineInput {
     fn end(&mut self, _: &End, _window: &mut Window, cx: &mut Context<Self>) {
         let offset = self.row_end();
         self.edit(cx, |draft| draft.move_to(offset));
+    }
+
+    /// Control+A on macOS: to the start of the line, between line breaks.
+    fn line_start(&mut self, _: &LineStart, _window: &mut Window, cx: &mut Context<Self>) {
+        self.edit(cx, Draft::move_to_line_start);
+    }
+
+    /// Control+E on macOS: to the end of the line, between line breaks.
+    fn line_end(&mut self, _: &LineEnd, _window: &mut Window, cx: &mut Context<Self>) {
+        self.edit(cx, Draft::move_to_line_end);
+    }
+
+    fn select_to_line_start(
+        &mut self,
+        _: &SelectToLineStart,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.edit(cx, Draft::select_to_line_start);
+    }
+
+    fn select_to_line_end(
+        &mut self,
+        _: &SelectToLineEnd,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.edit(cx, Draft::select_to_line_end);
     }
 
     fn select_left(&mut self, _: &SelectLeft, _window: &mut Window, cx: &mut Context<Self>) {
@@ -980,6 +1017,10 @@ impl Render for LineInput {
             .on_action(cx.listener(Self::select_down))
             .on_action(cx.listener(Self::select_to_home))
             .on_action(cx.listener(Self::select_to_end))
+            .on_action(cx.listener(Self::line_start))
+            .on_action(cx.listener(Self::line_end))
+            .on_action(cx.listener(Self::select_to_line_start))
+            .on_action(cx.listener(Self::select_to_line_end))
             .on_action(cx.listener(Self::word_left))
             .on_action(cx.listener(Self::word_right))
             .on_action(cx.listener(Self::select_word_left))
@@ -1435,6 +1476,54 @@ mod tests {
     use gpui::px;
 
     use super::{scroll_to_show, typed};
+
+    /// Control+A and E, and with Shift, as macOS's text fields take them,
+    /// to the ends of the cursor's line, between line breaks, past the
+    /// rows a long line wraps into.
+    #[cfg(target_os = "macos")]
+    #[gpui::test]
+    fn control_a_and_e_go_to_the_ends_of_the_line_on_macos(cx: &mut gpui::TestAppContext) {
+        use super::LineInput;
+
+        cx.update(super::bind_keys);
+        let (input, cx) = cx.add_window_view(|_, cx| LineInput::wrapping(cx));
+        // A line far wider than the window, between two short ones.
+        let long = "word ".repeat(400);
+        let text = format!("first\n{long}\nlast");
+        let (start, end) = (6, 6 + long.len());
+        input.update_in(cx, |input, window, cx| {
+            window.focus(&input.focus_handle);
+            input.set_text_at(&text, start + 1000, cx);
+        });
+        let selected = |cx: &mut gpui::VisualTestContext| {
+            cx.run_until_parked();
+            input.read_with(cx, |input, _| {
+                assert!(
+                    input
+                        .last_layout
+                        .as_ref()
+                        .is_some_and(|layout| layout.rows() > 3),
+                    "the long line wraps"
+                );
+                input.selected()
+            })
+        };
+        cx.simulate_keystrokes("ctrl-a");
+        assert_eq!(selected(cx), start..start);
+        cx.simulate_keystrokes("ctrl-a");
+        assert_eq!(selected(cx), start..start, "again, it stays");
+        cx.simulate_keystrokes("ctrl-e");
+        assert_eq!(selected(cx), end..end);
+        cx.simulate_keystrokes("ctrl-e");
+        assert_eq!(selected(cx), end..end, "again, it stays");
+        cx.simulate_keystrokes("ctrl-shift-a");
+        assert_eq!(selected(cx), start..end);
+        input.update_in(cx, |input, _, cx| {
+            input.set_text_at(&text, start + 1000, cx);
+        });
+        cx.simulate_keystrokes("ctrl-shift-e");
+        assert_eq!(selected(cx), start + 1000..end);
+    }
 
     #[test]
     fn a_control_key_handed_back_types_nothing() {
