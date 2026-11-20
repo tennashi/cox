@@ -464,8 +464,36 @@
         border-left: 2px solid var(--border-strong);
       }
       .event.ci.failed .text,
-      .event.turn_end.failed .text {
+      .event.turn_end.failed .text,
+      .event.check.failed .text {
         color: var(--failed);
+      }
+      .event.check.failed .mark {
+        color: var(--failed);
+      }
+      /* What a line printed, as a check that failed, a click away. */
+      .event .opener {
+        font-size: var(--small);
+        color: var(--faint);
+        cursor: pointer;
+        user-select: none;
+        white-space: nowrap;
+      }
+      .event .opener:hover {
+        color: var(--link);
+      }
+      .event .printed {
+        margin: var(--space-1) 0 var(--space-2);
+        padding: var(--space-1) var(--space-2);
+        max-height: 240px;
+        overflow: auto;
+        font: var(--small) / 1.5 var(--mono);
+        color: var(--dim);
+        background: var(--inset-ground);
+        border: 1px solid var(--card-edge);
+        border-radius: var(--radius);
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
       }
       .event .lines,
       .event .number {

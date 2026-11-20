@@ -22,7 +22,7 @@ use crate::settings::Setting;
 use crate::tabs::KeptTabs;
 
 /// The version of the tables below, as `SQLite`'s `user_version` holds it.
-const VERSION: i64 = 24;
+const VERSION: i64 = 25;
 
 const TABLES: &str = "
 CREATE TABLE projects (
@@ -166,10 +166,12 @@ CREATE TABLE steps (
 CREATE INDEX steps_done ON steps (done) WHERE done IS NOT NULL;
 -- The entries that tell a chat's story, past its steps: the human's
 -- lines, of which the first starts it, the receipts of how its plan
--- changed, the questions and the commits.
+-- changed, the questions, the commits, and what ran as a turn ended or
+-- as something else happened, as the chat's goal and its triggers.
 CREATE INDEX milestones ON entries (chat, number) WHERE entry LIKE '{\"human\":%'
     OR entry LIKE '{\"plan_revised\":%' OR entry LIKE '{\"question\":%'
-    OR entry LIKE '{\"commits\":%';
+    OR entry LIKE '{\"commits\":%' OR entry LIKE '{\"checks\":%'
+    OR entry LIKE '{\"event\":%';
 ";
 
 /// What makes the tables of each earlier version into those of the next:
@@ -252,6 +254,13 @@ const UPGRADES: &[&str] = &[
          ON CONFLICT (chat, id) DO UPDATE SET text = excluded.text,
              started = coalesce(excluded.started, steps.started), done = excluded.done;
      DROP INDEX plans;"#,
+    // The story told what ran as a turn ended, or as something else
+    // happened, too.
+    r#"DROP INDEX milestones;
+     CREATE INDEX milestones ON entries (chat, number) WHERE entry LIKE '{"human":%'
+         OR entry LIKE '{"plan_revised":%' OR entry LIKE '{"question":%'
+         OR entry LIKE '{"commits":%' OR entry LIKE '{"checks":%'
+         OR entry LIKE '{"event":%';"#,
 ];
 
 /// What keeps an entry of a chat, in place of what was kept there.
@@ -1573,7 +1582,8 @@ impl Store {
     /// [`Self::steps`]), each entry with when it was first written, in
     /// milliseconds since the epoch, in order: the first line the human
     /// sent, and the receipts of how its agent's plan changed, the
-    /// questions and the commits of its agent.
+    /// questions and the commits of its agent, and what ran as a turn
+    /// ended or as something else happened (see [`Entry::checks`]).
     ///
     /// # Errors
     ///
@@ -1584,7 +1594,8 @@ impl Store {
         let mut statement = self.connection.prepare_cached(
             r#"SELECT at, entry FROM entries INDEXED BY milestones WHERE chat = ?1
              AND (entry LIKE '{"human":%' OR entry LIKE '{"plan_revised":%'
-             OR entry LIKE '{"question":%' OR entry LIKE '{"commits":%')
+             OR entry LIKE '{"question":%' OR entry LIKE '{"commits":%'
+             OR entry LIKE '{"checks":%' OR entry LIKE '{"event":%')
              ORDER BY number"#,
         )?;
         let rows = statement.query_map([chat.0], |row| {
@@ -2826,6 +2837,16 @@ mod tests {
         let other = store.add_chat(None, "Chat 2").unwrap();
         let commits = Entry::Commits(Vec::new());
         let revised = Entry::PlanRevised(crate::entry::Revision::between(&[], &[], &[]));
+        let check = |name: &str| crate::entry::Check {
+            name: name.to_owned(),
+            state: crate::entry::CheckState::Passed,
+            said: None,
+        };
+        let checks = Entry::Checks(vec![check("goal")]);
+        let event = Entry::Event {
+            on: "goal.met".to_owned(),
+            checks: vec![check("docs")],
+        };
         let entries = [
             Entry::Note("instructions".to_owned()),
             Entry::Human("split the parser".to_owned()),
@@ -2835,6 +2856,8 @@ mod tests {
             Entry::Reply("reading".to_owned()),
             Entry::Human("and the lexer".to_owned()),
             commits.clone(),
+            checks.clone(),
+            event.clone(),
         ];
         for (number, entry) in entries.iter().enumerate() {
             store.keep_entry(chat, number, entry).unwrap();
@@ -2857,7 +2880,9 @@ mod tests {
             [
                 Entry::Human("split the parser".to_owned()),
                 revised,
-                commits
+                commits,
+                checks,
+                event
             ]
         );
         let plan: String = store
@@ -2865,7 +2890,8 @@ mod tests {
             .query_row(
                 r#"EXPLAIN QUERY PLAN SELECT number FROM entries INDEXED BY milestones
                  WHERE chat = 1 AND (entry LIKE '{"human":%' OR entry LIKE '{"plan_revised":%'
-                 OR entry LIKE '{"question":%' OR entry LIKE '{"commits":%')"#,
+                 OR entry LIKE '{"question":%' OR entry LIKE '{"commits":%'
+                 OR entry LIKE '{"checks":%' OR entry LIKE '{"event":%')"#,
                 [],
                 |row| row.get(3),
             )
@@ -3324,6 +3350,50 @@ mod tests {
             store.progress(0).unwrap().done,
             [(plans[0].chat, "Read the code".to_owned(), 20)]
         );
+    }
+
+    #[test]
+    fn the_checks_kept_before_tell_the_story_through_the_upgrade() {
+        use crate::entry::{Check, CheckState};
+        let directory = scratch();
+        let path = directory.path().join("chats.sqlite");
+        database_of_version(&path, 24);
+        let checks = Entry::Checks(vec![Check {
+            name: "goal".to_owned(),
+            state: CheckState::Failed,
+            said: Some("1 test failed".to_owned()),
+        }]);
+        let entries = [
+            Entry::Human("fix it".to_owned()),
+            Entry::Reply("Done.".to_owned()),
+            checks.clone(),
+        ];
+        {
+            let connection = Connection::open(&path).unwrap();
+            for (number, entry) in entries.iter().enumerate() {
+                connection
+                    .execute(
+                        "INSERT INTO entries (chat, number, at, entry) VALUES (1, ?1, ?2, ?3)",
+                        params![
+                            i64::try_from(number).unwrap(),
+                            now(),
+                            serde_json::to_string(entry).unwrap()
+                        ],
+                    )
+                    .unwrap();
+            }
+        }
+
+        let store = Store::open(&path).unwrap();
+
+        let chat = store.chats().unwrap()[0].id;
+        let told: Vec<Entry> = store
+            .milestones(chat)
+            .unwrap()
+            .into_iter()
+            .map(|(_, entry)| entry)
+            .collect();
+        assert_eq!(told, [Entry::Human("fix it".to_owned()), checks]);
     }
 
     #[test]
