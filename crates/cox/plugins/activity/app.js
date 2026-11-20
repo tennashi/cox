@@ -17,7 +17,9 @@
 // `cox://chat/<key>`; a click elsewhere on the line opens it, and its
 // story is read, from `cox://api/activity/timeline/<chat>`, for it alone:
 // when it started, what it did when, and when and how it ended, then its
-// steps, each of which opens its thread with a click. A thread tells
+// steps, each of which opens its thread with a click. A check that failed
+// as a turn ended, the chat's goal or a trigger, opens what it printed,
+// at the end, with a click. A thread tells
 // what the human wrote on the step and what the agent replied, with a
 // line to write another, which goes to the chat as the human's next
 // line, on the step, as one typed in the chat goes: into the turn the
@@ -50,6 +52,10 @@ const stories = new Map();
 /// The step whose thread shows, by its chat, as coxd keeps it, and its
 /// id, or null.
 let threaded = null;
+
+/// The lines of the stories that show what they printed, as a check that
+/// failed, by their key (see `printedKey`).
+const unfolded = new Set();
 
 /// How deep a chat is, under the chat at the top of its, whose subagents
 /// are folded away at first.
@@ -257,6 +263,7 @@ const MARKS = {
   pull_merged: "#",
   pull_closed: "#",
   ci: "◇",
+  check: "◇",
   turn_end: "·",
   running: "◌",
 };
@@ -272,6 +279,26 @@ const TURN_ENDS = {
   closed: "The agent closed",
   other: "Ended its turn",
 };
+
+/// How a check that ran as a turn ended went, as a line says it.
+const CHECKED = { passed: "passed", failed: "failed", broken: "could not run", running: "runs" };
+
+/// What tells the line of `event`, of the story of `chat`, from the other
+/// lines, for it to show what it printed as the story is read again.
+const printedKey = (chat, event) => `${chat.chat}/${event.at}/${event.kind}/${event.text}`;
+
+/// What `event` of `chat`'s story printed, a click away, under what it
+/// says: as a check that failed, or could not run, says why.
+function printed(event, chat) {
+  if (event.said == null) return "";
+  const key = printedKey(chat, event);
+  const open = unfolded.has(key);
+  const what = event.state === "broken" ? "why" : "what it printed";
+  return (
+    ` <span class="opener" data-printed="${esc(key)}" title="${open ? "hides" : "shows"} ${what}">${open ? "▾" : "▸"} ${what}</span>` +
+    (open ? `<pre class="printed">${esc(event.said)}</pre>` : "")
+  );
+}
 
 /// What `event` of a chat's story says, as HTML, with the chats its
 /// subagents are, of `chat`, to link to.
@@ -309,6 +336,8 @@ function says(event, chat) {
       return `<span class="number">#${event.number}</span> closed`;
     case "ci":
       return `CI ${esc(event.text)} on <span class="number">#${event.number}</span>`;
+    case "check":
+      return `Check <b>${esc(event.text)}</b> ${esc(CHECKED[event.state] ?? event.state)}${event.on ? ` on ${esc(event.on)}` : ""}${printed(event, chat)}`;
     case "turn_end":
       return esc(TURN_ENDS[event.text] ?? "Ended its turn");
     default:
@@ -331,8 +360,11 @@ function revised(event) {
   return `<span class="revised">${lines.join("")}<span class="lines">${esc(far)}</span></span>`;
 }
 
-/// Whether `event` tells of something that failed: CI, or a turn.
-const failed = (event) => (event.kind === "ci" || event.kind === "turn_end") && event.text === "failed";
+/// Whether `event` tells of something that failed: CI, a turn, or a
+/// check that failed or could not run.
+const failed = (event) =>
+  ((event.kind === "ci" || event.kind === "turn_end") && event.text === "failed") ||
+  (event.kind === "check" && (event.state === "failed" || event.state === "broken"));
 
 /// A line of the day `time` is of, before the first line of the story
 /// that is of another day than the line before it, as `days` follows it,
@@ -578,6 +610,13 @@ app.addEventListener("click", (event) => {
     threaded = threaded && threaded.chat === asked.chat && threaded.step === asked.step ? null : asked;
     draw();
     load();
+    return;
+  }
+  const opener = event.target.closest("[data-printed]");
+  if (opener) {
+    const key = opener.dataset.printed;
+    if (!unfolded.delete(key)) unfolded.add(key);
+    draw();
     return;
   }
   const fold = event.target.closest("[data-fold]");

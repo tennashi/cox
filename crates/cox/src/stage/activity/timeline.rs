@@ -9,9 +9,10 @@
 //! it went moved, each question asked and what was chosen,
 //! each line on a step and the reply, each subagent opened and done, the
 //! commits, the pull requests opened, merged and closed, and their CI
-//! ended, and each turn's end.
+//! ended, each turn's end, and how what ran after it went, the chat's
+//! goal and its triggers, with the end of what one that failed printed.
 
-use cox_core::entry::{Entry, QuestionAnswer, Revision};
+use cox_core::entry::{self, Check, Entry, QuestionAnswer, Revision};
 use cox_core::store::{ChatId, KeptAnswer, KeptStep, Resolved, ResolvedBy, Said, Store, TurnEnd};
 use coxd::daemon::wire::PullRow;
 use coxd::github::CheckState;
@@ -191,6 +192,8 @@ pub fn story(kept: &Kept, told: &Told, zone: &TimeZone, now: i64) -> Value {
     for turn in &kept.turns {
         events.push(Event::new(turn.at, "turn_end", turn.how.word().to_owned()));
     }
+    // After the turn's end they ran after, though kept as soon.
+    events.extend(of_checks(kept));
     events.sort_by_key(|event| event.at);
     let ended = ended(kept, shown, &events);
     json!({
@@ -242,6 +245,48 @@ fn of_entries(kept: &Kept, zone: &TimeZone) -> Vec<Event> {
         );
     }
     events
+}
+
+/// How what ran as each turn of `kept` ended went, or as something else
+/// happened in it, as its goal being met: each of the chat's goal and its
+/// triggers that ran, or runs, with how it went, and, for one that failed
+/// or could not run, the end of what it printed, or why, and the event
+/// it ran on, if it ran on one. One whose turn did not come, as one after
+/// one that failed, tells nothing.
+fn of_checks(kept: &Kept) -> Vec<Event> {
+    let mut events = Vec::new();
+    for (at, entry) in &kept.milestones {
+        let on = match entry {
+            Entry::Event { on, .. } => Some(on.as_str()),
+            _ => None,
+        };
+        for check in entry.checks().unwrap_or_default() {
+            events.extend(of_check(*at, check, on));
+        }
+    }
+    events
+}
+
+/// What `check`, which ran `at` then, on the event `on`, if it ran on
+/// one, tells, once its turn came.
+fn of_check(at: i64, check: &Check, on: Option<&str>) -> Option<Event> {
+    let state = match check.state {
+        entry::CheckState::Waiting => return None,
+        entry::CheckState::Running => "running",
+        entry::CheckState::Passed => "passed",
+        entry::CheckState::Failed => "failed",
+        entry::CheckState::Broken => "broken",
+    };
+    let said = matches!(
+        check.state,
+        entry::CheckState::Failed | entry::CheckState::Broken
+    )
+    .then_some(check.said.as_deref())
+    .flatten();
+    Some(
+        Event::new(at, "check", check.name.clone())
+            .with(json!({ "state": state, "said": said, "on": on })),
+    )
 }
 
 /// What the receipt of how the plan changed, written `at` then, tells:
@@ -682,6 +727,92 @@ mod tests {
             )
         );
         assert_eq!(event["dropped"], true);
+    }
+
+    #[test]
+    fn tells_how_what_ran_as_each_turn_ended_went_after_the_turn() {
+        use cox_core::entry::CheckState as Ran;
+        let chat = kept(7);
+        let check = |name: &str, state, said: Option<&str>| entry::Check {
+            name: name.to_owned(),
+            state,
+            said: said.map(str::to_owned),
+        };
+        let kept = Kept {
+            chat,
+            name: String::new(),
+            opened: at(10, 0),
+            resolved: None,
+            threads: Vec::new(),
+            subagents: Vec::new(),
+            steps: Vec::new(),
+            // Kept as the turn ended, in the same millisecond.
+            milestones: vec![
+                (
+                    at(10, 5),
+                    Entry::Checks(vec![
+                        check("goal", Ran::Failed, Some("test a ... FAILED")),
+                        check("lint", Ran::Waiting, None),
+                    ]),
+                ),
+                (
+                    at(10, 9),
+                    Entry::Checks(vec![
+                        check("goal", Ran::Passed, Some("test result: ok")),
+                        check("lint", Ran::Running, None),
+                    ]),
+                ),
+                (
+                    at(10, 10),
+                    Entry::Event {
+                        on: "goal.met".to_owned(),
+                        checks: vec![check("docs", Ran::Broken, Some("no agent"))],
+                    },
+                ),
+            ],
+            turns: vec![
+                TurnEnd {
+                    at: at(10, 5),
+                    how: Ended::Done,
+                },
+                TurnEnd {
+                    at: at(10, 9),
+                    how: Ended::Done,
+                },
+            ],
+        };
+
+        let story = story(&kept, &Told::default(), &TimeZone::UTC, at(12, 0));
+
+        let expected: Vec<(String, String, String)> = [
+            ("10:05", "turn_end", "done"),
+            ("10:05", "check", "goal"),
+            ("10:09", "turn_end", "done"),
+            ("10:09", "check", "goal"),
+            ("10:09", "check", "lint"),
+            ("10:10", "check", "docs"),
+        ]
+        .iter()
+        .map(|(when, kind, text)| ((*when).to_owned(), (*kind).to_owned(), (*text).to_owned()))
+        .collect();
+        assert_eq!(told(&story), expected);
+        let checks: Vec<(&Value, &Value, &Value)> = story["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|event| event["kind"] == "check")
+            .map(|event| (&event["state"], &event["said"], &event["on"]))
+            .collect();
+        assert_eq!(
+            checks,
+            [
+                // What one that failed printed, at the end, opens under it.
+                (&json!("failed"), &json!("test a ... FAILED"), &Value::Null),
+                (&json!("passed"), &Value::Null, &Value::Null),
+                (&json!("running"), &Value::Null, &Value::Null),
+                (&json!("broken"), &json!("no agent"), &json!("goal.met")),
+            ]
+        );
     }
 
     #[test]
