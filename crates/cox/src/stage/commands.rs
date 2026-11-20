@@ -1,23 +1,20 @@
-//! What the agents of a folder's chats run, as the stage's Commands page
-//! shows them, at `cox://api/commands` (see [`crate::stage::plugins`]):
-//! for each chat, the commands of its last steps, each step under what the
-//! agent said before it ran them, and each command with how it stands, and
-//! how long it ran, as the window saw it; a command that runs long, as a
-//! test or a build, with what it printed, once the agent tells, as it does
-//! when the command ends, so the human sees what the agent waits on.
+//! What the agents of the chats run: what each chat's agent does now,
+//! as the Activity page tells it on the chat's line (see [`now`]), and a
+//! command an agent ran as a page shows it, short (see [`called`]), or
+//! laid out to read (see [`laid_out`]), with the last lines of what it
+//! printed (see [`printed`]).
 //!
 //! The window tells this module of a chat's conversation as it changes
-//! (see [`tell`]), since the stage's pages are served apart from it; the
-//! Activity page reads from it what each chat at work does now, and what
-//! each chat that asks the human asks (see [`now`]).
+//! (see [`tell`]), since the stage's pages are served apart from it: what
+//! the agent said before the commands it ran last, the one of them that
+//! runs yet, and what it asks the human.
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
-use std::time::{Duration, Instant};
 
-use cox_core::entry::{Content, Entry, ToolCallResult};
-use serde_json::{Value, json};
+use cox_core::entry::{Content, Entry};
+use serde_json::Value;
 
 mod layout;
 
@@ -30,110 +27,107 @@ pub fn called(line: &str, about: Option<&str>) -> String {
     about.map_or_else(|| layout::gist(line), str::to_owned)
 }
 
-/// How long a command runs before the page shows it big, with what it
-/// printed.
-const LONG: Duration = Duration::from_secs(5);
-/// How many steps of a chat the page is told of, the last.
-const STEPS: usize = 6;
-/// How many lines of what a command printed the page is told of, the
-/// last.
+/// The row of the command `line` that says most of what it does, on one
+/// line (see [`layout::gist`]).
+#[must_use]
+pub fn gist(line: &str) -> String {
+    layout::gist(line)
+}
+
+/// The command `line`, run in `folder`, laid out to read (see
+/// [`layout::told`]).
+#[must_use]
+pub fn laid_out(line: &str, folder: &Path) -> Value {
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    layout::told(line, folder, home.as_deref())
+}
+
+/// The last lines of what a command that shows `content` printed, as a
+/// page tells it.
+#[must_use]
+pub fn printed(content: &[Content]) -> String {
+    last_lines(&text_of(content))
+}
+
+/// How many lines of what a command printed a page is told of, the last.
 const LINES: usize = 14;
-/// How many characters of what the agent said a step is headed by.
+/// How many characters of what the agent said a line tells.
 const SAID: usize = 160;
 
-/// A chat, as the window tells of it.
-#[derive(Clone, Debug)]
+/// What the agent of a chat does now, as the window tells of its
+/// conversation.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Chat {
-    /// The number the window goes by for it this run, which a click on
-    /// it, as `cox://chat/<key>`, shows.
+    /// The number the window goes by for it this run.
     pub key: u64,
-    pub name: String,
-    /// Where it works.
-    pub cwd: PathBuf,
-    /// The folder of its project, which a sketch's differs from.
-    pub project: PathBuf,
-    /// Whether its agent takes a turn.
-    pub working: bool,
-    /// The steps of its conversation that ran commands (see [`steps`]).
-    pub steps: Vec<Step>,
+    /// The first line of what the agent said before the commands it ran
+    /// last one after another, with nothing said between, if it said
+    /// anything since the turn started.
+    pub said: Option<String>,
+    /// The last of those commands that runs yet, if one does, as the
+    /// agent gave it, with what it said it is for, if it said.
+    pub running: Option<(String, Option<String>)>,
     /// What its agent asks the human, while it asks a question (see
     /// [`asked`]).
     pub asks: Option<String>,
 }
 
-/// Commands the agent ran one after another, with nothing said between.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Step {
-    /// The first line of what the agent said before it ran them, if it
-    /// said anything since the turn started.
-    pub said: Option<String>,
-    pub commands: Vec<Command>,
-}
-
-/// A command the agent ran.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Command {
-    /// The id of its tool call.
-    pub id: String,
-    /// The command, as the agent gave it.
-    pub line: String,
-    /// What the agent said the command is for, if it said.
-    pub about: Option<String>,
-    /// What the call shows: what the agent said the command is for while
-    /// it runs, and what it printed once it ended.
-    pub shows: String,
-    /// How it ended, or `None` while it runs.
-    pub result: Option<ToolCallResult>,
-}
-
-/// The steps of `entries` that ran commands, the last [`STEPS`].
-#[must_use]
-pub fn steps(entries: &[Entry]) -> Vec<Step> {
-    let mut steps: Vec<Step> = Vec::new();
-    let mut said: Option<String> = None;
-    let mut fresh = true;
-    for entry in entries {
-        match entry {
-            Entry::Human(_) | Entry::Cox(_) => {
-                said = None;
-                fresh = true;
-            }
-            Entry::Reply(text) => {
-                if let Some(line) = first_line(text) {
-                    said = Some(line);
+impl Chat {
+    /// The chat the window goes by as `key`, whose conversation is
+    /// `entries`, as it does now.
+    #[must_use]
+    pub fn of(key: u64, entries: &[Entry]) -> Self {
+        let mut said: Option<String> = None;
+        // Whether the next command starts another run of them.
+        let mut fresh = true;
+        let mut chat = Self {
+            key,
+            asks: asked(entries),
+            ..Self::default()
+        };
+        for entry in entries {
+            match entry {
+                Entry::Human(_) | Entry::Cox(_) => {
+                    said = None;
                     fresh = true;
                 }
-            }
-            Entry::ToolCall {
-                id,
-                title,
-                command: true,
-                about,
-                content,
-                result,
-            } => {
-                if fresh || steps.is_empty() {
-                    steps.push(Step {
-                        said: said.clone(),
-                        commands: Vec::new(),
-                    });
-                    fresh = false;
+                Entry::Reply(text) => {
+                    if let Some(line) = first_line(text) {
+                        said = Some(line);
+                        fresh = true;
+                    }
                 }
-                if let Some(step) = steps.last_mut() {
-                    step.commands.push(Command {
-                        id: id.clone(),
-                        line: title.clone(),
-                        about: about.clone(),
-                        shows: text_of(content),
-                        result: *result,
-                    });
+                Entry::ToolCall {
+                    title,
+                    command: true,
+                    about,
+                    result,
+                    ..
+                } => {
+                    if std::mem::take(&mut fresh) {
+                        chat.said.clone_from(&said);
+                        chat.running = None;
+                    }
+                    if result.is_none() {
+                        chat.running = Some((title.clone(), about.clone()));
+                    }
                 }
+                _ => {}
             }
-            _ => {}
+        }
+        chat
+    }
+
+    fn now(&self) -> Now {
+        Now {
+            said: self.said.clone(),
+            running: self.running.as_ref().map(|(line, about)| {
+                let called = called(line, about.as_deref());
+                (called, line.clone())
+            }),
+            asks: self.asks.clone(),
         }
     }
-    let skip = steps.len().saturating_sub(STEPS);
-    steps.split_off(skip)
 }
 
 /// What the last question of `entries` asks, while it is not answered:
@@ -179,7 +173,7 @@ pub fn asked(entries: &[Entry]) -> Option<String> {
 
 /// The first line of `text` that says something, cut to [`SAID`]
 /// characters.
-fn first_line(text: &str) -> Option<String> {
+pub fn first_line(text: &str) -> Option<String> {
     let line = text.lines().map(str::trim).find(|line| !line.is_empty())?;
     let mut cut: String = line.chars().take(SAID).collect();
     if cut.len() < line.len() {
@@ -200,82 +194,20 @@ fn text_of(content: &[Content]) -> String {
         .join("\n")
 }
 
-/// When the window saw a command start, and end, by its chat and its
-/// id, and the command as the page lays it out.
-#[derive(Clone, Debug)]
-struct Seen {
-    /// When the window first saw it run, if it saw it run.
-    started: Option<Instant>,
-    ended: Option<Instant>,
-    /// The command it was laid out from, and how it lays out (see
-    /// [`layout::told`]), once laid out, kept as the page reads it every
-    /// second.
-    shown: Option<(String, Value)>,
-}
-
-/// What the window told, by chat, and when it saw each command start
-/// and end.
-#[derive(Default)]
-struct Told {
-    chats: HashMap<u64, Chat>,
-    seen: HashMap<(u64, String), Seen>,
-}
-
-impl Told {
-    /// Keeps `chat` as it is now, `now`, in place of what was told of it.
-    fn tell(&mut self, chat: Chat, now: Instant) {
-        let key = chat.key;
-        self.seen.retain(|(chat_key, id), _| {
-            *chat_key != key
-                || chat
-                    .steps
-                    .iter()
-                    .any(|step| step.commands.iter().any(|command| command.id == *id))
-        });
-        let home = std::env::var_os("HOME").map(PathBuf::from);
-        for command in chat.steps.iter().flat_map(|step| &step.commands) {
-            let seen = self.seen.entry((key, command.id.clone())).or_insert(Seen {
-                started: command.result.is_none().then_some(now),
-                ended: None,
-                shown: None,
-            });
-            if command.result.is_some() && seen.ended.is_none() {
-                seen.ended = Some(now);
-            }
-            if seen
-                .shown
-                .as_ref()
-                .is_none_or(|(line, _)| *line != command.line)
-            {
-                let shown = layout::told(&command.line, &chat.cwd, home.as_deref());
-                seen.shown = Some((command.line.clone(), shown));
-            }
-        }
-        self.chats.insert(key, chat);
-    }
-
-    /// Forgets the chats the window no longer has, all but `keys`.
-    fn keep(&mut self, keys: &[u64]) {
-        self.chats.retain(|key, _| keys.contains(key));
-        self.seen.retain(|(key, _), _| keys.contains(key));
-    }
-}
-
-/// What the window told.
-static TOLD: Mutex<Option<Told>> = Mutex::new(None);
+/// What the window told, by chat.
+static TOLD: Mutex<BTreeMap<u64, Chat>> = Mutex::new(BTreeMap::new());
 
 /// Keeps `chat` as it is now, for the pages to read.
 pub fn tell(chat: Chat) {
     if let Ok(mut told) = TOLD.lock() {
-        told.get_or_insert_with(Told::default)
-            .tell(chat, Instant::now());
+        told.insert(chat.key, chat);
     }
 }
 
 /// Forgets the chats the window no longer has, all but `keys`.
 pub fn keep(keys: &[u64]) {
     if let Ok(mut told) = TOLD.lock() {
-        told.get_or_insert_with(Told::default).keep(keys);
+        told.retain(|key, _| keys.contains(key));
     }
 }
 
@@ -283,128 +215,20 @@ pub fn keep(keys: &[u64]) {
 /// last told of its conversation.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Now {
-    /// What the agent said before its last step of commands.
+    /// What the agent said before the commands it ran last.
     pub said: Option<String>,
-    /// What the last command of that step still running goes by, if one
-    /// is (see [`called`]), and the command, as the agent gave it.
+    /// What the last of those commands that runs yet goes by, if one
+    /// does (see [`called`]), and the command, as the agent gave it.
     pub running: Option<(String, String)>,
     /// What the agent asks the human (see [`asked`]).
     pub asks: Option<String>,
-}
-
-impl Chat {
-    fn now(&self) -> Now {
-        let last = self.steps.last();
-        Now {
-            said: last.and_then(|step| step.said.clone()),
-            running: last.and_then(|step| {
-                step.commands
-                    .iter()
-                    .rev()
-                    .find(|command| command.result.is_none())
-                    .map(|command| {
-                        let called = called(&command.line, command.about.as_deref());
-                        (called, command.line.clone())
-                    })
-            }),
-            asks: self.asks.clone(),
-        }
-    }
 }
 
 /// What the agent of the chat `key` does now, and what it asks, if the
 /// window told of its conversation.
 #[must_use]
 pub fn now(key: u64) -> Option<Now> {
-    let told = TOLD.lock().ok()?;
-    told.as_ref()?.chats.get(&key).map(Chat::now)
-}
-
-/// What the page at `cox://api/commands` reads, for the stage of the
-/// folder `root`: the folder, and the chats that work there, or whose
-/// project's folder it is, that ran commands, those whose agents take a
-/// turn first.
-#[must_use]
-pub fn told(root: &Path) -> Value {
-    let told = TOLD.lock();
-    let empty = Told::default();
-    let told = told
-        .as_ref()
-        .ok()
-        .and_then(|told| told.as_ref())
-        .unwrap_or(&empty);
-    told_of(told, root, Instant::now())
-}
-
-fn told_of(told: &Told, root: &Path, now: Instant) -> Value {
-    let mut chats: Vec<&Chat> = told
-        .chats
-        .values()
-        .filter(|chat| (chat.cwd == root || chat.project == root) && !chat.steps.is_empty())
-        .collect();
-    chats.sort_by_key(|chat| (!chat.working, std::cmp::Reverse(chat.key)));
-    let chats: Vec<Value> = chats
-        .into_iter()
-        .map(|chat| {
-            let steps: Vec<Value> = chat
-                .steps
-                .iter()
-                .map(|step| {
-                    let commands: Vec<Value> = step
-                        .commands
-                        .iter()
-                        .map(|command| {
-                            let seen = told.seen.get(&(chat.key, command.id.clone()));
-                            command_of(command, seen, now)
-                        })
-                        .collect();
-                    json!({
-                        "id": step.commands.first().map(|command| &command.id),
-                        "said": step.said,
-                        "commands": commands,
-                    })
-                })
-                .collect();
-            json!({
-                "key": chat.key,
-                "name": chat.name,
-                "working": chat.working,
-                "sketch": chat.cwd != root,
-                "steps": steps,
-            })
-        })
-        .collect();
-    json!({"folder": root.display().to_string(), "chats": chats})
-}
-
-/// How the page is told of `command`, which the window saw start and end
-/// as `seen` says, at `now`.
-fn command_of(command: &Command, seen: Option<&Seen>, now: Instant) -> Value {
-    let ran = seen.and_then(|seen| {
-        let started = seen.started?;
-        Some(seen.ended.unwrap_or(now).saturating_duration_since(started))
-    });
-    let state = match command.result {
-        None => "running",
-        Some(ToolCallResult::Completed) => "done",
-        Some(ToolCallResult::Failed) => "failed",
-        Some(ToolCallResult::Cancelled) => "cancelled",
-    };
-    let long = ran.is_some_and(|ran| ran >= LONG);
-    let printed = (command.result.is_some()
-        && (long || command.result == Some(ToolCallResult::Failed)))
-    .then(|| last_lines(&command.shows));
-    json!({
-        "id": command.id,
-        "line": command.line,
-        "about": command.about,
-        "shown": seen.and_then(|seen| seen.shown.as_ref()).map(|(_, shown)| shown),
-        "state": state,
-        "why": command.result.is_none().then(|| first_line(&command.shows)).flatten(),
-        "secs": ran.map(|ran| ran.as_secs()),
-        "long": long,
-        "printed": printed,
-    })
+    TOLD.lock().ok()?.get(&key).map(Chat::now)
 }
 
 /// The last [`LINES`] lines of `text`, out of the fence of Markdown
@@ -423,6 +247,7 @@ fn last_lines(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cox_core::entry::ToolCallResult;
 
     fn call(id: &str, line: &str, shows: &str, result: Option<ToolCallResult>) -> Entry {
         Entry::ToolCall {
@@ -436,7 +261,7 @@ mod tests {
     }
 
     #[test]
-    fn steps_part_where_the_agent_says_something() {
+    fn a_chat_does_the_last_command_it_runs_of_those_it_ran_last() {
         let entries = [
             Entry::Human("fix it".to_owned()),
             call("1", "grep -n x", "", Some(ToolCallResult::Completed)),
@@ -448,87 +273,70 @@ mod tests {
                 command: false,
                 about: None,
                 content: Vec::new(),
-                result: Some(ToolCallResult::Completed),
+                result: None,
             },
-            call("4", "cargo fmt", "", None),
+            Entry::Thought("hm".to_owned()),
+            call("4", "cargo fmt", "", Some(ToolCallResult::Completed)),
         ];
 
-        let steps = steps(&entries);
+        let chat = Chat::of(1, &entries);
 
-        assert_eq!(steps.len(), 2);
-        assert_eq!(steps[0].said, None);
-        assert_eq!(steps[0].commands[0].line, "grep -n x");
-        assert_eq!(steps[1].said.as_deref(), Some("Found it."));
-        let lines: Vec<&str> = steps[1].commands.iter().map(|c| c.line.as_str()).collect();
-        assert_eq!(lines, ["cargo test", "cargo fmt"]);
-    }
-
-    #[test]
-    fn a_command_that_ran_long_shows_what_it_printed() {
-        let root = PathBuf::from("/p");
-        let chat = |result: Option<ToolCallResult>| Chat {
-            key: 1,
-            name: "fix".to_owned(),
-            cwd: root.clone(),
-            project: root.clone(),
-            working: true,
-            asks: None,
-            steps: vec![Step {
-                said: None,
-                commands: vec![
-                    Command {
-                        id: "1".to_owned(),
-                        line: "cargo test".to_owned(),
-                        about: Some("Run the tests".to_owned()),
-                        shows: if result.is_some() {
-                            "ok\ntest result: ok"
-                        } else {
-                            "Runs the tests"
-                        }
-                        .to_owned(),
-                        result,
-                    },
-                    Command {
-                        id: "2".to_owned(),
-                        line: "ls".to_owned(),
-                        about: None,
-                        shows: "a\nb".to_owned(),
-                        result: Some(ToolCallResult::Completed),
-                    },
-                ],
-            }],
-        };
-        let start = Instant::now();
-        let mut told = Told::default();
-
-        told.tell(chat(None), start);
-        let running = told_of(&told, &root, start + Duration::from_secs(7));
-        told.tell(
-            chat(Some(ToolCallResult::Completed)),
-            start + Duration::from_secs(9),
+        assert_eq!(
+            chat.now(),
+            Now {
+                said: Some("Found it.".to_owned()),
+                // The agent said nothing of what it is for: it goes by
+                // its gist.
+                running: Some(("cargo test".to_owned(), "cargo test".to_owned())),
+                asks: None,
+            }
         );
-        let ended = told_of(&told, &root, start + Duration::from_secs(30));
-
-        let test = &running["chats"][0]["steps"][0]["commands"][0];
-        assert_eq!(test["state"], "running");
-        assert_eq!(test["why"], "Runs the tests");
-        assert_eq!(test["long"], true);
-        assert_eq!(test["secs"], 7);
-        let test = &ended["chats"][0]["steps"][0]["commands"][0];
-        assert_eq!(test["line"], "cargo test", "as the agent gave it, to copy");
-        assert_eq!(test["about"], "Run the tests");
-        assert_eq!(test["shown"][0]["code"][0][0], "cargo");
-        assert_eq!(test["state"], "done");
-        assert_eq!(test["secs"], 9);
-        assert_eq!(test["printed"], "ok\ntest result: ok");
-        let ls = &ended["chats"][0]["steps"][0]["commands"][1];
-        assert_eq!(ls["long"], false);
-        assert_eq!(ls["secs"], Value::Null);
-        assert_eq!(ls["printed"], Value::Null);
+        // Once the agent said something again, the commands before it are
+        // done with.
+        let mut more = entries.to_vec();
+        more.push(Entry::Reply("Now I lint.".to_owned()));
+        more.push(call(
+            "5",
+            "cargo clippy",
+            "",
+            Some(ToolCallResult::Completed),
+        ));
+        let chat = Chat::of(1, &more);
+        assert_eq!(chat.said.as_deref(), Some("Now I lint."));
+        assert_eq!(chat.running, None);
+        // A line of the human's starts the turn over.
+        more.push(Entry::Human("again".to_owned()));
+        more.push(call("6", "sleep 30 && echo done", "Waits", None));
+        let chat = Chat::of(1, &more);
+        assert_eq!(
+            chat.now(),
+            Now {
+                said: None,
+                running: Some(("sleep 30".to_owned(), "sleep 30 && echo done".to_owned())),
+                asks: None,
+            }
+        );
     }
 
     #[test]
-    fn a_chat_does_its_last_step_and_asks_its_last_question_unanswered() {
+    fn the_window_tells_how_a_chat_does_until_it_no_longer_has_it() {
+        // Keys of their own, apart from the other tests'.
+        let entries = [call("1", "make", "", None)];
+        tell(Chat::of(9001, &entries));
+        tell(Chat::of(9002, &entries));
+
+        keep(&[9002]);
+
+        assert_eq!(now(9001), None);
+        assert_eq!(
+            now(9002).and_then(|now| now.running),
+            Some(("make".to_owned(), "make".to_owned()))
+        );
+        keep(&[]);
+    }
+
+    #[test]
+    fn a_chat_asks_its_last_question_unanswered() {
         use cox_core::entry::{Question, QuestionAnswer};
 
         let question = |message: &str, text: Option<&str>, answer| Entry::Question {
@@ -541,34 +349,10 @@ mod tests {
             answer,
             answered_at: None,
         };
-        let entries = vec![
-            call("1", "ls", "", Some(ToolCallResult::Completed)),
-            Entry::Reply("Now I wait.\nThen I report.".to_owned()),
-            call("2", "sleep 30 && echo done", "Waits", None),
-            call("3", "date", "", Some(ToolCallResult::Completed)),
-        ];
-        let chat = Chat {
-            key: 1,
-            name: "wait".to_owned(),
-            cwd: PathBuf::from("/p"),
-            project: PathBuf::from("/p"),
-            working: true,
-            asks: asked(&entries),
-            steps: steps(&entries),
-        };
-
         assert_eq!(
-            chat.now(),
-            Now {
-                said: Some("Now I wait.".to_owned()),
-                // The agent said nothing of what it is for: it goes by
-                // its gist.
-                running: Some(("sleep 30".to_owned(), "sleep 30 && echo done".to_owned())),
-                asks: None,
-            }
-        );
-        assert_eq!(
-            asked(&[question("", Some("Which one?"), None)]).as_deref(),
+            Chat::of(1, &[question("", Some("Which one?"), None)])
+                .asks
+                .as_deref(),
             Some("Which one?")
         );
         assert_eq!(
@@ -610,27 +394,9 @@ mod tests {
     fn what_a_command_printed_comes_out_of_its_fence() {
         assert_eq!(last_lines("```console\n1\n2\n```"), "1\n2");
         assert_eq!(last_lines("1\n2\n"), "1\n2");
-    }
-
-    #[test]
-    fn a_chat_of_another_folder_is_not_told() {
-        let mut told = Told::default();
-        told.tell(
-            Chat {
-                key: 1,
-                name: "x".to_owned(),
-                cwd: PathBuf::from("/q"),
-                project: PathBuf::from("/q"),
-                working: false,
-                asks: None,
-                steps: steps(&[call("1", "ls", "", None)]),
-            },
-            Instant::now(),
-        );
-
         assert_eq!(
-            told_of(&told, Path::new("/p"), Instant::now())["chats"],
-            json!([])
+            printed(&[Content::Text("```console\nok\n```".to_owned())]),
+            "ok"
         );
     }
 }
