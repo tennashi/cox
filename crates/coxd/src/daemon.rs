@@ -1775,6 +1775,11 @@ impl Daemon {
                     self.set_about(index, &about);
                 }
             }
+            ToDaemon::CompareWith {
+                folder,
+                directory,
+                base,
+            } => self.compare_with(&folder, &directory, base.as_deref()),
             ToDaemon::ArchiveProject { project, archived } => {
                 if let Some(index) = self.index_of(project) {
                     self.put_away(index, archived);

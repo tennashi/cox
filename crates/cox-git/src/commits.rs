@@ -1,7 +1,10 @@
 //! The commits of a Git repository that the work in it made, newest first,
 //! as Git tells them: in a sketch, those since it started (see
 //! [`crate::changes::START`]); elsewhere, those of the branch since it left
-//! the one it came from, or else the last few.
+//! the one it came from, or else the last few. The branch it came from is
+//! the one the human chose to compare the repository's work with, which
+//! Cox keeps apart from the repository (see [`history_with`]), or else
+//! the remote's default branch, or its upstream.
 //!
 //! As a turn of a chat ends, Cox marks each commit its agent made in it with
 //! the turn, in a note of Git's of its own, [`NOTES`], which Git keeps
@@ -21,6 +24,9 @@ use crate::git;
 /// The notes Cox marks commits with the turn they were made in.
 pub const NOTES: &str = "refs/notes/cox";
 
+/// The most branches offered to compare with, the newest.
+const BASES: usize = 40;
+
 /// The most commits read at once.
 const MOST: usize = 200;
 
@@ -34,6 +40,10 @@ pub struct History {
     pub top: PathBuf,
     /// Where the commits read start, after.
     pub base: Base,
+    /// The branch the human chose to compare the work with, if they chose
+    /// one, which `base` is from unless Git cannot tell where the branch
+    /// left it.
+    pub chosen: Option<String>,
     /// The commits, newest first.
     pub commits: Vec<Commit>,
 }
@@ -138,20 +148,88 @@ impl Base {
 ///
 /// When `folder` is not in a Git repository, with what Git said.
 pub fn history(folder: &Path) -> Result<History, String> {
+    history_with(folder, None)
+}
+
+/// The commits of the repository `folder` is in, compared with the branch
+/// `chosen`, as the human chose it, or, with none, with the one Cox finds
+/// (see the module's doc).
+///
+/// # Errors
+///
+/// When `folder` is not in a Git repository, with what Git said.
+pub fn history_with(folder: &Path, chosen: Option<&str>) -> Result<History, String> {
     let top = PathBuf::from(git::raw(folder, &["rev-parse", "--show-toplevel"])?.trim());
-    let (base, after) = base(&top);
+    let (base, after) = base(&top, chosen);
     let commits = match (&base, after) {
         (_, Some(after)) => log(&top, &[&format!("{after}..HEAD")], MOST),
         (Base::Recent, None) => log(&top, &["HEAD"], RECENT),
         (_, None) => log(&top, &["HEAD"], MOST),
     };
     let commits = with_earlier(&top, commits);
-    Ok(History { top, base, commits })
+    Ok(History {
+        top,
+        base,
+        chosen: chosen.map(str::to_owned),
+        commits,
+    })
+}
+
+/// The branches the work of the repository `folder` is in can be compared
+/// with, as many as [`BASES`]: the remote's default branch first, then the
+/// remotes' others and its own, the newest first, but for the one checked
+/// out there.
+#[must_use]
+pub fn bases(folder: &Path) -> Vec<String> {
+    let checked_out = git::run(folder, &["symbolic-ref", "--quiet", "--short", "HEAD"]).ok();
+    let default = default_branch(folder);
+    let listed = git::run(
+        folder,
+        &[
+            "for-each-ref",
+            "--sort=-committerdate",
+            "--format=%(refname:short)%09%(symref)",
+            "refs/remotes",
+            "refs/heads",
+        ],
+    )
+    .unwrap_or_default();
+    let others = listed
+        .lines()
+        .filter_map(|line| {
+            let (name, symref) = line.split_once('\t').unwrap_or((line, ""));
+            // `origin/HEAD` names the default branch, which comes first.
+            (symref.is_empty() && !name.is_empty()).then(|| name.to_owned())
+        })
+        .filter(|name| Some(name) != checked_out.as_ref() && Some(name) != default.as_ref())
+        .collect::<Vec<_>>();
+    default.into_iter().chain(others).take(BASES).collect()
+}
+
+/// The remote's default branch, as `origin/main`, if Git knows it.
+fn default_branch(top: &Path) -> Option<String> {
+    git::raw(
+        top,
+        &["rev-parse", "--abbrev-ref", "refs/remotes/origin/HEAD"],
+    )
+    .ok()
+    .map(|name| name.trim().to_owned())
+    .filter(|name| !name.is_empty() && name != "refs/remotes/origin/HEAD")
+}
+
+/// Where the branch checked out at `top` left `other`, by its full name,
+/// if Git can tell.
+fn merge_base(top: &Path, other: &str) -> Option<String> {
+    git::raw(top, &["merge-base", "HEAD", other])
+        .ok()
+        .map(|at| at.trim().to_owned())
+        .filter(|at| !at.is_empty())
 }
 
 /// Where the commits of the worktree at `top` start, and the commit they
-/// start after, if they do not start at its first.
-fn base(top: &Path) -> (Base, Option<String>) {
+/// start after, if they do not start at its first: after where they left
+/// the branch `chosen`, if the human chose one.
+fn base(top: &Path, chosen: Option<&str>) -> (Base, Option<String>) {
     if let Some(start) = commit(top, changes::START) {
         let is_commit = commit(top, &format!("{start}^{{commit}}")).is_some();
         return if is_commit {
@@ -163,13 +241,19 @@ fn base(top: &Path) -> (Base, Option<String>) {
     let Some(head) = commit(top, "HEAD") else {
         return (Base::Recent, None);
     };
-    let default = git::raw(
-        top,
-        &["rev-parse", "--abbrev-ref", "refs/remotes/origin/HEAD"],
-    )
-    .ok()
-    .map(|name| name.trim().to_owned())
-    .filter(|name| !name.is_empty() && name != "refs/remotes/origin/HEAD");
+    // The branch the human chose, even where the work is at it.
+    if let Some(chosen) = chosen
+        && let Some(at) = merge_base(top, chosen)
+    {
+        return (
+            Base::Branched {
+                from: chosen.to_owned(),
+                at: short(&at),
+            },
+            Some(at),
+        );
+    }
+    let default = default_branch(top);
     let upstream = git::raw(
         top,
         &[
@@ -186,11 +270,7 @@ fn base(top: &Path) -> (Base, Option<String>) {
         .chain(["origin/main".to_owned(), "origin/master".to_owned()])
         .chain(upstream);
     for other in others {
-        let Some(at) = git::raw(top, &["merge-base", "HEAD", &other])
-            .ok()
-            .map(|at| at.trim().to_owned())
-            .filter(|at| !at.is_empty())
-        else {
+        let Some(at) = merge_base(top, &other) else {
             continue;
         };
         if at != head {
@@ -216,8 +296,20 @@ fn base(top: &Path) -> (Base, Option<String>) {
 /// When `folder` is not in a Git repository, or Git cannot tell what
 /// changed, with what Git said.
 pub fn everything(folder: &Path) -> Result<Option<Diff>, String> {
+    everything_with(folder, None)
+}
+
+/// Everything that changed in the repository `folder` is in since its
+/// commits start, compared with the branch `chosen`, as the human chose
+/// it, or, with none, with the one Cox finds (see [`everything`]).
+///
+/// # Errors
+///
+/// When `folder` is not in a Git repository, or Git cannot tell what
+/// changed, with what Git said.
+pub fn everything_with(folder: &Path, chosen: Option<&str>) -> Result<Option<Diff>, String> {
     let top = PathBuf::from(git::raw(folder, &["rev-parse", "--show-toplevel"])?.trim());
-    match base(&top) {
+    match base(&top, chosen) {
         (Base::Start(_) | Base::Nothing, _) => changes::read(folder).map(Some),
         (Base::Branched { from, at }, Some(after)) => {
             changes::read_from(top, Since::Branched { from, at }, &after).map(Some)
@@ -640,6 +732,54 @@ mod tests {
         let everything = everything(&folder).unwrap().unwrap();
         let paths: Vec<_> = everything.files.iter().map(|f| f.path.clone()).collect();
         assert_eq!(paths, [PathBuf::from("b.txt"), PathBuf::from("c.txt")]);
+    }
+
+    #[test]
+    fn the_branch_chosen_to_compare_with_is_where_the_commits_start() {
+        let origin = repository();
+        run(&origin, &["checkout", "--quiet", "-b", "release"]);
+        write_and_commit(&origin, "r.txt", "r\n", "Release");
+        run(&origin, &["checkout", "--quiet", "main"]);
+        let folder = Folder::new();
+        run(
+            &origin,
+            &["clone", "--quiet", ".", folder.to_str().unwrap()],
+        );
+        run(
+            &folder,
+            &["checkout", "--quiet", "-b", "work", "origin/release"],
+        );
+        write_and_commit(&folder, "w.txt", "w\n", "Work");
+
+        // Cox finds the remote's default branch, which it offers first.
+        let found = history(&folder).unwrap();
+        assert!(matches!(&found.base, Base::Branched { from, .. } if from == "origin/main"));
+        assert_eq!((found.commits.len(), found.chosen), (2, None));
+        let offered = bases(&folder);
+        assert_eq!(offered.first().map(String::as_str), Some("origin/main"));
+        assert!(
+            offered.contains(&"origin/release".to_owned()),
+            "{offered:?}"
+        );
+        assert!(offered.contains(&"main".to_owned()), "{offered:?}");
+        assert!(
+            !offered
+                .iter()
+                .any(|name| name == "work" || name.ends_with("HEAD"))
+        );
+
+        let chosen = history_with(&folder, Some("origin/release")).unwrap();
+        assert!(matches!(&chosen.base, Base::Branched { from, .. } if from == "origin/release"));
+        assert_eq!(chosen.commits.len(), 1);
+        assert_eq!(chosen.chosen.as_deref(), Some("origin/release"));
+        let everything = everything_with(&folder, Some("origin/release"))
+            .unwrap()
+            .unwrap();
+        let paths: Vec<_> = everything.files.iter().map(|f| f.path.clone()).collect();
+        assert_eq!(paths, [PathBuf::from("w.txt")]);
+        // A branch Git knows nothing of: Cox finds one, as with none.
+        let unknown = history_with(&folder, Some("origin/gone")).unwrap();
+        assert!(matches!(&unknown.base, Base::Branched { from, .. } if from == "origin/main"));
     }
 
     #[test]

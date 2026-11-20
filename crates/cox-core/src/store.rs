@@ -22,7 +22,7 @@ use crate::settings::Setting;
 use crate::tabs::KeptTabs;
 
 /// The version of the tables below, as `SQLite`'s `user_version` holds it.
-const VERSION: i64 = 26;
+const VERSION: i64 = 27;
 
 const TABLES: &str = "
 CREATE TABLE projects (
@@ -195,6 +195,15 @@ CREATE TABLE commands (
     result TEXT,
     PRIMARY KEY (chat, number)
 ) WITHOUT ROWID;
+-- The branch the human chose to compare each directory of a project with,
+-- in what changed, by the directory's name: '' for the project's folder,
+-- when it is a repository itself.
+CREATE TABLE bases (
+    project INTEGER NOT NULL REFERENCES projects (id),
+    directory TEXT NOT NULL,
+    base TEXT NOT NULL,
+    PRIMARY KEY (project, directory)
+) WITHOUT ROWID;
 ";
 
 /// What makes the tables of each earlier version into those of the next:
@@ -308,6 +317,12 @@ const UPGRADES: &[&str] = &[
                      OVER (PARTITION BY chat ORDER BY number) AS step
              FROM entries)
          WHERE command;"#,
+    "CREATE TABLE bases (
+         project INTEGER NOT NULL REFERENCES projects (id),
+         directory TEXT NOT NULL,
+         base TEXT NOT NULL,
+         PRIMARY KEY (project, directory)
+     ) WITHOUT ROWID;",
 ];
 
 /// What keeps an entry of a chat, in place of what was kept there.
@@ -1108,6 +1123,52 @@ impl Store {
         Ok(())
     }
 
+    /// The branch the human chose to compare each directory of the project
+    /// in `folder` with, by the directory's name, '' for the project's
+    /// folder; none for a folder that is no project's.
+    ///
+    /// # Errors
+    ///
+    /// When the database cannot be read.
+    pub fn bases(&self, folder: &Path) -> anyhow::Result<Vec<(String, String)>> {
+        let mut statement = self.connection.prepare(
+            "SELECT directory, base FROM bases
+             WHERE project = (SELECT id FROM projects WHERE folder = ?1)
+             ORDER BY directory",
+        )?;
+        let bases = statement.query_map([folder.to_string_lossy()], |row| {
+            Ok((row.get(0)?, row.get(1)?))
+        })?;
+        Ok(bases.collect::<Result<_, _>>()?)
+    }
+
+    /// Keeps the branch `base` as the one the human chose to compare the
+    /// directory `directory` of `project` with, '' for the project's
+    /// folder, or, with none, forgets the one they chose.
+    ///
+    /// # Errors
+    ///
+    /// When the database cannot be written.
+    pub fn keep_base(
+        &self,
+        project: ProjectId,
+        directory: &str,
+        base: Option<&str>,
+    ) -> anyhow::Result<()> {
+        match base {
+            Some(base) => self.connection.execute(
+                "INSERT INTO bases (project, directory, base) VALUES (?1, ?2, ?3)
+                 ON CONFLICT (project, directory) DO UPDATE SET base = excluded.base",
+                params![project.0, directory, base],
+            )?,
+            None => self.connection.execute(
+                "DELETE FROM bases WHERE project = ?1 AND directory = ?2",
+                params![project.0, directory],
+            )?,
+        };
+        Ok(())
+    }
+
     /// Forgets `project`, its chats and what they showed, and the tabs
     /// of the stage of its folder, as when the human deletes it.
     ///
@@ -1156,6 +1217,7 @@ impl Store {
             [project.0],
         )?;
         transaction.execute("DELETE FROM shown WHERE project = ?1", [project.0])?;
+        transaction.execute("DELETE FROM bases WHERE project = ?1", [project.0])?;
         transaction.execute("DELETE FROM projects WHERE id = ?1", [project.0])?;
         transaction.commit()?;
         Ok(())
@@ -2604,6 +2666,41 @@ mod tests {
         assert_eq!(about(&store).as_deref(), Some("A shop that sells tea."));
         store.keep_about(app, None).unwrap();
         assert_eq!(about(&store), None);
+    }
+
+    #[test]
+    fn keeps_the_branch_each_directory_of_a_project_is_compared_with() {
+        let store = Store::in_memory().unwrap();
+        let app = store.project(Path::new("/work/app"), "app").unwrap();
+        let shop = store.project(Path::new("/work/shop"), "shop").unwrap();
+        let bases = |store: &Store, folder: &str| store.bases(Path::new(folder)).unwrap();
+        store.keep_base(app, "web", Some("origin/main")).unwrap();
+        store.keep_base(app, "web", Some("origin/release")).unwrap();
+        store.keep_base(app, "", Some("develop")).unwrap();
+        store.keep_base(shop, "web", Some("main")).unwrap();
+
+        assert_eq!(
+            bases(&store, "/work/app"),
+            [
+                (String::new(), "develop".to_owned()),
+                ("web".to_owned(), "origin/release".to_owned()),
+            ]
+        );
+        assert_eq!(bases(&store, "/elsewhere"), []);
+        // They move with the project's folder.
+        store
+            .move_project(app, Path::new("/work/tea"), "tea")
+            .unwrap();
+        assert_eq!(bases(&store, "/work/tea").len(), 2);
+        store.keep_base(app, "", None).unwrap();
+        assert_eq!(
+            bases(&store, "/work/tea"),
+            [("web".to_owned(), "origin/release".to_owned())]
+        );
+        // And go with it.
+        store.delete_project(app).unwrap();
+        assert_eq!(bases(&store, "/work/tea"), []);
+        assert_eq!(bases(&store, "/work/shop").len(), 1);
     }
 
     #[test]
