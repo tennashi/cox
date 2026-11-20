@@ -47,8 +47,8 @@
 //!
 //! - `cox://api/activity`: what goes on in the folder, the human's
 //!   inbox: what is asked of them, what is at work and what each chat
-//!   there does now, what they decided when agents asked, and what
-//!   happened without them (see [`crate::stage::activity`]);
+//!   there does now, and how many steps got done lately (see
+//!   [`crate::stage::activity`]);
 //!   `cox://api/activity/dismiss/<plans>` hides the plans the JSON of
 //!   `<plans>` names until their chats' agents send others, and answers
 //!   what goes on then. Only a plugin's own `fetch` has them hidden.
@@ -414,12 +414,7 @@ impl Plugins {
                 _ => return None,
             }
         }
-        let mut told = activity::told(
-            &self.root,
-            &coxd::settings::wiki(),
-            &coxd::settings::raw(),
-            &self.triggers(),
-        );
+        let mut told = activity::told(&self.root);
         if let Some(open) = open {
             told["thread"] = activity::thread(&open);
         }

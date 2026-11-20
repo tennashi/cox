@@ -25,14 +25,14 @@ use std::path::{Path, PathBuf};
 
 use cox_core::entry::{self, Check, Entry, QuestionAnswer, Revision, ToolCallResult};
 use cox_core::store::{
-    ChatId, KeptAnswer, KeptCommand, KeptRun, KeptStep, Resolved, ResolvedBy, Said, Store, TurnEnd,
+    ChatId, KeptCommand, KeptRun, KeptStep, Resolved, ResolvedBy, Said, Store, TurnEnd,
 };
 use coxd::daemon::wire::PullRow;
 use coxd::github::CheckState;
 use jiff::tz::TimeZone;
 use serde_json::{Value, json};
 
-use super::{Decided, Told};
+use super::Told;
 use crate::stage::commands;
 
 /// How long a command runs, in milliseconds, before the story tells it.
@@ -261,7 +261,7 @@ impl Event {
 /// goes on.
 pub fn story(kept: &Kept, told: &Told, zone: &TimeZone, now: i64) -> Value {
     let shown = told.chats.iter().find(|chat| chat.kept == Some(kept.chat));
-    let mut events = of_entries(kept, zone);
+    let mut events = of_entries(kept);
     for (step, said) in &kept.threads {
         for said in said {
             events.push(
@@ -308,17 +308,16 @@ pub fn story(kept: &Kept, told: &Told, zone: &TimeZone, now: i64) -> Value {
     })
 }
 
-/// What the milestone entries and the steps of `kept` tell, the times of
-/// the answers as they read in `zone`: the first line, each step started
-/// and done, each change of the plan, each question asked and answered,
-/// and the commits.
-fn of_entries(kept: &Kept, zone: &TimeZone) -> Vec<Event> {
+/// What the milestone entries and the steps of `kept` tell: the first
+/// line, each step started and done, each change of the plan, each
+/// question asked and answered, and the commits.
+fn of_entries(kept: &Kept) -> Vec<Event> {
     let mut events = Vec::new();
     for (at, entry) in &kept.milestones {
         match entry {
             Entry::Human(line) => events.push(Event::new(*at, "start", line.clone())),
             Entry::PlanRevised(revision) => events.push(of_revision(*at, revision)),
-            Entry::Question { .. } => events.extend(of_question(kept, *at, entry, zone)),
+            Entry::Question { .. } => events.extend(of_question(*at, entry)),
             Entry::Commits(commits) => {
                 events.extend(commits.iter().map(|commit| {
                     Event::new(*at, "commit", commit.subject.clone())
@@ -433,9 +432,9 @@ fn of_revision(at: i64, revision: &Revision) -> Event {
     }))
 }
 
-/// What `question`, asked in `kept` `at` then, tells: that it was asked,
-/// and what the human chose, or that they declined, once they answered.
-fn of_question(kept: &Kept, at: i64, question: &Entry, zone: &TimeZone) -> Vec<Event> {
+/// What `question`, asked `at` then, tells: that it was asked, and what
+/// the human chose, or that they declined, once they answered.
+fn of_question(at: i64, question: &Entry) -> Vec<Event> {
     let Entry::Question {
         message,
         questions,
@@ -458,15 +457,7 @@ fn of_question(kept: &Kept, at: i64, question: &Entry, zone: &TimeZone) -> Vec<E
     let answered = answered_at.unwrap_or(at);
     match answer {
         Some(QuestionAnswer::Given(_)) => {
-            let kept = KeptAnswer {
-                chat: kept.chat,
-                name: kept.name.clone(),
-                project: None,
-                folder: None,
-                at: answered,
-                entry: question.clone(),
-            };
-            events.extend(Decided::of(&kept, zone).into_iter().map(|decided| {
+            events.extend(Decided::of(question).into_iter().map(|decided| {
                 Event::new(answered, "answered", decided.choice).with(json!({
                     "question": decided.question,
                     "why": decided.why,
@@ -480,6 +471,80 @@ fn of_question(kept: &Kept, at: i64, question: &Entry, zone: &TimeZone) -> Vec<E
         None => {}
     }
     events
+}
+
+/// What the human decided, answering a question an agent asked: one of
+/// its questions, with what they chose.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Decided {
+    question: String,
+    /// The labels of the options the human chose, or their own words when
+    /// they chose none.
+    choice: String,
+    /// What the agent said choosing those options means, which is why
+    /// the human chose them.
+    why: Option<String>,
+    /// The human's own words beside the options they chose.
+    other: Option<String>,
+}
+
+impl Decided {
+    /// What was decided by `entry`, each of its questions the human
+    /// answered, if it is a question they answered.
+    fn of(entry: &Entry) -> Vec<Self> {
+        let Entry::Question {
+            message,
+            questions,
+            answer: Some(QuestionAnswer::Given(picked)),
+            ..
+        } = entry
+        else {
+            return Vec::new();
+        };
+        let message = message.trim();
+        questions
+            .iter()
+            .zip(picked)
+            .filter_map(|(question, picked)| {
+                let chosen: Vec<_> = picked
+                    .chosen
+                    .iter()
+                    .filter_map(|&index| question.options.get(index))
+                    .collect();
+                let mut other = picked
+                    .other
+                    .clone()
+                    .filter(|other| !other.trim().is_empty());
+                let choice = if chosen.is_empty() {
+                    other.take()?
+                } else {
+                    chosen
+                        .iter()
+                        .map(|option| option.label.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                };
+                let why: Vec<&str> = chosen
+                    .iter()
+                    .filter_map(|option| option.description.as_deref())
+                    .collect();
+                let asked = question
+                    .text
+                    .clone()
+                    .or_else(|| {
+                        (questions.len() == 1 && !message.is_empty()).then(|| message.to_owned())
+                    })
+                    .or_else(|| question.header.clone())
+                    .unwrap_or_else(|| message.to_owned());
+                Some(Self {
+                    question: asked,
+                    choice,
+                    why: (!why.is_empty()).then(|| why.join("; ")),
+                    other,
+                })
+            })
+            .collect()
+    }
 }
 
 /// What the pull request of `row` tells, as coxd last read it: when it
@@ -795,6 +860,72 @@ mod tests {
         // Its last turn ended as turns do, and nothing works now.
         assert_eq!(story["ended"]["how"], "done");
         assert_eq!(story["ended"]["when"], "14:29");
+    }
+
+    #[test]
+    fn a_question_answered_is_decided_with_why_and_a_declined_one_is_not() {
+        let option = |label: &str, description: Option<&str>| QuestionOption {
+            label: label.to_owned(),
+            description: description.map(str::to_owned),
+        };
+        let question = Question {
+            header: Some("Approach".to_owned()),
+            text: None,
+            options: vec![
+                option("Derive", Some("One source of truth")),
+                option("Record", Some("A table of its own")),
+            ],
+            multiple: false,
+            other: true,
+        };
+        let words = Question {
+            header: Some("Name".to_owned()),
+            text: Some("What is it called?".to_owned()),
+            options: Vec::new(),
+            multiple: false,
+            other: true,
+        };
+        let asked = |answer| Entry::Question {
+            message: "Which way do we go?".to_owned(),
+            questions: vec![question.clone(), words.clone()],
+            answer: Some(answer),
+            answered_at: None,
+        };
+        let given = QuestionAnswer::Given(vec![
+            Picked {
+                chosen: vec![0],
+                other: Some("but keep it cheap".to_owned()),
+            },
+            Picked {
+                chosen: Vec::new(),
+                other: Some("inbox".to_owned()),
+            },
+        ]);
+
+        let decided = Decided::of(&asked(given));
+
+        assert_eq!(
+            decided,
+            [
+                // Of several questions, one without words of its own is
+                // asked by its label, the message being for them all.
+                Decided {
+                    question: "Approach".to_owned(),
+                    choice: "Derive".to_owned(),
+                    why: Some("One source of truth".to_owned()),
+                    other: Some("but keep it cheap".to_owned()),
+                },
+                Decided {
+                    question: "What is it called?".to_owned(),
+                    choice: "inbox".to_owned(),
+                    why: None,
+                    other: None,
+                },
+            ]
+        );
+        assert_eq!(Decided::of(&asked(QuestionAnswer::Declined)), []);
+        let skipped = QuestionAnswer::Given(vec![Picked::default(), Picked::default()]);
+        assert_eq!(Decided::of(&asked(skipped)), []);
     }
 
     #[test]
