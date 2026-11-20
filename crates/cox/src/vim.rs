@@ -1025,10 +1025,20 @@ mod tests {
             assert_eq!(press(&mut vim, region, "ctrl-c"), [control_c], "{region:?}");
             assert_eq!(press(&mut vim, region, "cmd-v"), [Outcome::Pass]);
             assert_eq!(
+                press(&mut vim, region, "t"),
+                [Outcome::Do(Command::Window(Act::Menu), None)],
+                "the stage's menu, {region:?}"
+            );
+            assert_eq!(
                 press(&mut vim, region, "i"),
                 [Outcome::Do(Command::Insert(Place::Cursor), None)]
             );
             assert_eq!(vim.mode(), Mode::Insert);
+            assert_eq!(
+                press(&mut vim, region, "t"),
+                [Outcome::Pass],
+                "the program's, {region:?}"
+            );
         }
     }
 

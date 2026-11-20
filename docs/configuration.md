@@ -199,7 +199,8 @@ keyboard in its input. `o` opens a new chat in the project selected.
 | The tree | `l` or Enter, `h` | Opens what is selected, or closes its folder. A file opened goes on with the keyboard. |
 | Changes | `]c`, `[c`, Enter | Selects the next stretch of changed lines, across files, or the one before, with a count that many, and scrolls it to the top. Enter opens the file selected, or the file of the stretch selected at its first changed line. |
 | A page | `f`, `;t` | Draws hints over the page; typing a label clicks it, or with `;t` opens the link on a tab of its own. Esc takes the hints away. |
-| A page | `H`, `L`, `r`, `o`, `t` | Goes back, forward, loads again, takes the keyboard to the address, opens the stage's + menu. In that menu, as when the + opens it, words that are no address, file or path are searched for on a new tab with the [`search`](#settingsjson) engine, and `!command` runs the command in a terminal; the menu says what Enter does. |
+| Every tab but a playground | `t` | Opens the stage's + menu. In that menu, as when the + opens it, words that are no address, file or path are searched for on a new tab with the [`search`](#settingsjson) engine, and `!command` runs the command in a terminal; the menu says what Enter does. |
+| A page | `H`, `L`, `r`, `o` | Goes back, forward, loads again, takes the keyboard to the address. |
 | A page | `gi`, `yy`, `i` | Gives the keyboard to the first field, copies the address, goes to insert mode. Esc in a field goes back to normal mode. |
 | A terminal | `j`, `k`, Ctrl-D, Ctrl-U, `gg`, `G` | Scrolls back through what scrolled off, and to the end. |
 | A terminal | `V`, `y` | Makes what `/` found, or what the mouse selected, whole lines, and copies what is selected. |
