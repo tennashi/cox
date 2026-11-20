@@ -71,7 +71,8 @@ actions!(
         DeleteWordBackward,
         DeleteWordForward,
         DeleteToHome,
-        DeleteToEnd,
+        DeleteToLineStart,
+        DeleteToLineEnd,
         SelectAll,
         Cut,
         Copy,
@@ -110,17 +111,19 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("secondary-v", Paste, Some(KEY_CONTEXT)),
         // As in Vim's insert mode and a shell's line.
         KeyBinding::new("ctrl-w", DeleteWordBackward, Some(KEY_CONTEXT)),
-        KeyBinding::new("ctrl-u", DeleteToHome, Some(KEY_CONTEXT)),
+        KeyBinding::new("ctrl-u", DeleteToLineStart, Some(KEY_CONTEXT)),
         KeyBinding::new("secondary-z", Undo, Some(KEY_CONTEXT)),
         KeyBinding::new("secondary-shift-z", Redo, Some(KEY_CONTEXT)),
         KeyBinding::new("enter", Submit, Some(KEY_CONTEXT)),
         KeyBinding::new("shift-enter", Newline, Some(KEY_CONTEXT)),
     ]);
     if cfg!(target_os = "macos") {
-        // As text fields on macOS take them, Emacs's Control keys too.
-        // Command+Left and Right go to the ends of the row the cursor is
-        // on, but Control+A and E, as Cocoa's, to those of its line,
-        // between line breaks, however many rows it wraps into.
+        // As text fields on macOS take them, Emacs's Control keys too,
+        // as Cocoa's StandardKeyBinding.dict binds them. Command+Left and
+        // Right, and Command+Backspace, go to the ends of the row the
+        // cursor is on (Cocoa's "line"), but Control+A, E and K to those
+        // of its line between line breaks (Cocoa's "paragraph"), however
+        // many rows it wraps into.
         cx.bind_keys([
             KeyBinding::new("alt-left", WordLeft, Some(KEY_CONTEXT)),
             KeyBinding::new("alt-right", WordRight, Some(KEY_CONTEXT)),
@@ -141,7 +144,7 @@ pub fn bind_keys(cx: &mut App) {
             KeyBinding::new("ctrl-e", LineEnd, Some(KEY_CONTEXT)),
             KeyBinding::new("ctrl-shift-a", SelectToLineStart, Some(KEY_CONTEXT)),
             KeyBinding::new("ctrl-shift-e", SelectToLineEnd, Some(KEY_CONTEXT)),
-            KeyBinding::new("ctrl-k", DeleteToEnd, Some(KEY_CONTEXT)),
+            KeyBinding::new("ctrl-k", DeleteToLineEnd, Some(KEY_CONTEXT)),
         ]);
     } else {
         cx.bind_keys([
@@ -181,6 +184,12 @@ pub struct LineInput {
     /// candidate window and finding the text under the mouse.
     last_layout: Option<Layout>,
     last_bounds: Option<Bounds<Pixels>>,
+    /// Whether the cursor, at an offset where a line wraps, is at the start
+    /// of the row below rather than at the end of the row above, which is
+    /// the same offset of the text: as Command+Left, or a click at the
+    /// row's start, leaves it, and as Cocoa's text views keep it. An edit
+    /// that moves the cursor, or changes the text, puts it back above.
+    cursor_below: bool,
     /// How far the text is moved left and up, so that the cursor stays in
     /// view when the text does not fit.
     scroll: Point<Pixels>,
@@ -229,6 +238,7 @@ impl LineInput {
             shape: Shape::OneLine,
             last_layout: None,
             last_bounds: None,
+            cursor_below: false,
             scroll: Point::default(),
             placeholder: SharedString::default(),
             left: None,
@@ -363,9 +373,36 @@ impl LineInput {
 
     /// Changes the text, or the selection, and draws it again.
     fn edit(&mut self, cx: &mut Context<Self>, change: impl FnOnce(&mut Draft)) {
+        let was = (self.draft.cursor(), self.draft.text().len());
         change(&mut self.draft);
+        // The cursor goes back above once it, or the text, moved. Kept on
+        // where neither did, as by Command+Backspace at a row's start, it
+        // is drawn below only where the line still wraps at it.
+        if (self.draft.cursor(), self.draft.text().len()) != was {
+            self.cursor_below = false;
+        }
         crate::ui::composing::note(cx.entity_id(), self.draft.is_composing(), cx);
         cx.notify();
+    }
+
+    /// Puts the cursor at `spot`, or with `select`, selects up to it.
+    fn go(&mut self, spot: Spot, select: bool, cx: &mut Context<Self>) {
+        self.edit(cx, |draft| {
+            if select {
+                draft.select_to(spot.offset);
+            } else {
+                draft.move_to(spot.offset);
+            }
+        });
+        self.cursor_below = spot.below;
+    }
+
+    /// Where the cursor is, with the row it is on where a line wraps.
+    fn cursor_spot(&self) -> Spot {
+        Spot {
+            offset: self.draft.cursor(),
+            below: self.cursor_below,
+        }
     }
 
     fn submit(&mut self, _: &Submit, window: &mut Window, cx: &mut Context<Self>) {
@@ -403,23 +440,23 @@ impl LineInput {
     }
 
     fn up(&mut self, _: &Up, _window: &mut Window, cx: &mut Context<Self>) {
-        let offset = self.row_away(-1.);
-        self.edit(cx, |draft| draft.move_to(offset));
+        let spot = self.row_away(-1.);
+        self.go(spot, false, cx);
     }
 
     fn down(&mut self, _: &Down, _window: &mut Window, cx: &mut Context<Self>) {
-        let offset = self.row_away(1.);
-        self.edit(cx, |draft| draft.move_to(offset));
+        let spot = self.row_away(1.);
+        self.go(spot, false, cx);
     }
 
     fn home(&mut self, _: &Home, _window: &mut Window, cx: &mut Context<Self>) {
-        let offset = self.row_start();
-        self.edit(cx, |draft| draft.move_to(offset));
+        let spot = self.row_start();
+        self.go(spot, false, cx);
     }
 
     fn end(&mut self, _: &End, _window: &mut Window, cx: &mut Context<Self>) {
-        let offset = self.row_end();
-        self.edit(cx, |draft| draft.move_to(offset));
+        let spot = self.row_end();
+        self.go(spot, false, cx);
     }
 
     /// Control+A on macOS: to the start of the line, between line breaks.
@@ -459,23 +496,23 @@ impl LineInput {
     }
 
     fn select_up(&mut self, _: &SelectUp, _window: &mut Window, cx: &mut Context<Self>) {
-        let offset = self.row_away(-1.);
-        self.edit(cx, |draft| draft.select_to(offset));
+        let spot = self.row_away(-1.);
+        self.go(spot, true, cx);
     }
 
     fn select_down(&mut self, _: &SelectDown, _window: &mut Window, cx: &mut Context<Self>) {
-        let offset = self.row_away(1.);
-        self.edit(cx, |draft| draft.select_to(offset));
+        let spot = self.row_away(1.);
+        self.go(spot, true, cx);
     }
 
     fn select_to_home(&mut self, _: &SelectToHome, _window: &mut Window, cx: &mut Context<Self>) {
-        let offset = self.row_start();
-        self.edit(cx, |draft| draft.select_to(offset));
+        let spot = self.row_start();
+        self.go(spot, true, cx);
     }
 
     fn select_to_end(&mut self, _: &SelectToEnd, _window: &mut Window, cx: &mut Context<Self>) {
-        let offset = self.row_end();
-        self.edit(cx, |draft| draft.select_to(offset));
+        let spot = self.row_end();
+        self.go(spot, true, cx);
     }
 
     fn word_left(&mut self, _: &WordLeft, _window: &mut Window, cx: &mut Context<Self>) {
@@ -548,17 +585,33 @@ impl LineInput {
         self.edit(cx, Draft::delete_word_forward);
     }
 
-    /// Command+Backspace: takes out the selection, or the row up to the
-    /// cursor.
+    /// Command+Backspace, as Cocoa's deleteToBeginningOfLine: takes out the
+    /// selection, or the row up to the cursor: nothing at the row's start,
+    /// as Command+Left leaves the cursor.
     fn delete_to_home(&mut self, _: &DeleteToHome, _window: &mut Window, cx: &mut Context<Self>) {
-        let offset = self.row_start();
-        self.edit(cx, |draft| draft.delete_to(offset));
+        let start = self.row_start().offset;
+        self.edit(cx, |draft| draft.delete_to(start));
     }
 
-    /// Control+K: takes out the selection, or the row from the cursor on.
-    fn delete_to_end(&mut self, _: &DeleteToEnd, _window: &mut Window, cx: &mut Context<Self>) {
-        let offset = self.row_end();
-        self.edit(cx, |draft| draft.delete_to(offset));
+    /// Control+U: takes out the selection, or the line up to the cursor.
+    fn delete_to_line_start(
+        &mut self,
+        _: &DeleteToLineStart,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.edit(cx, Draft::delete_to_line_start);
+    }
+
+    /// Control+K on macOS: takes out the selection, or the line from the
+    /// cursor on, or at its end, the line break.
+    fn delete_to_line_end(
+        &mut self,
+        _: &DeleteToLineEnd,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.edit(cx, Draft::delete_to_line_end);
     }
 
     fn select_all(&mut self, _: &SelectAll, _window: &mut Window, cx: &mut Context<Self>) {
@@ -696,12 +749,8 @@ impl LineInput {
         }
         let drag = match event.click_count {
             0 | 1 => {
-                let offset = self.offset_at(event.position);
-                if event.modifiers.shift {
-                    self.edit(cx, |draft| draft.select_to(offset));
-                } else {
-                    self.edit(cx, |draft| draft.move_to(offset));
-                }
+                let spot = self.spot_at(event.position);
+                self.go(spot, event.modifiers.shift, cx);
                 Drag::Characters
             }
             2 => {
@@ -722,8 +771,8 @@ impl LineInput {
         match self.drag.clone() {
             None => {}
             Some(Drag::Characters) => {
-                let offset = self.offset_at(event.position);
-                self.edit(cx, |draft| draft.select_to(offset));
+                let spot = self.spot_at(event.position);
+                self.go(spot, true, cx);
             }
             Some(Drag::Words(word)) => {
                 let reached = self.draft.word_at(self.char_at(event.position));
@@ -745,12 +794,13 @@ impl LineInput {
         self.edit(cx, Draft::deselect);
     }
 
-    /// The offset in the text closest to `position` in the window.
-    fn offset_at(&self, position: Point<Pixels>) -> usize {
+    /// The offset in the text closest to `position` in the window, on the
+    /// row there.
+    fn spot_at(&self, position: Point<Pixels>) -> Spot {
         let (Some(bounds), Some(layout)) = (self.last_bounds, self.last_layout.as_ref()) else {
-            return 0;
+            return Spot::default();
         };
-        layout.index_at(position - self.text_origin(bounds))
+        layout.spot_at(position - self.text_origin(bounds))
     }
 
     /// The offset of the character under `position` in the window, or of
@@ -771,38 +821,42 @@ impl LineInput {
     /// The offset `rows` rows below the cursor (above, if negative), as near
     /// as it can be to straight below. Above the first row is the start of
     /// the text, and below the last is its end.
-    fn row_away(&self, rows: f32) -> usize {
+    fn row_away(&self, rows: f32) -> Spot {
         let Some(layout) = self.last_layout.as_ref() else {
-            return self.draft.cursor();
+            return self.cursor_spot();
         };
-        let at = layout.position(self.draft.cursor());
+        let at = layout.spot_position(self.cursor_spot());
         let y = at.y + layout.line_height * (rows + 0.5);
         if y < px(0.) {
-            0
+            Spot::default()
         } else if y >= layout.height() {
-            self.draft.text().len()
+            Spot {
+                offset: self.draft.text().len(),
+                below: false,
+            }
         } else {
-            layout.index_at(point(at.x, y))
+            layout.spot_at(point(at.x, y))
         }
     }
 
-    /// The start of the cursor's row.
-    fn row_start(&self) -> usize {
+    /// The start of the cursor's row: where a line wraps, the row below,
+    /// as Command+Left leaves the cursor there.
+    fn row_start(&self) -> Spot {
         self.on_cursor_row(px(0.))
     }
 
-    /// The end of the cursor's row.
-    fn row_end(&self) -> usize {
+    /// The end of the cursor's row: where a line wraps, the row above.
+    fn row_end(&self) -> Spot {
         self.on_cursor_row(px(f32::MAX))
     }
 
     /// The offset nearest `x` on the cursor's row.
-    fn on_cursor_row(&self, x: Pixels) -> usize {
+    fn on_cursor_row(&self, x: Pixels) -> Spot {
         let Some(layout) = self.last_layout.as_ref() else {
-            return self.draft.cursor();
+            return self.cursor_spot();
         };
-        let at = layout.position(self.draft.cursor());
-        layout.index_at(point(x, at.y + layout.line_height / 2.))
+        let at = layout.spot_position(self.cursor_spot());
+        layout.spot_at(point(x, at.y + layout.line_height / 2.))
     }
 
     /// The text, and how to shape it: plain, but for the part being
@@ -954,7 +1008,7 @@ impl EntityInputHandler for LineInput {
         let layout = self.last_layout.as_ref()?;
         let range = self.draft.range_from_utf16(&range_utf16);
         let origin = self.text_origin(element_bounds);
-        let start = layout.position(range.start);
+        let start = layout.position_below(range.start);
         let end = layout.position(range.end);
         // On the start's row, even when the range goes on to the next.
         Some(Bounds::from_corners(
@@ -1032,7 +1086,8 @@ impl Render for LineInput {
             .on_action(cx.listener(Self::delete_word_backward))
             .on_action(cx.listener(Self::delete_word_forward))
             .on_action(cx.listener(Self::delete_to_home))
-            .on_action(cx.listener(Self::delete_to_end))
+            .on_action(cx.listener(Self::delete_to_line_start))
+            .on_action(cx.listener(Self::delete_to_line_end))
             .on_action(cx.listener(Self::select_all))
             .on_action(cx.listener(Self::cut))
             .on_action(cx.listener(Self::copy))
@@ -1107,6 +1162,14 @@ fn shape(
     Layout { lines, line_height }
 }
 
+/// An offset of the text, and, where a line wraps at it, whether it is at
+/// the start of the row below rather than at the end of the row above.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct Spot {
+    offset: usize,
+    below: bool,
+}
+
 /// The text as shaped for the input: each line between line breaks, with
 /// the rows it wraps into where the input wraps. Positions are from the
 /// text's top left corner.
@@ -1156,9 +1219,48 @@ impl Layout {
             .unwrap_or_default()
     }
 
+    /// Where offset `index` is, at the start of the row below where a line
+    /// wraps there, as what starts at the offset is drawn.
+    fn position_below(&self, index: usize) -> Point<Pixels> {
+        let at = self.position(index);
+        let below = point(px(0.), at.y + self.line_height);
+        if at.x > px(0.)
+            && below.y < self.height()
+            && self.index_at(below + point(px(0.), self.line_height / 2.)) == index
+        {
+            below
+        } else {
+            at
+        }
+    }
+
+    /// Where `spot` is: on the row below where a line wraps, if it is.
+    fn spot_position(&self, spot: Spot) -> Point<Pixels> {
+        if spot.below {
+            self.position_below(spot.offset)
+        } else {
+            self.position(spot.offset)
+        }
+    }
+
     /// The offset nearest `position`.
     fn index_at(&self, position: Point<Pixels>) -> usize {
         self.hit(position, true)
+    }
+
+    /// The offset nearest `position`, on the row there: where a line wraps
+    /// at the start of that row, the offset is the same as at the end of
+    /// the row above.
+    fn spot_at(&self, position: Point<Pixels>) -> Spot {
+        let offset = self.index_at(position);
+        // The row `y` is in, the first above and the last below.
+        let last = self.height() - self.line_height;
+        let row = |y: Pixels| (y.max(px(0.)).min(last) / self.line_height).floor();
+        let found = self.position(offset).y + self.line_height / 2.;
+        Spot {
+            offset,
+            below: row(found) < row(position.y),
+        }
     }
 
     /// The offset of the character under `position`, or of the end of its
@@ -1216,7 +1318,8 @@ impl Layout {
         if selected.is_empty() {
             return boxes;
         }
-        let start = self.position(selected.start);
+        // What is selected starts on the row its first character is on.
+        let start = self.position_below(selected.start);
         let end = self.position(selected.end);
         let (mut left, mut top) = (start.x, start.y);
         loop {
@@ -1349,6 +1452,7 @@ impl Element for LineElement {
         let wraps = input.wraps();
         let selected = input.draft.selected().clone();
         let cursor = input.draft.cursor();
+        let cursor_spot = input.cursor_spot();
         // Where the character the cursor is on ends, if it is on one.
         let on_end = input.draft.text()[cursor..]
             .chars()
@@ -1378,7 +1482,7 @@ impl Element for LineElement {
             window,
         );
         // Moved as far as it takes for the cursor to show.
-        let at = layout.position(cursor);
+        let at = layout.spot_position(cursor_spot);
         let scroll = point(
             if wraps {
                 px(0.)
@@ -1404,14 +1508,16 @@ impl Element for LineElement {
             Bounds::new(origin + at, size(CURSOR_WIDTH, layout.line_height)),
             rgb(FOREGROUND),
         );
-        // As wide as the character it is on, or as half a line is high
-        // where there is none, at the end of a line.
+        // On the character it is on, on that character's row where a line
+        // wraps; as wide as it, or as half a line is high where there is
+        // none, at the end of a line.
+        let on = layout.position_below(cursor_spot.offset);
         let width = on_end
             .map(|end| layout.position(end))
-            .filter(|end| end.y == at.y && end.x > at.x)
-            .map_or(layout.line_height / 2., |end| end.x - at.x);
+            .filter(|end| end.y == on.y && end.x > on.x)
+            .map_or(layout.line_height / 2., |end| end.x - on.x);
         let block = fill(
-            Bounds::new(origin + at, size(width, layout.line_height)),
+            Bounds::new(origin + on, size(width, layout.line_height)),
             rgba((ACCENT << 8) | 0x88),
         );
         Prepainted {
@@ -1523,6 +1629,217 @@ mod tests {
         });
         cx.simulate_keystrokes("ctrl-shift-e");
         assert_eq!(selected(cx), start + 1000..end);
+    }
+
+    /// A line far wider than the window, between two short ones.
+    #[cfg(target_os = "macos")]
+    fn long_text() -> String {
+        format!("first\n{}\nlast", "word ".repeat(400))
+    }
+
+    /// An input whose lines wrap, in a window of its own, with the
+    /// keyboard, saying `text` with the cursor at `cursor`, drawn.
+    #[cfg(target_os = "macos")]
+    fn wrapping_input<'a>(
+        cx: &'a mut gpui::TestAppContext,
+        text: &str,
+        cursor: usize,
+    ) -> (
+        gpui::Entity<super::LineInput>,
+        &'a mut gpui::VisualTestContext,
+    ) {
+        cx.update(super::bind_keys);
+        let (input, cx) = cx.add_window_view(|_, cx| super::LineInput::wrapping(cx));
+        input.update_in(cx, |input, window, cx| {
+            window.focus(&input.focus_handle);
+            input.set_text_at(text, cursor, cx);
+        });
+        cx.run_until_parked();
+        (input, cx)
+    }
+
+    /// The offset each row starts at, as the input last drew its text.
+    #[cfg(target_os = "macos")]
+    fn row_starts(
+        input: &gpui::Entity<super::LineInput>,
+        cx: &mut gpui::VisualTestContext,
+    ) -> Vec<usize> {
+        cx.run_until_parked();
+        input.read_with(cx, |input, _| {
+            let layout = input.last_layout.as_ref().expect("drawn");
+            (0..layout.rows())
+                .map(|row| {
+                    #[expect(clippy::cast_precision_loss, reason = "a few rows")]
+                    let y = layout.line_height * (row as f32 + 0.5);
+                    layout.spot_at(gpui::point(px(0.), y)).offset
+                })
+                .collect()
+        })
+    }
+
+    /// Where the cursor is, the row it is drawn on, and whether at that
+    /// row's start, as the input last drew it.
+    #[cfg(target_os = "macos")]
+    fn cursor_drawn(
+        input: &gpui::Entity<super::LineInput>,
+        cx: &mut gpui::VisualTestContext,
+    ) -> (usize, usize, bool) {
+        cx.run_until_parked();
+        input.read_with(cx, |input, _| {
+            let layout = input.last_layout.as_ref().expect("drawn");
+            let at = layout.spot_position(input.cursor_spot());
+            #[expect(
+                clippy::cast_possible_truncation,
+                clippy::cast_sign_loss,
+                reason = "a row number"
+            )]
+            let row = (at.y / layout.line_height).round() as usize;
+            (input.cursor(), row, at.x == px(0.))
+        })
+    }
+
+    #[cfg(target_os = "macos")]
+    fn text_of(input: &gpui::Entity<super::LineInput>, cx: &mut gpui::VisualTestContext) -> String {
+        input.read_with(cx, |input, _| input.text().to_owned())
+    }
+
+    /// Command+Left, as Cocoa's moveToLeftEndOfLine:, goes to the start of
+    /// the row a line wrapped into, and the cursor stays on that row,
+    /// though the offset is the same as at the end of the row above.
+    #[cfg(target_os = "macos")]
+    #[gpui::test]
+    fn command_left_keeps_the_cursor_at_the_start_of_a_wrapped_row(cx: &mut gpui::TestAppContext) {
+        let text = long_text();
+        let (input, cx) = wrapping_input(cx, &text, 6 + 300);
+        let rows = row_starts(&input, cx);
+        // The row the cursor is on, which the long line wrapped into.
+        let row = rows.iter().rposition(|&start| start <= 6 + 300).unwrap();
+        assert!(row >= 2 && rows[row] > 6, "{rows:?}");
+        let start = rows[row];
+        cx.simulate_keystrokes("cmd-left");
+        assert_eq!(cursor_drawn(&input, cx), (start, row, true));
+        cx.simulate_keystrokes("cmd-left");
+        assert_eq!(
+            cursor_drawn(&input, cx),
+            (start, row, true),
+            "again, it stays"
+        );
+        // Command+Backspace there takes out nothing, as Cocoa's.
+        cx.simulate_keystrokes("cmd-backspace");
+        assert_eq!(text_of(&input, cx), text);
+        assert_eq!(cursor_drawn(&input, cx), (start, row, true));
+        // Up and Down go from that row, and back to its start.
+        cx.simulate_keystrokes("up");
+        assert_eq!(cursor_drawn(&input, cx), (rows[row - 1], row - 1, true));
+        cx.simulate_keystrokes("down");
+        assert_eq!(cursor_drawn(&input, cx), (start, row, true));
+        // Command+Right goes to the row's end, which is drawn on the row,
+        // and Command+Left from there back to its start.
+        cx.simulate_keystrokes("cmd-right");
+        assert_eq!(cursor_drawn(&input, cx), (rows[row + 1], row, false));
+        cx.simulate_keystrokes("cmd-left");
+        assert_eq!(cursor_drawn(&input, cx), (start, row, true));
+        cx.simulate_keystrokes("cmd-shift-right");
+        assert_eq!(
+            input.read_with(cx, |input, _| input.selected()),
+            start..rows[row + 1]
+        );
+        // Typing puts the cursor back after what was typed.
+        cx.simulate_keystrokes("cmd-left x");
+        assert_eq!(cursor_drawn(&input, cx), (start + 1, row, false));
+    }
+
+    /// Command+Backspace, as Cocoa's deleteToBeginningOfLine:, takes out
+    /// the row up to the cursor: from the end of a row, the whole row.
+    #[cfg(target_os = "macos")]
+    #[gpui::test]
+    fn command_backspace_takes_out_the_row_up_to_the_cursor(cx: &mut gpui::TestAppContext) {
+        let text = long_text();
+        let (input, cx) = wrapping_input(cx, &text, 6 + 300);
+        let rows = row_starts(&input, cx);
+        let row = rows.iter().rposition(|&start| start <= 6 + 300).unwrap();
+        let (start, end) = (rows[row], rows[row + 1]);
+        cx.simulate_keystrokes("cmd-backspace");
+        assert_eq!(
+            text_of(&input, cx),
+            format!("{}{}", &text[..start], &text[6 + 300..])
+        );
+        assert_eq!(input.read_with(cx, |input, _| input.cursor()), start);
+        // At the end of a row, drawn there, all of the row.
+        input.update_in(cx, |input, _, cx| input.set_text_at(&text, 6 + 300, cx));
+        cx.simulate_keystrokes("cmd-right");
+        assert_eq!(cursor_drawn(&input, cx), (end, row, false));
+        cx.simulate_keystrokes("cmd-backspace");
+        assert_eq!(
+            text_of(&input, cx),
+            format!("{}{}", &text[..start], &text[end..])
+        );
+    }
+
+    /// Control+K and U take out to the ends of the line, between line
+    /// breaks, past the rows it wraps into; Control+K at the line's end
+    /// takes out its line break.
+    #[cfg(target_os = "macos")]
+    #[gpui::test]
+    fn control_k_and_u_take_out_to_the_ends_of_the_line(cx: &mut gpui::TestAppContext) {
+        let text = long_text();
+        let (input, cx) = wrapping_input(cx, &text, 6 + 300);
+        let end = text.len() - "\nlast".len();
+        cx.simulate_keystrokes("ctrl-k");
+        assert_eq!(
+            text_of(&input, cx),
+            format!("{}{}", &text[..6 + 300], &text[end..])
+        );
+        cx.simulate_keystrokes("ctrl-k");
+        assert_eq!(text_of(&input, cx), format!("{}last", &text[..6 + 300]));
+        input.update_in(cx, |input, _, cx| input.set_text_at(&text, 6 + 300, cx));
+        cx.simulate_keystrokes("ctrl-u");
+        assert_eq!(text_of(&input, cx), format!("first\n{}", &text[6 + 300..]));
+        assert_eq!(input.read_with(cx, |input, _| input.cursor()), 6);
+        cx.simulate_keystrokes("ctrl-u");
+        assert_eq!(text_of(&input, cx), format!("first\n{}", &text[6 + 300..]));
+    }
+
+    /// A click at the start of a row a line wrapped into puts the cursor
+    /// there, on that row.
+    #[cfg(target_os = "macos")]
+    #[gpui::test]
+    fn a_click_at_the_start_of_a_wrapped_row_puts_the_cursor_on_it(cx: &mut gpui::TestAppContext) {
+        let text = long_text();
+        let (input, cx) = wrapping_input(cx, &text, 6 + 300);
+        let rows = row_starts(&input, cx);
+        let row = rows.iter().rposition(|&start| start <= 6 + 300).unwrap();
+        let clicked = input.read_with(cx, |input, _| {
+            let layout = input.last_layout.as_ref().expect("drawn");
+            let bounds = input.last_bounds.expect("drawn");
+            input.text_origin(bounds)
+                + layout.position_below(rows[row])
+                + gpui::point(px(1.), layout.line_height / 2.)
+        });
+        cx.simulate_click(clicked, gpui::Modifiers::none());
+        assert_eq!(cursor_drawn(&input, cx), (rows[row], row, true));
+    }
+
+    /// What is selected from the start of a wrapped row is drawn from that
+    /// row's start, not from the end of the row above.
+    #[cfg(target_os = "macos")]
+    #[gpui::test]
+    fn a_selection_from_a_wrapped_rows_start_is_drawn_from_that_row(cx: &mut gpui::TestAppContext) {
+        let text = long_text();
+        let (input, cx) = wrapping_input(cx, &text, 6 + 300);
+        let rows = row_starts(&input, cx);
+        let row = rows.iter().rposition(|&start| start <= 6 + 300).unwrap();
+        input.read_with(cx, |input, _| {
+            let layout = input.last_layout.as_ref().expect("drawn");
+            let boxes = layout.selection(
+                &(rows[row]..rows[row] + 3),
+                gpui::Point::default(),
+                px(500.),
+            );
+            assert_eq!(boxes.len(), 1);
+            assert_eq!(boxes[0].bounds.origin, layout.position_below(rows[row]));
+            assert_eq!(boxes[0].bounds.origin.x, px(0.));
+        });
     }
 
     #[test]

@@ -346,6 +346,26 @@ impl Draft {
         self.commit(None, "");
     }
 
+    /// Control+K on macOS, as Cocoa's deleteToEndOfParagraph: takes out
+    /// the selection, or the rest of the cursor's line, between line
+    /// breaks, however many rows it wraps into; at the line's end, the
+    /// line break, joining the next line to it.
+    pub fn delete_to_line_end(&mut self) {
+        let mut end = self.line_at(self.selected.end).end;
+        if self.selected.is_empty() && end == self.selected.end {
+            end = self.next_boundary(end);
+        }
+        self.delete_to(end);
+    }
+
+    /// Control+U, as in Vim's insert mode and a shell's line, and as
+    /// Cocoa's deleteToBeginningOfParagraph: takes out the selection, or
+    /// the cursor's line, between line breaks, up to the cursor; at the
+    /// line's start, nothing.
+    pub fn delete_to_line_start(&mut self) {
+        self.delete_to(self.line_at(self.selected.start).start);
+    }
+
     /// What a double click at `offset` selects: the word there, or the run
     /// of spaces or of punctuation, or at the end of a line, the one
     /// before it.
@@ -556,6 +576,8 @@ pub fn unix_line_breaks(text: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::ops::Range;
+
     use super::{Draft, one_line, unix_line_breaks};
 
     /// A draft saying `text`, with the cursor at its end.
@@ -707,6 +729,61 @@ mod tests {
         draft.select_to(9);
         draft.move_to_line_end();
         assert_eq!(draft.selected(), &(11..11));
+    }
+
+    /// What is left of `text` once Control+K (`kill`) or Control+U
+    /// takes out from `from`, and where the cursor is then.
+    fn deleted(text: &str, from: Range<usize>, kill: bool) -> (String, usize) {
+        let mut draft = draft(text);
+        draft.move_to(from.start);
+        draft.select_to(from.end);
+        if kill {
+            draft.delete_to_line_end();
+        } else {
+            draft.delete_to_line_start();
+        }
+        (draft.text().to_owned(), draft.cursor())
+    }
+
+    #[test]
+    fn control_k_takes_out_the_rest_of_the_line_or_its_line_break() {
+        let text = "abc\ndef\nghi";
+        // From the middle of the first, a middle and the last line.
+        assert_eq!(deleted(text, 1..1, true), ("a\ndef\nghi".into(), 1));
+        assert_eq!(deleted(text, 5..5, true), ("abc\nd\nghi".into(), 5));
+        assert_eq!(deleted(text, 9..9, true), ("abc\ndef\ng".into(), 9));
+        // At a line's end, the line break, joining the next line to it.
+        assert_eq!(deleted(text, 3..3, true), ("abcdef\nghi".into(), 3));
+        // On an empty line, its line break.
+        assert_eq!(deleted("abc\n\ndef", 4..4, true), ("abc\ndef".into(), 4));
+        // At the text's end, nothing.
+        assert_eq!(deleted(text, 11..11, true), (text.into(), 11));
+        // A long line, which wraps into rows, to its end.
+        let long = format!("x{}\nlast", "word ".repeat(40));
+        assert_eq!(deleted(&long, 1..1, true), ("x\nlast".into(), 1));
+        // With a selection, the selection only.
+        assert_eq!(deleted(text, 1..2, true), ("ac\ndef\nghi".into(), 1));
+        assert_eq!(deleted(text, 2..5, true), ("abef\nghi".into(), 2));
+    }
+
+    #[test]
+    fn control_u_takes_out_the_line_up_to_the_cursor() {
+        let text = "abc\ndef\nghi";
+        assert_eq!(deleted(text, 2..2, false), ("c\ndef\nghi".into(), 0));
+        assert_eq!(deleted(text, 6..6, false), ("abc\nf\nghi".into(), 4));
+        assert_eq!(deleted(text, 11..11, false), ("abc\ndef\n".into(), 8));
+        // At a line's start, or on an empty line, nothing: the line break
+        // before stays.
+        assert_eq!(deleted(text, 4..4, false), (text.into(), 4));
+        assert_eq!(deleted("abc\n\ndef", 4..4, false), ("abc\n\ndef".into(), 4));
+        // A long line, which wraps into rows, from its start.
+        let long = format!("first\n{}x", "word ".repeat(40));
+        assert_eq!(
+            deleted(&long, long.len() - 1..long.len() - 1, false),
+            ("first\nx".into(), 6)
+        );
+        // With a selection, the selection only.
+        assert_eq!(deleted(text, 5..6, false), ("abc\ndf\nghi".into(), 5));
     }
 
     #[test]
