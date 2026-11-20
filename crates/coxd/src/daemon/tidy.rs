@@ -2,8 +2,10 @@
 //! away once the chat each was made for is done, and it holds nothing
 //! that is not elsewhere: Cox looks as a chat is marked done, and now and
 //! then, as a pull request merges after its chat was done, and tells the
-//! chat of each it took away.
+//! chat of each it took away. A chat that worked in one, sent a line
+//! again, has it made again before its agent starts.
 
+use std::path::Path;
 use std::time::{Duration, Instant};
 
 use super::{Daemon, Internal};
@@ -101,6 +103,44 @@ impl Daemon {
         self.tidying.now = false;
         if std::mem::take(&mut self.tidying.again) {
             self.tidy_worktrees(Instant::now(), true);
+        }
+    }
+
+    /// Makes again the worktree the closed chat `key` would start its
+    /// agent again in, if its folder is gone, as Cox took it away (see
+    /// [`worktrees::remake`]), and tells the chat it did.
+    ///
+    /// # Errors
+    ///
+    /// When Cox cannot make it again, with why, as the chat is told.
+    pub(super) fn remake_worktree(&mut self, key: u64) -> Result<(), String> {
+        let Some(cwd) = self
+            .chat(key)
+            .and_then(|chat| chat.again_cwd())
+            .map(Path::to_owned)
+        else {
+            return Ok(());
+        };
+        let remade = worktrees::remake(&cwd);
+        let Some(chat) = self.chat(key) else {
+            return Ok(());
+        };
+        match remade {
+            Ok(None) => Ok(()),
+            Ok(Some(said)) => {
+                tracing::info!(path = %cwd.display(), "the worktree is made again");
+                chat.note(said);
+                Ok(())
+            }
+            Err(why) => {
+                tracing::warn!(path = %cwd.display(), "the worktree is not made again: {why}");
+                chat.note(format!(
+                    "The worktree this chat works in, at {}, is gone, and Cox cannot make it \
+                     again, so its agent does not start: {why}.",
+                    cwd.display()
+                ));
+                Err(why)
+            }
         }
     }
 }
