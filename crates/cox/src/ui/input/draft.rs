@@ -256,6 +256,31 @@ impl Draft {
         self.move_to(self.next_word_end(self.selected.end));
     }
 
+    /// Control+A on macOS, as Cocoa's moveToBeginningOfParagraph: to the
+    /// start of the line, between line breaks, that the selection starts
+    /// on, however many rows it wraps into.
+    pub fn move_to_line_start(&mut self) {
+        self.move_to(self.line_at(self.selected.start).start);
+    }
+
+    /// Control+E on macOS, as Cocoa's moveToEndOfParagraph: to the end of
+    /// the line, before its line break, that the selection ends on.
+    pub fn move_to_line_end(&mut self) {
+        self.move_to(self.line_at(self.selected.end).end);
+    }
+
+    /// Control+Shift+A on macOS: the selection grows, or shrinks, to the
+    /// start of the cursor's line.
+    pub fn select_to_line_start(&mut self) {
+        self.select_to(self.line_at(self.cursor()).start);
+    }
+
+    /// Control+Shift+E on macOS: the selection grows, or shrinks, to the
+    /// end of the cursor's line.
+    pub fn select_to_line_end(&mut self) {
+        self.select_to(self.line_at(self.cursor()).end);
+    }
+
     /// The selection grows, or shrinks, to the start of the word before
     /// the cursor.
     pub fn select_word_left(&mut self) {
@@ -608,6 +633,104 @@ mod tests {
         draft.move_left();
         assert_eq!(draft.cursor(), 2);
         assert!(draft.selected().is_empty());
+    }
+
+    /// Where the cursor goes from `from` in `text` by Control+A and by
+    /// Control+E.
+    fn line_ends(text: &str, from: usize) -> (usize, usize) {
+        let mut draft = draft(text);
+        draft.move_to(from);
+        draft.move_to_line_start();
+        let start = draft.cursor();
+        draft.move_to(from);
+        draft.move_to_line_end();
+        (start, draft.cursor())
+    }
+
+    #[test]
+    fn control_a_and_e_go_to_the_ends_of_the_cursors_line() {
+        let text = "abc\ndef\nghi";
+        // The first line, from its middle, start and end.
+        for from in 0..=3 {
+            assert_eq!(line_ends(text, from), (0, 3), "from {from}");
+        }
+        // A line between others, not the text's start or end.
+        for from in 4..=7 {
+            assert_eq!(line_ends(text, from), (4, 7), "from {from}");
+        }
+        // The last line.
+        for from in 8..=11 {
+            assert_eq!(line_ends(text, from), (8, 11), "from {from}");
+        }
+    }
+
+    #[test]
+    fn control_a_and_e_stay_on_an_empty_line() {
+        let text = "abc\n\n\ndef";
+        assert_eq!(line_ends(text, 4), (4, 4));
+        assert_eq!(line_ends(text, 5), (5, 5));
+        assert_eq!(line_ends("", 0), (0, 0));
+        // A line break last leaves an empty line after it.
+        assert_eq!(line_ends("abc\n", 4), (4, 4));
+    }
+
+    #[test]
+    fn control_a_and_e_go_past_the_rows_a_long_line_wraps_into() {
+        // However narrow the input, so that the line wraps into rows,
+        // Control+A and E go to the ends of the line, as Cocoa's do:
+        // wrapping is drawing, and the draft has the line whole.
+        let long = "word ".repeat(40);
+        let text = format!("first\n{long}\nlast");
+        let (start, end) = (6, 6 + long.len());
+        for from in [start, start + 1, start + 100, end - 1, end] {
+            assert_eq!(line_ends(&text, from), (start, end), "from {from}");
+        }
+        // Pressed again, they stay, rather than going on to another line.
+        let mut draft = draft(&text);
+        draft.move_to(start + 100);
+        draft.move_to_line_start();
+        draft.move_to_line_start();
+        assert_eq!(draft.cursor(), start);
+        draft.move_to_line_end();
+        draft.move_to_line_end();
+        assert_eq!(draft.cursor(), end);
+    }
+
+    #[test]
+    fn control_a_and_e_leave_a_selection_at_the_ends_of_its_lines() {
+        let mut draft = draft("abc\ndef\nghi");
+        draft.move_to(5);
+        draft.select_to(9);
+        draft.move_to_line_start();
+        assert_eq!(draft.selected(), &(4..4));
+        draft.move_to(5);
+        draft.select_to(9);
+        draft.move_to_line_end();
+        assert_eq!(draft.selected(), &(11..11));
+    }
+
+    #[test]
+    fn control_shift_a_and_e_select_to_the_ends_of_the_cursors_line() {
+        let mut draft = draft("abc\ndef\nghi");
+        draft.move_to(5);
+        draft.select_to_line_end();
+        assert_eq!(draft.selected_text(), "ef");
+        assert!(!draft.is_reversed());
+        // Turning around the anchor, to the start of the line.
+        draft.select_to_line_start();
+        assert_eq!(draft.selected_text(), "d");
+        assert!(draft.is_reversed());
+        // Again, it stays on the line.
+        draft.select_to_line_start();
+        assert_eq!(draft.selected(), &(4..5));
+        // From a selection that reaches into the next line, to the end of
+        // the line its cursor is on.
+        draft.move_to(5);
+        draft.select_to(9);
+        draft.select_to_line_end();
+        assert_eq!(draft.selected_text(), "ef\nghi");
+        draft.select_to_line_start();
+        assert_eq!(draft.selected_text(), "ef\n");
     }
 
     #[test]
