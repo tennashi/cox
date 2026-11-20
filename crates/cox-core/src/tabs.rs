@@ -84,11 +84,14 @@ pub enum KeptTab {
     /// its absolute path, as Git tells it, with the checkout of each of
     /// its repositories the human chose to see, if they chose one: by the
     /// name of the project's directory it is, or none for the repository
-    /// the folder is in, the checkout's folder.
+    /// the folder is in, the checkout's folder; or the branch no checkout
+    /// has, by its name, whose commits they chose to see.
     Changes {
         folder: PathBuf,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         checkouts: Vec<(Option<String>, PathBuf)>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        branches: Vec<(Option<String>, String)>,
     },
     /// The flow of one tool call through Cox, the call by the id the
     /// agent gave it.
@@ -141,6 +144,7 @@ mod tests {
             KeptTab::Changes {
                 folder: PathBuf::from("/p"),
                 checkouts: Vec::new(),
+                branches: Vec::new(),
             }
         );
         assert_eq!(
@@ -150,6 +154,7 @@ mod tests {
         let chosen = KeptTab::Changes {
             folder: PathBuf::from("/p"),
             checkouts: vec![(Some("app".to_owned()), PathBuf::from("/p/worktrees/app/b"))],
+            branches: vec![(None, "side".to_owned())],
         };
         let json = serde_json::to_string(&chosen).unwrap();
         assert_eq!(serde_json::from_str::<KeptTab>(&json).unwrap(), chosen);

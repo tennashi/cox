@@ -171,7 +171,10 @@ fn shows_what_changed_in_each_repository_among_a_projects_directories(cx: &mut T
     );
     // The first that changed anything is shown, with each to choose.
     assert_eq!(shown(&changes, cx), [("app/a.txt".to_owned(), 1, 0)]);
-    assert_eq!(coxd::repositories::count(&project, &[], &project), Ok(1));
+    assert_eq!(
+        coxd::repositories::count(&project, &[], &[], &project, &|_| None),
+        Ok(1)
+    );
     assert!(cx.debug_bounds("changed-repository-0").is_some());
     assert!(cx.debug_bounds("changed-repository-1").is_some());
 
@@ -185,7 +188,10 @@ fn shows_what_changed_in_each_repository_among_a_projects_directories(cx: &mut T
     cx.executor().advance_clock(Duration::from_secs(3));
     cx.run_until_parked();
     assert_eq!(shown(&changes, cx), [("app/a.txt".to_owned(), 1, 0)]);
-    assert_eq!(coxd::repositories::count(&project, &[], &project), Ok(2));
+    assert_eq!(
+        coxd::repositories::count(&project, &[], &[], &project, &|_| None),
+        Ok(2)
+    );
     click("changed-repository-1", cx);
     assert_eq!(shown(&changes, cx), [("lib/b.txt".to_owned(), 1, 0)]);
     click("changed-file-0", cx);
@@ -306,7 +312,7 @@ fn lists_the_commits_and_shows_what_one_changed_and_the_turn_it_was_made_in(
 fn a_folder_with_no_repository_counts_none() {
     let folder = scratch::folder("changes-none");
     std::fs::create_dir_all(folder.join("directories/notes")).unwrap();
-    assert!(coxd::repositories::count(&folder, &[], &folder).is_err());
+    assert!(coxd::repositories::count(&folder, &[], &[], &folder, &|_| None).is_err());
 }
 
 #[gpui::test]
@@ -454,6 +460,7 @@ fn shows_a_repository_in_another_of_its_checkouts_as_the_human_chooses_it(cx: &m
         cox_core::tabs::KeptTab::Changes {
             folder: project.clone(),
             checkouts: vec![checkout],
+            branches: Vec::new(),
         }
     );
     std::fs::write(search.join("t.txt"), "t\n").unwrap();
@@ -478,7 +485,8 @@ fn a_chat_working_in_a_worktree_sees_it_at_first(cx: &mut TestAppContext) {
     // As kept, the checkout the human chose comes first.
     let kept = vec![(Some("app".to_owned()), app)];
     let (folder, cwd) = (project.clone(), search.clone());
-    let (changes, cx) = cx.add_window_view(|_, cx| Changes::new(folder, &cwd, cx).choosing(kept));
+    let (changes, cx) =
+        cx.add_window_view(|_, cx| Changes::new(folder, &cwd, cx).choosing(kept, Vec::new()));
     cx.run_until_parked();
     assert_eq!(shown(&changes, cx), [("app/a.txt".to_owned(), 1, 0)]);
 }
@@ -577,5 +585,72 @@ fn compares_a_repository_with_the_branch_the_human_chooses(cx: &mut TestAppConte
     assert!(matches!(base(&changes, cx), (_, None)));
     // The repository's own settings are left be.
     assert!(!git(&folder, &["config", "--list", "--local"]).contains("cox."));
+    coxd::storage::keep_on_this_thread(None);
+}
+
+#[gpui::test]
+fn shows_what_a_branch_no_checkout_has_committed(cx: &mut TestAppContext) {
+    let (project, app, _) = project_with_worktrees("branches");
+    // A branch that left `main`, with a commit of its own, which no
+    // checkout has.
+    git(&app, &["checkout", "--quiet", "-b", "side"]);
+    std::fs::write(app.join("side.txt"), "side\n").unwrap();
+    git(&app, &["add", "side.txt"]);
+    git(&app, &["commit", "--quiet", "-m", "Side"]);
+    git(&app, &["checkout", "--quiet", "main"]);
+    // The project's `app` is compared with `main`, as the human chose.
+    let data = scratch::made("changes-branches-data");
+    coxd::storage::keep_on_this_thread(Some(data));
+    let path = coxd::storage::path(coxd::storage::Kept::Chats).unwrap();
+    let store = cox_core::store::Store::open(&path).unwrap();
+    let id = store.project(&project, "branches").unwrap();
+    store.keep_base(id, "app", Some("main")).unwrap();
+
+    let (changes, chosen, cx) = open(cx, &project, &project);
+    assert_eq!(
+        checkouts(&changes, cx),
+        ["main", "hotfix", "search", "side"]
+    );
+
+    click("checkout", cx);
+    click("checkout-choice-3", cx);
+    // What it committed, at first, and its commits.
+    assert_eq!(
+        changes.read_with(cx, |changes, _| changes.shown_pick()),
+        Pick::Everything
+    );
+    assert_eq!(shown_now(&changes, cx), [("side.txt".to_owned(), 1, 0)]);
+    let subjects = changes.read_with(cx, |changes, _| {
+        changes.history().map_or_default(|history| {
+            history
+                .commits
+                .iter()
+                .map(|commit| commit.subject.clone())
+                .collect::<Vec<_>>()
+        })
+    });
+    assert_eq!(subjects, ["Side"]);
+    click("history-commit-0", cx);
+    assert_eq!(shown_now(&changes, cx), [("side.txt".to_owned(), 1, 0)]);
+    // Its files are not where the tab reads it from: a click opens none.
+    click("changed-file-0", cx);
+    assert!(chosen.borrow().is_empty());
+    assert_eq!(
+        changes.read_with(cx, |changes, _| changes.kept()),
+        cox_core::tabs::KeptTab::Changes {
+            folder: project.clone(),
+            checkouts: Vec::new(),
+            branches: vec![(Some("app".to_owned()), "side".to_owned())],
+        }
+    );
+
+    // Choosing a checkout again forgets the branch.
+    click("checkout", cx);
+    click("checkout-choice-0", cx);
+    assert_eq!(shown(&changes, cx), [("app/a.txt".to_owned(), 1, 0)]);
+    assert_eq!(
+        changes.read_with(cx, |changes, _| changes.branches().len()),
+        0
+    );
     coxd::storage::keep_on_this_thread(None);
 }

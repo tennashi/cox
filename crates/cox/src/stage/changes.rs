@@ -27,13 +27,16 @@
 //! another of its worktrees, wherever it is (see
 //! [`coxd::repositories::checkouts`]), which the human chooses under the
 //! repositories, from a menu of them, each marked as Cox's, made by hand,
-//! or outside the folder, with how many files changed in it. A chat that
-//! works in one of them sees that one at first. The tab keeps what the
-//! human chose. Beside it, the branch its commits started after, which
-//! everything is since, as Cox found it, or as the human chose it from a
-//! menu of the repository's branches, which coxd keeps for the directory
-//! of the project it is, apart from the repository, whose settings Cox
-//! leaves be (see [`CompareWith`]).
+//! or outside the folder, with how many files changed in it; then its
+//! branches no checkout has, each seen by everything it committed, read
+//! from the repository's own checkout, whose files a click does not open,
+//! as they may not be there. A chat that works in one of the checkouts
+//! sees that one at first. The tab keeps what the human chose. Beside it,
+//! the branch its commits started after, which everything is since, as
+//! Cox found it, or as the human chose it from a menu of the repository's
+//! branches, which coxd keeps for the directory of the project it is,
+//! apart from the repository, whose settings Cox leaves be (see
+//! [`CompareWith`]).
 //!
 //! The tab looks again now and then, so that it shows what the agent
 //! changes as it works. It draws only the rows in sight, so a long list
@@ -173,11 +176,12 @@ impl Pick {
 }
 
 /// What the human picked to see, as the tab read it: of the repository of
-/// a name, in the checkout at a folder, and how its lines are drawn.
+/// a name, in the checkout at a folder, or on a branch no checkout has,
+/// and how its lines are drawn.
 struct Picked {
     pick: Pick,
     repository: Option<String>,
-    checkout: Option<PathBuf>,
+    checkout: Option<Seen>,
     read: Result<Diff, String>,
     looks: Vec<Vec<Look>>,
 }
@@ -191,6 +195,9 @@ pub struct Changes {
     /// The checkout of each repository the human chose to see, once they
     /// chose one (see [`repositories::read`]).
     checkouts: Vec<repositories::Chosen>,
+    /// The branch no checkout has of each repository whose commits the
+    /// human chose to see, once they chose one, rather than a checkout.
+    branches: Vec<repositories::ChosenBranch>,
     /// The menu open under the repositories, if one is.
     menu: Option<Menu>,
     /// How many files changed in each checkout of the repository shown, by
@@ -306,6 +313,7 @@ impl Changes {
             folder,
             cwd: cwd.to_owned(),
             checkouts: Vec::new(),
+            branches: Vec::new(),
             menu: None,
             counted: HashMap::new(),
             counting: None,
@@ -334,11 +342,16 @@ impl Changes {
         }
     }
 
-    /// The tab, showing the checkouts `checkouts` choose, as it kept
-    /// them.
+    /// The tab, showing the checkouts `checkouts` choose, or the branches
+    /// `branches` choose, as it kept them.
     #[must_use]
-    pub fn choosing(mut self, checkouts: Vec<repositories::Chosen>) -> Self {
+    pub fn choosing(
+        mut self,
+        checkouts: Vec<repositories::Chosen>,
+        branches: Vec<repositories::ChosenBranch>,
+    ) -> Self {
         self.checkouts = checkouts;
+        self.branches = branches;
         self
     }
 
@@ -358,12 +371,72 @@ impl Changes {
     /// checkout at `folder`, as the human chose it, as it shows at first,
     /// reading what changed there at once.
     pub fn show_checkout(&mut self, name: Option<String>, folder: PathBuf, cx: &mut Context<Self>) {
-        self.checkouts.retain(|(chosen, _)| *chosen != name);
+        self.forget_choice(name.as_deref());
         self.checkouts.push((name.clone(), folder));
+        self.show_chosen(name, cx);
+    }
+
+    /// Shows what the branch `branch` of the repository `name`, which no
+    /// checkout has, committed, as the human chose it, reading it at once.
+    pub fn show_branch(&mut self, name: Option<String>, branch: String, cx: &mut Context<Self>) {
+        self.forget_choice(name.as_deref());
+        self.branches.push((name.clone(), branch));
+        self.show_chosen(name, cx);
+    }
+
+    /// The branch no checkout has of each repository whose commits the
+    /// human chose to see.
+    #[must_use]
+    pub fn branches(&self) -> &[repositories::ChosenBranch] {
+        &self.branches
+    }
+
+    /// The branch each repository is compared with, by its name, if the
+    /// human chose one, as the tab last read its commits, or as they chose
+    /// it since.
+    #[must_use]
+    pub fn compared(&self) -> Vec<(Option<String>, Option<String>)> {
+        self.repositories()
+            .iter()
+            .zip(&self.histories)
+            .map(|(repository, history)| {
+                let base = match self.comparing.get(&repository.name) {
+                    Some(chosen) => chosen.clone(),
+                    None => history.as_ref().and_then(|history| history.chosen.clone()),
+                };
+                (repository.name.clone(), base)
+            })
+            .collect()
+    }
+
+    /// Forgets the checkout or branch chosen for the repository `name`.
+    fn forget_choice(&mut self, name: Option<&str>) {
+        self.checkouts
+            .retain(|(chosen, _)| chosen.as_deref() != name);
+        self.branches
+            .retain(|(chosen, _)| chosen.as_deref() != name);
+    }
+
+    /// Shows the repository `name`, as the human chose what of it to see,
+    /// reading it at once.
+    fn show_chosen(&mut self, name: Option<String>, cx: &mut Context<Self>) {
         self.show(name, cx);
         self.looking = Some(cx.spawn(async move |this, cx| {
             look(&this, cx).await;
         }));
+    }
+
+    /// The branch no checkout has that the repository shown is seen on,
+    /// if it is.
+    fn shown_branch(&self) -> Option<String> {
+        let checkout = self.shown()?.checkout()?;
+        checkout.branch().map(str::to_owned)
+    }
+
+    /// What the tab shows of the repository shown at first (see
+    /// [`first_pick`]).
+    fn first_pick(&self) -> Pick {
+        first_pick(self.history(), self.shown_branch().is_some())
     }
 
     /// Compares the repository shown with the branch `base`, as the human
@@ -440,6 +513,7 @@ impl Changes {
             shown
                 .checkouts
                 .iter()
+                .filter(|checkout| checkout.branch().is_none())
                 .map(|checkout| checkout.folder().to_owned())
                 .collect()
         });
@@ -501,9 +575,7 @@ impl Changes {
     /// or else what it shows at first.
     #[must_use]
     pub fn shown_pick(&self) -> Pick {
-        self.pick
-            .clone()
-            .unwrap_or_else(|| first_pick(self.history()))
+        self.pick.clone().unwrap_or_else(|| self.first_pick())
     }
 
     /// What changed, as the tab shows it, of the repository shown, and how
@@ -523,16 +595,16 @@ impl Changes {
         let Some(pick) = &self.pick else {
             return Some(at_first);
         };
-        if *pick == first_pick(self.history()) {
+        if *pick == self.first_pick() {
             return Some(at_first);
         }
-        let checkout = shown.checkout().map(Checkout::folder);
+        let checkout = shown.checkout().map(seen);
         self.picked
             .as_ref()
             .filter(|picked| {
                 &picked.pick == pick
                     && picked.repository == shown.name
-                    && picked.checkout.as_deref() == checkout
+                    && picked.checkout == checkout
             })
             .map(|picked| (&picked.read, picked.looks.as_slice()))
     }
@@ -573,14 +645,15 @@ impl Changes {
             Some(Choice(name)) => name.clone(),
             None => self.shown().and_then(|shown| shown.name.clone()),
         };
-        let checkout = Some(folder.clone());
+        let checkout = self.shown().and_then(Repository::checkout).map(seen);
+        let branch = self.shown_branch();
         let base = self.shown_base();
         self.picking = Some(cx.spawn(async move |this, cx| {
             let reading = pick.clone();
             let (read, looks) = cx
                 .background_executor()
                 .spawn(async move {
-                    let read = read_pick(&folder, base.as_deref(), &reading);
+                    let read = read_pick(&folder, branch.as_deref(), base.as_deref(), &reading);
                     let looks = read.as_ref().map_or_default(looks);
                     (read, looks)
                 })
@@ -691,6 +764,13 @@ impl Changes {
         }
     }
 
+    /// Whether a click opens `file`, of what the tab shows: unless it was
+    /// removed, or the tab shows a branch no checkout has, whose files may
+    /// not be where the tab reads it from.
+    fn opens(&self, file: &File) -> bool {
+        file.how != How::Removed && self.shown_branch().is_none()
+    }
+
     /// The human chose the file at `index` of the repository shown, at
     /// `line` if they chose one.
     fn choose(&self, index: usize, line: Option<usize>, cx: &mut Context<Self>) {
@@ -700,7 +780,7 @@ impl Changes {
         let Some(file) = diff.files.get(index) else {
             return;
         };
-        if file.how != How::Removed {
+        if self.opens(file) {
             cx.emit(Chosen {
                 path: diff.top.join(&file.path),
                 line,
@@ -1088,9 +1168,16 @@ impl Changes {
             Some(name) => format!("CHECKOUTS OF {}", name.to_uppercase()),
             None => "CHECKOUTS".to_owned(),
         };
+        let first_branch = shown
+            .checkouts
+            .iter()
+            .position(|checkout| checkout.branch().is_some());
         let rows = shown.checkouts.iter().enumerate().map(|(index, checkout)| {
             let folder = checkout.folder().to_owned();
-            let counted = match self.counted.get(&folder) {
+            let counted = match checkout
+                .branch()
+                .map_or_else(|| self.counted.get(&folder), |_| None)
+            {
                 Some(Ok(0)) => "clean".to_owned(),
                 Some(Ok(1)) => "1 changed".to_owned(),
                 Some(Ok(count)) => format!("{count} changed"),
@@ -1120,11 +1207,27 @@ impl Changes {
                 )
                 .children(checkout_tags(checkout));
             let name = shown.name.clone();
-            crate::ui::menu::item(("checkout-choice", index), label, &counted)
+            let branch = checkout.branch().map(str::to_owned);
+            let row = crate::ui::menu::item(("checkout-choice", index), label, &counted)
                 .when(index == shown.shown, |row| row.bg(rgb(SELECTED)))
-                .on_hint_click(cx.listener(move |changes, _, _, cx| {
-                    changes.show_checkout(name.clone(), folder.clone(), cx);
-                }))
+                .on_hint_click(cx.listener(move |changes, _, _, cx| match &branch {
+                    Some(branch) => changes.show_branch(name.clone(), branch.clone(), cx),
+                    None => changes.show_checkout(name.clone(), folder.clone(), cx),
+                }));
+            let heading = (Some(index) == first_branch).then(|| {
+                div()
+                    .mt(px(4.))
+                    .px(px(10.))
+                    .pt(px(6.))
+                    .pb(px(2.))
+                    .border_t_1()
+                    .border_color(rgb(BORDER))
+                    .text_size(px(10.5))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(rgb(FAINT))
+                    .child("BRANCHES NO CHECKOUT HAS")
+            });
+            div().children(heading).child(row)
         });
         let rows: Vec<_> = rows.collect();
         Self::menu_list("checkouts", Menu::Checkouts, heading, cx).children(rows)
@@ -1226,15 +1329,18 @@ impl Changes {
             .on_hint_click(cx.listener(|changes, _, _, cx| changes.pick(Pick::Everything, cx)));
             rows.push(row.into_any_element());
         }
-        let row = history_row(
-            "history-uncommitted".into(),
-            Some((Dot::Uncommitted, false, true)),
-            shown == Pick::Uncommitted,
-            "Not committed yet".into(),
-            None,
-        )
-        .on_hint_click(cx.listener(|changes, _, _, cx| changes.pick(Pick::Uncommitted, cx)));
-        rows.push(row.into_any_element());
+        // A branch no checkout has has nothing that is not committed.
+        if self.shown_branch().is_none() {
+            let row = history_row(
+                "history-uncommitted".into(),
+                Some((Dot::Uncommitted, false, true)),
+                shown == Pick::Uncommitted,
+                "Not committed yet".into(),
+                None,
+            )
+            .on_hint_click(cx.listener(|changes, _, _, cx| changes.pick(Pick::Uncommitted, cx)));
+            rows.push(row.into_any_element());
+        }
         for (index, commit) in history.commits.iter().enumerate() {
             let picked = Pick::Commit(commit.id.clone());
             let row = history_row(
@@ -1468,12 +1574,12 @@ impl Changes {
         } else {
             inner
         };
-        let inner = if file.how == How::Removed {
-            inner
-        } else {
+        let inner = if self.opens(file) {
             inner
                 .cursor_pointer()
                 .on_hint_click(cx.listener(move |changes, _, _, cx| changes.choose(index, at, cx)))
+        } else {
+            inner
         };
         div()
             .px(px(INSET))
@@ -1488,20 +1594,40 @@ impl Changes {
 }
 
 /// What the tab shows of a repository at first, of those it can show of
-/// its commits, `history`: in a sketch, everything since it started;
-/// elsewhere, what is not committed.
-fn first_pick(history: Option<&History>) -> Pick {
+/// its commits, `history`: in a sketch, and on a branch no checkout has,
+/// if it is `branch`, everything since it started; elsewhere, what is not
+/// committed.
+fn first_pick(history: Option<&History>, branch: bool) -> Pick {
     match history.map(|history| &history.base) {
+        _ if branch => Pick::Everything,
         Some(Base::Start(_) | Base::Nothing) => Pick::Everything,
         _ => Pick::Uncommitted,
     }
 }
 
-/// What changed in the repository at `folder`, as `pick` says, compared
-/// with the branch `base`, if the human chose one.
-fn read_pick(folder: &Path, base: Option<&str>, pick: &Pick) -> Result<Diff, String> {
+/// What a checkout is, to tell what was read in it from what was read in
+/// another: its folder, and the branch it is if no checkout has it.
+type Seen = (PathBuf, Option<String>);
+
+/// What `checkout` is (see [`Seen`]).
+fn seen(checkout: &Checkout) -> Seen {
+    (
+        checkout.folder().to_owned(),
+        checkout.branch().map(str::to_owned),
+    )
+}
+
+/// What changed in the repository at `folder`, or what its branch
+/// `branch` committed, if given, as `pick` says, compared with the branch
+/// `base`, if the human chose one.
+fn read_pick(
+    folder: &Path,
+    branch: Option<&str>,
+    base: Option<&str>,
+    pick: &Pick,
+) -> Result<Diff, String> {
     match pick {
-        Pick::Everything => commits::everything_with(folder, base)?
+        Pick::Everything => commits::everything_of(folder, branch, base)?
             .ok_or_else(|| "Nothing tells where the commits start.".to_owned()),
         Pick::Uncommitted => commits::uncommitted(folder),
         Pick::Commit(id) => commits::diff_of(folder, id),
@@ -1721,7 +1847,7 @@ fn commit_meta(commit: &Commit) -> impl IntoElement {
 /// worktree's for another.
 fn checkout_icon(checkout: &Checkout) -> Icon {
     match checkout {
-        Checkout::Own { .. } => Icon::Changes,
+        Checkout::Own { .. } | Checkout::Branch { .. } => Icon::Changes,
         Checkout::Worktree(_) => Icon::Flow,
     }
 }
@@ -1766,10 +1892,13 @@ fn tag(said: String, color: u32) -> gpui::Div {
 }
 
 /// What marks `checkout`: for a worktree, the chat Cox made it for, or
-/// that it was made by hand, and whether it is outside the tab's folder.
+/// that it was made by hand, and whether it is outside the tab's folder;
+/// for a branch no checkout has, that only its commits are seen.
 fn checkout_tags(checkout: &Checkout) -> Vec<gpui::Div> {
-    let Checkout::Worktree(worktree) = checkout else {
-        return Vec::new();
+    let worktree = match checkout {
+        Checkout::Worktree(worktree) => worktree,
+        Checkout::Branch { .. } => return vec![tag("commits only".to_owned(), FAINT)],
+        Checkout::Own { .. } => return Vec::new(),
     };
     let made = match worktree.made_for {
         Some(chat) => tag(format!("chat {chat}"), ACCENT),
@@ -1954,7 +2083,7 @@ fn follow(cx: &mut Context<Changes>) -> Task<()> {
 /// meanwhile; answers whether the tab is still there.
 async fn look(this: &WeakEntity<Changes>, cx: &mut AsyncApp) -> bool {
     let Ok((folder, chosen, cwd, comparing)) = this.read_with(cx, |changes, _| {
-        let chosen = changes.checkouts.clone();
+        let chosen = (changes.checkouts.clone(), changes.branches.clone());
         let comparing = changes.comparing.clone();
         (
             changes.folder.clone(),
@@ -1971,22 +2100,36 @@ async fn look(this: &WeakEntity<Changes>, cx: &mut AsyncApp) -> bool {
     let (read, histories, kept_as, kept) = cx
         .background_executor()
         .spawn(async move {
-            let read = repositories::read(&folder, &chosen, &cwd);
-            let (kept_as, kept) = kept_bases(store.as_deref(), &folder, &read);
+            let (checkouts, branches) = &chosen;
+            let kept = KeptBases::read(store.as_deref(), &folder);
+            let compared = |name: Option<&str>| match comparing.get(&name.map(str::to_owned)) {
+                Some(chosen) => chosen.clone(),
+                None => kept.base(&folder, name),
+            };
+            let read = repositories::read(&folder, checkouts, branches, &cwd, &compared);
+            let kept_as: Vec<Option<KeptAs>> = read
+                .iter()
+                .map(|repository| kept.kept_as(&folder, repository.name.as_deref()))
+                .collect();
+            let kept: Vec<Option<String>> = read
+                .iter()
+                .map(|repository| kept.base(&folder, repository.name.as_deref()))
+                .collect();
             let histories = read
                 .iter()
-                .zip(&kept)
-                .map(|(repository, kept)| {
+                .map(|repository| {
                     let checkout = repository.checkout()?;
-                    let base = comparing.get(&repository.name).unwrap_or(kept);
-                    commits::history_with(checkout.folder(), base.as_deref()).ok()
+                    let base = compared(repository.name.as_deref());
+                    commits::history_of(checkout.folder(), checkout.branch(), base.as_deref()).ok()
                 })
                 .collect::<Vec<_>>();
             (read, histories, kept_as, kept)
         })
         .await;
-    let still =
-        |changes: &Changes| (&changes.checkouts, &changes.comparing) == (&asked.0, &asked.1);
+    let still = |changes: &Changes| {
+        (&changes.checkouts, &changes.branches, &changes.comparing)
+            == (&asked.0.0, &asked.0.1, &asked.1)
+    };
     let Ok(changed) = this.update(cx, |changes, cx| {
         if !still(changes) {
             return false;
@@ -2020,7 +2163,7 @@ async fn look(this: &WeakEntity<Changes>, cx: &mut AsyncApp) -> bool {
         })
         .await;
     this.update(cx, |changes, cx| {
-        if changes.checkouts == asked.0 {
+        if (&changes.checkouts, &changes.branches) == (&asked.0.0, &asked.0.1) {
             changes.looked(read, looks, cx);
         }
     })
@@ -2032,41 +2175,58 @@ async fn look(this: &WeakEntity<Changes>, cx: &mut AsyncApp) -> bool {
 /// [`repositories::directory_of`]).
 type KeptAs = (PathBuf, String);
 
-/// The project's folder and directory the store at `store` keeps what the
-/// human chose of each repository of `read`, of the tab of `folder`, by,
-/// if it is a project's, and the branch the human chose to compare it
-/// with there, if they chose one; none of either where the store cannot
-/// be read.
-fn kept_bases(
-    store: Option<&Path>,
-    folder: &Path,
-    read: &[Repository],
-) -> (Vec<Option<KeptAs>>, Vec<Option<String>>) {
-    let store = store.and_then(|store| cox_core::store::Store::read(store).ok());
-    let projects: Vec<PathBuf> = store
-        .as_ref()
-        .and_then(|store| store.projects().ok())
-        .map_or_default(|projects| projects.into_iter().map(|project| project.folder).collect());
-    let kept_as: Vec<Option<KeptAs>> = read
-        .iter()
-        .map(|repository| repositories::directory_of(&projects, folder, repository.name.as_deref()))
-        .collect();
-    let mut bases: HashMap<PathBuf, Vec<(String, String)>> = HashMap::new();
-    let kept = kept_as
-        .iter()
-        .map(|kept_as| {
-            let (project, directory) = kept_as.as_ref()?;
-            let store = store.as_ref()?;
-            let of_project = bases
-                .entry(project.clone())
-                .or_insert_with(|| store.bases(project).unwrap_or_default());
-            of_project
-                .iter()
-                .find(|(named, _)| named == directory)
-                .map(|(_, base)| base.clone())
-        })
-        .collect();
-    (kept_as, kept)
+/// What the store keeps of the branches the human chose to compare the
+/// repositories of a tab with: the folders of the projects, and the
+/// branches chosen for the directories of those its repositories can be
+/// of, by their folders.
+struct KeptBases {
+    projects: Vec<PathBuf>,
+    bases: Vec<(PathBuf, Vec<(String, String)>)>,
+}
+
+impl KeptBases {
+    /// What the store at `store` keeps of the repositories of the tab of
+    /// `folder`: nothing where it cannot be read.
+    fn read(store: Option<&Path>, folder: &Path) -> Self {
+        let store = store.and_then(|store| cox_core::store::Store::read(store).ok());
+        let projects: Vec<PathBuf> = store
+            .as_ref()
+            .and_then(|store| store.projects().ok())
+            .map_or_default(|projects| {
+                projects.into_iter().map(|project| project.folder).collect()
+            });
+        let mut bases: Vec<(PathBuf, Vec<(String, String)>)> = Vec::new();
+        if let Some(store) = &store {
+            // The project of the folder, whose directories they are, or
+            // the one the folder is a worktree of a directory of.
+            let of =
+                [Some(""), None].map(|name| repositories::directory_of(&projects, folder, name));
+            for (project, _) in of.into_iter().flatten() {
+                if !bases.iter().any(|(kept, _)| *kept == project) {
+                    let chosen = store.bases(&project).unwrap_or_default();
+                    bases.push((project, chosen));
+                }
+            }
+        }
+        Self { projects, bases }
+    }
+
+    /// The project's folder and directory the repository `name` of the
+    /// tab of `folder` is kept as, if it is a project's.
+    fn kept_as(&self, folder: &Path, name: Option<&str>) -> Option<KeptAs> {
+        repositories::directory_of(&self.projects, folder, name)
+    }
+
+    /// The branch the human chose to compare the repository `name` of the
+    /// tab of `folder` with, as the store keeps it, if they chose one.
+    fn base(&self, folder: &Path, name: Option<&str>) -> Option<String> {
+        let (project, directory) = self.kept_as(folder, name)?;
+        let (_, bases) = self.bases.iter().find(|(kept, _)| *kept == project)?;
+        bases
+            .iter()
+            .find(|(named, _)| *named == directory)
+            .map(|(_, base)| base.clone())
+    }
 }
 
 /// The head of the card of `file`, at `row` of the tab: how it changed,
@@ -2358,6 +2518,7 @@ impl Shows for Changes {
         KeptTab::Changes {
             folder: self.folder.clone(),
             checkouts: self.checkouts.clone(),
+            branches: self.branches.clone(),
         }
     }
 }

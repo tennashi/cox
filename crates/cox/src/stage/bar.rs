@@ -92,6 +92,17 @@ const ACTIVITY: &str = "activity";
 /// Which of the views a project may not have it has: a map, or a Git
 /// repository to show what changed in, its own or among its directories,
 /// or a tab of it open already.
+/// What of each repository of a stage's folder the human chose to see on
+/// its tab of what changed (see [`Stage::seen_on_changes`]).
+#[derive(Default)]
+struct Seen {
+    checkouts: Vec<coxd::repositories::Chosen>,
+    branches: Vec<coxd::repositories::ChosenBranch>,
+    /// The branch each repository is compared with, by its name, if the
+    /// human chose one.
+    compared: Vec<(Option<String>, Option<String>)>,
+}
+
 #[derive(Clone, Copy)]
 struct Present {
     map: bool,
@@ -99,15 +110,21 @@ struct Present {
 }
 
 impl Stage {
-    /// The checkout of each repository of the stage's folder the human
-    /// chose to see on its tab of what changed, if it has one, which the
-    /// bar counts the files changed in.
-    fn checkouts_chosen(&self, cx: &App) -> Vec<coxd::repositories::Chosen> {
+    /// What of each repository of the stage's folder the human chose to
+    /// see on its tab of what changed, if it has one, which the bar counts
+    /// the files changed in: the checkout, or the branch no checkout has,
+    /// and the branch it is compared with.
+    fn seen_on_changes(&self, cx: &App) -> Seen {
         self.tabs
             .iter()
             .find_map(|tab| match &tab.content {
                 TabContent::Changes(changes) if changes.read(cx).folder() == self.cwd => {
-                    Some(changes.read(cx).checkouts().to_vec())
+                    let changes = changes.read(cx);
+                    Some(Seen {
+                        checkouts: changes.checkouts().to_vec(),
+                        branches: changes.branches().to_vec(),
+                        compared: changes.compared(),
+                    })
                 }
                 _ => None,
             })
@@ -562,17 +579,31 @@ pub(super) fn count_changes(cx: &mut Context<Stage>) -> Task<()> {
                     .panel
                     .read(cx)
                     .is_open()
-                    .then(|| (stage.cwd.clone(), stage.checkouts_chosen(cx)))
+                    .then(|| (stage.cwd.clone(), stage.seen_on_changes(cx)))
             }) else {
                 break;
             };
-            if let Some((cwd, chosen)) = open {
+            if let Some((cwd, seen)) = open {
                 let (changed, mapped, waiting) = cx
                     .background_executor()
                     .spawn(async move {
                         let mapped = !cox_editor::map::list(&cwd).is_empty();
                         let waiting = super::activity::waiting(&cwd);
-                        let changed = coxd::repositories::count(&cwd, &chosen, &cwd).ok();
+                        let compared = |name: Option<&str>| {
+                            let (_, base) = seen
+                                .compared
+                                .iter()
+                                .find(|(named, _)| named.as_deref() == name)?;
+                            base.clone()
+                        };
+                        let changed = coxd::repositories::count(
+                            &cwd,
+                            &seen.checkouts,
+                            &seen.branches,
+                            &cwd,
+                            &compared,
+                        )
+                        .ok();
                         (changed, mapped, waiting)
                     })
                     .await;
