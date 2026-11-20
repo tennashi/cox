@@ -15,7 +15,7 @@ use std::time::{Duration, SystemTime};
 use anyhow::{Context as _, bail};
 use rusqlite::{Connection, OptionalExtension as _, params};
 
-use crate::entry::{Entry, QuestionAnswer, Step, ToolCallResult};
+use crate::entry::{Entry, Step, ToolCallResult};
 use crate::goal::Goal;
 use crate::moved::Moved;
 use crate::settings::Setting;
@@ -609,24 +609,6 @@ pub struct Said {
     pub number: usize,
 }
 
-/// A question an agent asked in a chat, which the human answered by
-/// choosing or in their own words, as [`Store::answered`] reads it.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct KeptAnswer {
-    pub chat: ChatId,
-    /// The name of the chat it was asked in, as it is now.
-    pub name: String,
-    /// The folder of the chat's project, or `None` for Cox's own.
-    pub project: Option<PathBuf>,
-    /// The folder the chat works in, when it is not its project's.
-    pub folder: Option<PathBuf>,
-    /// When it was answered, or asked where an older Cox kept no time of
-    /// the answer, in milliseconds since the epoch.
-    pub at: i64,
-    /// The [`Entry::Question`], with its answer.
-    pub entry: Entry,
-}
-
 /// Where a chat's name came from, from the name that gives way most
 /// readily to the one that lasts most: a chat is named by a number when
 /// it opens, then after the first line the human sends, then by the title
@@ -1208,61 +1190,6 @@ impl Store {
         entries
             .map(|entry| Ok(serde_json::from_str(&entry?)?))
             .collect()
-    }
-
-    /// The questions agents asked in any chat that the human answered,
-    /// the last answered first, each with the chat it was asked in. A
-    /// question declined, or still asked, is not one of them.
-    ///
-    /// # Errors
-    ///
-    /// When the database cannot be read.
-    pub fn answered(&self) -> anyhow::Result<Vec<KeptAnswer>> {
-        // The JSON of an entry starts with its kind, as `{"question":`.
-        let mut statement = self.connection.prepare(
-            r#"SELECT entries.chat, chats.name, projects.folder, chats.folder, entries.at,
-             entries.entry
-             FROM entries JOIN chats ON chats.id = entries.chat
-             LEFT JOIN projects ON projects.id = chats.project
-             WHERE entries.entry LIKE '{"question":%' AND entries.entry LIKE '%"given":%'
-             ORDER BY entries.at DESC"#,
-        )?;
-        let rows = statement.query_map([], |row| {
-            Ok((
-                row.get::<_, String>(5)?,
-                ChatId(row.get(0)?),
-                row.get(1)?,
-                row.get::<_, Option<String>>(2)?,
-                row.get::<_, Option<String>>(3)?,
-                row.get(4)?,
-            ))
-        })?;
-        let mut answered = Vec::new();
-        for row in rows {
-            let (entry, chat, name, project, folder, at) = row?;
-            // An entry a newer Cox wrote, which this one cannot read, is
-            // left out rather than leaving out all the rest.
-            let Ok(entry) = serde_json::from_str::<Entry>(&entry) else {
-                continue;
-            };
-            if let Entry::Question {
-                answer: Some(QuestionAnswer::Given(_)),
-                answered_at,
-                ..
-            } = entry
-            {
-                answered.push(KeptAnswer {
-                    chat,
-                    name,
-                    project: project.map(PathBuf::from),
-                    folder: folder.map(PathBuf::from),
-                    at: answered_at.unwrap_or(at),
-                    entry,
-                });
-            }
-        }
-        answered.sort_by_key(|kept| std::cmp::Reverse(kept.at));
-        Ok(answered)
     }
 
     /// Keeps `entry` as the `number`th of `chat`, from 0, in place of what
@@ -2321,92 +2248,6 @@ mod tests {
             chats,
             [(first, Some(notes)), (second, None), (third, Some(cox))]
         );
-    }
-
-    #[test]
-    fn reads_the_questions_the_human_answered_the_last_answered_first() {
-        use crate::entry::{Picked, Question, QuestionOption};
-
-        let scratch = scratch();
-        let path = scratch.path().join("chats.sqlite");
-        let store = Store::open(&path).unwrap();
-        let app = store.project(Path::new("/src/app"), "app").unwrap();
-        let first = store.add_chat(Some(app), "plan").unwrap();
-        let second = store.add_chat(None, "home").unwrap();
-        let question = |answer, answered_at| Entry::Question {
-            message: "Which way?".to_owned(),
-            questions: vec![Question {
-                options: vec![QuestionOption {
-                    label: "Derive".to_owned(),
-                    description: Some("One source of truth".to_owned()),
-                }],
-                ..Question::default()
-            }],
-            answer,
-            answered_at,
-        };
-        let given = || {
-            Some(QuestionAnswer::Given(vec![Picked {
-                chosen: vec![0],
-                other: None,
-            }]))
-        };
-        store
-            .keep_entry(first, 0, &Entry::Human("plan it".to_owned()))
-            .unwrap();
-        // The first chat's question was asked first and answered last;
-        // the second's answer was kept by a Cox that kept no time of it.
-        store
-            .keep_entry(first, 1, &question(given(), Some(1000)))
-            .unwrap();
-        store
-            .keep_entry(
-                first,
-                2,
-                &question(Some(QuestionAnswer::Declined), Some(1001)),
-            )
-            .unwrap();
-        store.keep_entry(first, 3, &question(None, None)).unwrap();
-        store
-            .keep_entry(second, 0, &question(given(), None))
-            .unwrap();
-        store
-            .keep_folder(second, Some(Path::new("/elsewhere")))
-            .unwrap();
-        store
-            .connection
-            .execute("UPDATE entries SET at = number + chat * 10", [])
-            .unwrap();
-
-        let answered = Store::read(&path).unwrap().answered().unwrap();
-
-        let read: Vec<_> = answered
-            .iter()
-            .map(|kept| {
-                (
-                    kept.chat,
-                    kept.name.as_str(),
-                    kept.project.clone(),
-                    kept.folder.clone(),
-                    kept.at,
-                )
-            })
-            .collect();
-        assert_eq!(
-            read,
-            [
-                (first, "plan", Some(PathBuf::from("/src/app")), None, 1000),
-                (
-                    second,
-                    "home",
-                    None,
-                    Some(PathBuf::from("/elsewhere")),
-                    second.0 * 10
-                ),
-            ]
-        );
-        assert_eq!(answered[0].entry, question(given(), Some(1000)));
-        assert!(Store::read(&scratch.path().join("none.sqlite")).is_err());
     }
 
     #[test]
