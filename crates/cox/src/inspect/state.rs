@@ -446,7 +446,11 @@ fn tabs(told: &mut String, view: &ChatView, cx: &App) {
                 None => format!("file {}", path.display()),
             },
             KeptTab::Files { .. } => "files, no file chosen".to_owned(),
-            KeptTab::Changes { folder, checkouts } => {
+            KeptTab::Changes {
+                folder,
+                checkouts,
+                branches,
+            } => {
                 let mut what = format!("changes in {}", folder.display());
                 for (name, checkout) in checkouts {
                     let _ = write!(
@@ -454,6 +458,13 @@ fn tabs(told: &mut String, view: &ChatView, cx: &App) {
                         ", {} in {}",
                         name.as_deref().unwrap_or("its repository"),
                         checkout.display()
+                    );
+                }
+                for (name, branch) in branches {
+                    let _ = write!(
+                        what,
+                        ", {} on branch {branch}",
+                        name.as_deref().unwrap_or("its repository")
                     );
                 }
                 what

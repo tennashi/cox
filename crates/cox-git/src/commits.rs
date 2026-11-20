@@ -4,7 +4,9 @@
 //! the one it came from, or else the last few. The branch it came from is
 //! the one the human chose to compare the repository's work with, kept in
 //! its config as [`BASE`], which its worktrees share, or else the remote's
-//! default branch, or its upstream.
+//! default branch, or its upstream. A branch no worktree has checked out is
+//! read so too, from another of the repository's worktrees, but for what
+//! is not committed, which it has none of (see [`history_of`]).
 //!
 //! As a turn of a chat ends, Cox marks each commit its agent made in it with
 //! the turn, in a note of Git's of its own, [`NOTES`], which Git keeps
@@ -152,14 +154,30 @@ impl Base {
 ///
 /// When `folder` is not in a Git repository, with what Git said.
 pub fn history(folder: &Path) -> Result<History, String> {
+    history_of(folder, None)
+}
+
+/// The commits of the branch `branch` of the repository `folder` is in,
+/// or, with none, of the branch checked out there (see the module's doc).
+///
+/// # Errors
+///
+/// When `folder` is not in a Git repository, with what Git said.
+pub fn history_of(folder: &Path, branch: Option<&str>) -> Result<History, String> {
     let top = PathBuf::from(git::raw(folder, &["rev-parse", "--show-toplevel"])?.trim());
-    let (base, after) = base(&top);
+    let (base, after) = base(&top, branch);
+    let tip = branch.unwrap_or("HEAD");
     let commits = match (&base, after) {
-        (_, Some(after)) => log(&top, &[&format!("{after}..HEAD")], MOST),
-        (Base::Recent, None) => log(&top, &["HEAD"], RECENT),
-        (_, None) => log(&top, &["HEAD"], MOST),
+        (_, Some(after)) => log(&top, &[&format!("{after}..{tip}")], MOST),
+        (Base::Recent, None) => log(&top, &[tip], RECENT),
+        (_, None) => log(&top, &[tip], MOST),
     };
-    let commits = with_earlier(&top, commits);
+    // What a commit was before it was amended is in the reflog of the
+    // `HEAD` of the worktree it was amended in.
+    let commits = match branch {
+        None => with_earlier(&top, commits),
+        Some(_) => commits,
+    };
     let chosen = chosen_base(&top);
     Ok(History {
         top,
@@ -235,19 +253,22 @@ fn default_branch(top: &Path) -> Option<String> {
     .filter(|name| !name.is_empty() && name != "refs/remotes/origin/HEAD")
 }
 
-/// Where the branch checked out at `top` left `other`, by its full name,
-/// if Git can tell.
-fn merge_base(top: &Path, other: &str) -> Option<String> {
-    git::raw(top, &["merge-base", "HEAD", other])
+/// Where `tip`, a branch or `HEAD`, of the repository at `top` left
+/// `other`, by its full name, if Git can tell.
+fn merge_base(top: &Path, tip: &str, other: &str) -> Option<String> {
+    git::raw(top, &["merge-base", tip, other])
         .ok()
         .map(|at| at.trim().to_owned())
         .filter(|at| !at.is_empty())
 }
 
 /// Where the commits of the worktree at `top` start, and the commit they
-/// start after, if they do not start at its first.
-fn base(top: &Path) -> (Base, Option<String>) {
-    if let Some(start) = commit(top, changes::START) {
+/// start after, if they do not start at its first; or those of the branch
+/// `branch`, if given, which is no sketch.
+fn base(top: &Path, branch: Option<&str>) -> (Base, Option<String>) {
+    if branch.is_none()
+        && let Some(start) = commit(top, changes::START)
+    {
         let is_commit = commit(top, &format!("{start}^{{commit}}")).is_some();
         return if is_commit {
             (Base::Start(short(&start)), Some(start))
@@ -255,12 +276,13 @@ fn base(top: &Path) -> (Base, Option<String>) {
             (Base::Nothing, None)
         };
     }
-    let Some(head) = commit(top, "HEAD") else {
+    let tip = branch.unwrap_or("HEAD");
+    let Some(head) = commit(top, tip) else {
         return (Base::Recent, None);
     };
     // The branch the human chose, even where the work is at it.
     if let Some(chosen) = chosen_base(top)
-        && let Some(at) = merge_base(top, &chosen)
+        && let Some(at) = merge_base(top, tip, &chosen)
     {
         return (
             Base::Branched {
@@ -277,7 +299,7 @@ fn base(top: &Path) -> (Base, Option<String>) {
             "rev-parse",
             "--abbrev-ref",
             "--symbolic-full-name",
-            "@{upstream}",
+            &format!("{}@{{upstream}}", branch.unwrap_or_default()),
         ],
     )
     .ok()
@@ -287,7 +309,7 @@ fn base(top: &Path) -> (Base, Option<String>) {
         .chain(["origin/main".to_owned(), "origin/master".to_owned()])
         .chain(upstream);
     for other in others {
-        let Some(at) = merge_base(top, &other) else {
+        let Some(at) = merge_base(top, tip, &other) else {
             continue;
         };
         if at != head {
@@ -313,11 +335,26 @@ fn base(top: &Path) -> (Base, Option<String>) {
 /// When `folder` is not in a Git repository, or Git cannot tell what
 /// changed, with what Git said.
 pub fn everything(folder: &Path) -> Result<Option<Diff>, String> {
+    everything_of(folder, None)
+}
+
+/// Everything the branch `branch` of the repository `folder` is in
+/// committed since it left the one it is compared with, as one; or, with
+/// none, everything that changed there (see [`everything`]).
+///
+/// # Errors
+///
+/// When `folder` is not in a Git repository, or Git cannot tell what
+/// changed, with what Git said.
+pub fn everything_of(folder: &Path, branch: Option<&str>) -> Result<Option<Diff>, String> {
     let top = PathBuf::from(git::raw(folder, &["rev-parse", "--show-toplevel"])?.trim());
-    match base(&top) {
-        (Base::Start(_) | Base::Nothing, _) => changes::read(folder).map(Some),
-        (Base::Branched { from, at }, Some(after)) => {
+    match (base(&top, branch), branch) {
+        ((Base::Start(_) | Base::Nothing, _), _) => changes::read(folder).map(Some),
+        ((Base::Branched { from, at }, Some(after)), None) => {
             changes::read_from(top, Since::Branched { from, at }, &after).map(Some)
+        }
+        ((Base::Branched { from, at }, Some(after)), Some(branch)) => {
+            between(top, &after, branch, Since::Branched { from, at }).map(Some)
         }
         _ => Ok(None),
     }
@@ -786,6 +823,31 @@ mod tests {
         assert_eq!(history(&folder).unwrap().chosen, None);
         // With none chosen, there is nothing to forget.
         choose_base(&folder, None).unwrap();
+    }
+
+    #[test]
+    fn a_branch_no_worktree_has_is_read_from_another() {
+        let origin = repository();
+        let folder = Folder::new();
+        run(
+            &origin,
+            &["clone", "--quiet", ".", folder.to_str().unwrap()],
+        );
+        run(&folder, &["checkout", "--quiet", "-b", "side"]);
+        write_and_commit(&folder, "s.txt", "s\n", "Side");
+        run(&folder, &["checkout", "--quiet", "main"]);
+        std::fs::write(folder.join("w.txt"), "w\n").unwrap();
+
+        let side = history_of(&folder, Some("side")).unwrap();
+
+        assert!(matches!(&side.base, Base::Branched { from, .. } if from == "origin/main"));
+        let subjects: Vec<_> = side.commits.iter().map(|c| c.subject.as_str()).collect();
+        assert_eq!(subjects, ["Side"]);
+        // What it committed, not what the checkout it is read from changed.
+        let everything = everything_of(&folder, Some("side")).unwrap().unwrap();
+        let paths: Vec<_> = everything.files.iter().map(|f| f.path.clone()).collect();
+        assert_eq!(paths, [PathBuf::from("s.txt")]);
+        assert_eq!(history(&folder).unwrap().base, Base::Recent);
     }
 
     #[test]
