@@ -12,7 +12,7 @@ use cox_core::tabs::Lines;
 use gpui::{Context, EventEmitter, Focusable as _, Subscription, Window, prelude::*};
 
 use crate::stage::Stage;
-use crate::stage::changes::{self, Changes, ShowTurn};
+use crate::stage::changes::{self, Changes, CompareWith, ShowTurn};
 use crate::stage::code::Code;
 use crate::stage::document::Document;
 use crate::stage::flow::{self, Flow};
@@ -23,6 +23,7 @@ use crate::ui::markdown::FileLink;
 use coxd::home::{expanded_in, home};
 
 impl EventEmitter<ShowTurn> for Stage {}
+impl EventEmitter<CompareWith> for Stage {}
 
 impl Stage {
     /// Shows the file at `path`, which says `text`, as a `T` shows it, at
@@ -329,7 +330,11 @@ impl Stage {
         let turns = cx.subscribe(&shown, |_, _, &ShowTurn { chat, entry }, cx| {
             cx.emit(ShowTurn { chat, entry });
         });
-        let opens = Subscription::join(opens, turns);
+        // What the human compares a directory with, coxd keeps.
+        let compares = cx.subscribe(&shown, |_, _, compare: &CompareWith, cx| {
+            cx.emit(compare.clone());
+        });
+        let opens = Subscription::join(opens, Subscription::join(turns, compares));
         self.push(TabContent::Changes(shown), changes, Some(opens), show, cx);
     }
 

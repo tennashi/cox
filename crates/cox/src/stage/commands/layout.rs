@@ -1,5 +1,6 @@
-//! A command an agent ran, laid out for the human to read on the Commands
-//! page: a long line of shell, as an agent writes it, broken into rows at
+//! A command an agent ran, laid out for the human to read in a chat's
+//! story on the Activity page: a long line of shell, as an agent writes it,
+//! broken into rows at
 //! its `&&`, `||` and `;`, and at its `|` when the pipeline is long, the
 //! bodies of its loops and `if`s indented, what it feeds a program as a
 //! heredoc or a script folded behind a count of its lines, and colored as
@@ -107,7 +108,7 @@ pub fn told(line: &str, folder: &Path, home: Option<&Path>) -> Value {
 /// The row of the command `line` that says most of what it does, on one
 /// line: the first that neither goes to a folder, as `cd`, nor only sets
 /// up the environment, without what joins it to the row before, and its
-/// folds as `…`. The Commands page picks its gist of a command as so.
+/// folds as `…`. The Activity page shows a command short by its gist.
 #[must_use]
 pub fn gist(line: &str) -> String {
     let first_line = || line.lines().next().unwrap_or_default().trim().to_owned();

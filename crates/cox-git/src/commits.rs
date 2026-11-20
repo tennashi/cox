@@ -2,11 +2,11 @@
 //! as Git tells them: in a sketch, those since it started (see
 //! [`crate::changes::START`]); elsewhere, those of the branch since it left
 //! the one it came from, or else the last few. The branch it came from is
-//! the one the human chose to compare the repository's work with, kept in
-//! its config as [`BASE`], which its worktrees share, or else the remote's
-//! default branch, or its upstream. A branch no worktree has checked out is
-//! read so too, from another of the repository's worktrees, but for what
-//! is not committed, which it has none of (see [`history_of`]).
+//! the one the human chose to compare the repository's work with, which
+//! Cox keeps apart from the repository (see [`history_of`]), or else the
+//! remote's default branch, or its upstream. A branch no worktree has
+//! checked out is read so too, from another of the repository's
+//! worktrees, but for what is not committed, which it has none of.
 //!
 //! As a turn of a chat ends, Cox marks each commit its agent made in it with
 //! the turn, in a note of Git's of its own, [`NOTES`], which Git keeps
@@ -26,10 +26,6 @@ use crate::git;
 /// The notes Cox marks commits with the turn they were made in.
 pub const NOTES: &str = "refs/notes/cox";
 
-/// The key of a repository's config that names the branch the human chose
-/// to compare its work with.
-pub const BASE: &str = "cox.base";
-
 /// The most branches offered to compare with, the newest.
 const BASES: usize = 40;
 
@@ -47,8 +43,8 @@ pub struct History {
     /// Where the commits read start, after.
     pub base: Base,
     /// The branch the human chose to compare the work with, if they chose
-    /// one (see [`BASE`]), which `base` is from unless Git cannot tell
-    /// where the branch left it.
+    /// one, which `base` is from unless Git cannot tell where the branch
+    /// left it.
     pub chosen: Option<String>,
     /// The commits, newest first.
     pub commits: Vec<Commit>,
@@ -154,18 +150,24 @@ impl Base {
 ///
 /// When `folder` is not in a Git repository, with what Git said.
 pub fn history(folder: &Path) -> Result<History, String> {
-    history_of(folder, None)
+    history_of(folder, None, None)
 }
 
 /// The commits of the branch `branch` of the repository `folder` is in,
-/// or, with none, of the branch checked out there (see the module's doc).
+/// or, with none, of the branch checked out there, compared with the
+/// branch `chosen`, as the human chose it, or, with none, with the one
+/// Cox finds (see the module's doc).
 ///
 /// # Errors
 ///
 /// When `folder` is not in a Git repository, with what Git said.
-pub fn history_of(folder: &Path, branch: Option<&str>) -> Result<History, String> {
+pub fn history_of(
+    folder: &Path,
+    branch: Option<&str>,
+    chosen: Option<&str>,
+) -> Result<History, String> {
     let top = PathBuf::from(git::raw(folder, &["rev-parse", "--show-toplevel"])?.trim());
-    let (base, after) = base(&top, branch);
+    let (base, after) = base(&top, branch, chosen);
     let tip = branch.unwrap_or("HEAD");
     let commits = match (&base, after) {
         (_, Some(after)) => log(&top, &[&format!("{after}..{tip}")], MOST),
@@ -178,37 +180,12 @@ pub fn history_of(folder: &Path, branch: Option<&str>) -> Result<History, String
         None => with_earlier(&top, commits),
         Some(_) => commits,
     };
-    let chosen = chosen_base(&top);
     Ok(History {
         top,
         base,
-        chosen,
+        chosen: chosen.map(str::to_owned),
         commits,
     })
-}
-
-/// The branch the human chose to compare the work of the repository
-/// `folder` is in with, if they chose one (see [`BASE`]).
-#[must_use]
-pub fn chosen_base(folder: &Path) -> Option<String> {
-    git::run(folder, &["config", "--get", BASE])
-        .ok()
-        .filter(|chosen| !chosen.is_empty())
-}
-
-/// Compares the work of the repository `folder` is in with the branch
-/// `base`, as the human chose it, or, with none, with the branch Cox
-/// finds (see the module's doc).
-///
-/// # Errors
-///
-/// When Git cannot keep it, with what Git said.
-pub fn choose_base(folder: &Path, base: Option<&str>) -> Result<(), String> {
-    match base {
-        Some(base) => git::run(folder, &["config", BASE, base]).map(drop),
-        None if chosen_base(folder).is_none() => Ok(()),
-        None => git::run(folder, &["config", "--unset", BASE]).map(drop),
-    }
 }
 
 /// The branches the work of the repository `folder` is in can be compared
@@ -263,9 +240,10 @@ fn merge_base(top: &Path, tip: &str, other: &str) -> Option<String> {
 }
 
 /// Where the commits of the worktree at `top` start, and the commit they
-/// start after, if they do not start at its first; or those of the branch
+/// start after, if they do not start at its first, after where they left
+/// the branch `chosen`, if the human chose one; or those of the branch
 /// `branch`, if given, which is no sketch.
-fn base(top: &Path, branch: Option<&str>) -> (Base, Option<String>) {
+fn base(top: &Path, branch: Option<&str>, chosen: Option<&str>) -> (Base, Option<String>) {
     if branch.is_none()
         && let Some(start) = commit(top, changes::START)
     {
@@ -281,12 +259,12 @@ fn base(top: &Path, branch: Option<&str>) -> (Base, Option<String>) {
         return (Base::Recent, None);
     };
     // The branch the human chose, even where the work is at it.
-    if let Some(chosen) = chosen_base(top)
-        && let Some(at) = merge_base(top, tip, &chosen)
+    if let Some(chosen) = chosen
+        && let Some(at) = merge_base(top, tip, chosen)
     {
         return (
             Base::Branched {
-                from: chosen,
+                from: chosen.to_owned(),
                 at: short(&at),
             },
             Some(at),
@@ -335,20 +313,26 @@ fn base(top: &Path, branch: Option<&str>) -> (Base, Option<String>) {
 /// When `folder` is not in a Git repository, or Git cannot tell what
 /// changed, with what Git said.
 pub fn everything(folder: &Path) -> Result<Option<Diff>, String> {
-    everything_of(folder, None)
+    everything_of(folder, None, None)
 }
 
 /// Everything the branch `branch` of the repository `folder` is in
 /// committed since it left the one it is compared with, as one; or, with
-/// none, everything that changed there (see [`everything`]).
+/// none, everything that changed there (see [`everything`]); compared with
+/// the branch `chosen`, as the human chose it, or, with none, with the one
+/// Cox finds.
 ///
 /// # Errors
 ///
 /// When `folder` is not in a Git repository, or Git cannot tell what
 /// changed, with what Git said.
-pub fn everything_of(folder: &Path, branch: Option<&str>) -> Result<Option<Diff>, String> {
+pub fn everything_of(
+    folder: &Path,
+    branch: Option<&str>,
+    chosen: Option<&str>,
+) -> Result<Option<Diff>, String> {
     let top = PathBuf::from(git::raw(folder, &["rev-parse", "--show-toplevel"])?.trim());
-    match (base(&top, branch), branch) {
+    match (base(&top, branch, chosen), branch) {
         ((Base::Start(_) | Base::Nothing, _), _) => changes::read(folder).map(Some),
         ((Base::Branched { from, at }, Some(after)), None) => {
             changes::read_from(top, Since::Branched { from, at }, &after).map(Some)
@@ -358,6 +342,36 @@ pub fn everything_of(folder: &Path, branch: Option<&str>) -> Result<Option<Diff>
         }
         _ => Ok(None),
     }
+}
+
+/// How many files the branch `branch` of the repository `folder` is in
+/// committed since it left the one it is compared with, the branch
+/// `chosen`, as the human chose it, or, with none, the one Cox finds, as
+/// [`everything_of`] reads them, without reading what changed in each.
+///
+/// # Errors
+///
+/// When `folder` is not in a Git repository, nothing tells where the
+/// branch started, or Git cannot tell what changed, with why.
+pub fn count_of(folder: &Path, branch: &str, chosen: Option<&str>) -> Result<usize, String> {
+    let top = PathBuf::from(git::raw(folder, &["rev-parse", "--show-toplevel"])?.trim());
+    let (Base::Branched { .. }, Some(after)) = base(&top, Some(branch), chosen) else {
+        return Err(format!("nothing tells where {branch} started"));
+    };
+    let names = git::raw(
+        &top,
+        &[
+            "diff",
+            "--no-ext-diff",
+            "--find-renames",
+            "--name-only",
+            "-z",
+            &after,
+            branch,
+            "--",
+        ],
+    )?;
+    Ok(names.split('\0').filter(|name| !name.is_empty()).count())
 }
 
 /// What changed in the repository `folder` is in since its last commit,
@@ -810,19 +824,18 @@ mod tests {
                 .any(|name| name == "work" || name.ends_with("HEAD"))
         );
 
-        choose_base(&folder, Some("origin/release")).unwrap();
-        let chosen = history(&folder).unwrap();
+        let chosen = history_of(&folder, None, Some("origin/release")).unwrap();
         assert!(matches!(&chosen.base, Base::Branched { from, .. } if from == "origin/release"));
         assert_eq!(chosen.commits.len(), 1);
         assert_eq!(chosen.chosen.as_deref(), Some("origin/release"));
-        let everything = everything(&folder).unwrap().unwrap();
+        let everything = everything_of(&folder, None, Some("origin/release"))
+            .unwrap()
+            .unwrap();
         let paths: Vec<_> = everything.files.iter().map(|f| f.path.clone()).collect();
         assert_eq!(paths, [PathBuf::from("w.txt")]);
-
-        choose_base(&folder, None).unwrap();
-        assert_eq!(history(&folder).unwrap().chosen, None);
-        // With none chosen, there is nothing to forget.
-        choose_base(&folder, None).unwrap();
+        // A branch Git knows nothing of: Cox finds one, as with none.
+        let unknown = history_of(&folder, None, Some("origin/gone")).unwrap();
+        assert!(matches!(&unknown.base, Base::Branched { from, .. } if from == "origin/main"));
     }
 
     #[test]
@@ -838,15 +851,17 @@ mod tests {
         run(&folder, &["checkout", "--quiet", "main"]);
         std::fs::write(folder.join("w.txt"), "w\n").unwrap();
 
-        let side = history_of(&folder, Some("side")).unwrap();
+        let side = history_of(&folder, Some("side"), None).unwrap();
 
         assert!(matches!(&side.base, Base::Branched { from, .. } if from == "origin/main"));
         let subjects: Vec<_> = side.commits.iter().map(|c| c.subject.as_str()).collect();
         assert_eq!(subjects, ["Side"]);
         // What it committed, not what the checkout it is read from changed.
-        let everything = everything_of(&folder, Some("side")).unwrap().unwrap();
+        let everything = everything_of(&folder, Some("side"), None).unwrap().unwrap();
         let paths: Vec<_> = everything.files.iter().map(|f| f.path.clone()).collect();
         assert_eq!(paths, [PathBuf::from("s.txt")]);
+        assert_eq!(count_of(&folder, "side", None), Ok(1));
+        assert!(count_of(&folder, "main", None).is_err());
         assert_eq!(history(&folder).unwrap().base, Base::Recent);
     }
 

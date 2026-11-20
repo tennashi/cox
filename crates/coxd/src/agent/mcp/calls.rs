@@ -1062,7 +1062,7 @@ fn show_changes(
     };
     let folder = fs::canonicalize(&folder)
         .map_err(|error| format!("cannot read {}: {error}", folder.display()))?;
-    let read = crate::repositories::read(&folder, &[], &[], cwd);
+    let read = crate::repositories::read(&folder, &[], &[], cwd, &|_| None);
     if !read.iter().any(|repository| repository.read.is_ok()) {
         let error = read
             .into_iter()

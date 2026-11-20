@@ -218,15 +218,18 @@ pub type Chosen = (Option<String>, PathBuf);
 pub type ChosenBranch = (Option<String>, String);
 
 /// What changed in each of the repositories of `folder` (see
-/// [`listed`]): what the branch of it `branches` names committed, or else
-/// what changed in the checkout of it `chosen` names, or else in the one
-/// `cwd` is, the folder a chat works in, or else in its own.
+/// [`listed`]): what the branch of it `branches` names committed since it
+/// left the branch `compared` gives for the repository's name, as the
+/// human chose it, or else the one Cox finds; or else what changed in the
+/// checkout of it `chosen` names, or else in the one `cwd` is, the folder
+/// a chat works in, or else in its own.
 #[must_use]
 pub fn read(
     folder: &Path,
     chosen: &[Chosen],
     branches: &[ChosenBranch],
     cwd: &Path,
+    compared: &dyn Fn(Option<&str>) -> Option<String>,
 ) -> Vec<Repository> {
     let cwd = canonical(cwd);
     listed(folder)
@@ -258,10 +261,14 @@ pub fn read(
                 .unwrap_or(0);
             let read = match checkouts.get(shown) {
                 None => Err("no checkout".to_owned()),
-                Some(Checkout::Branch { folder, name }) => {
-                    cox_git::commits::everything_of(folder, Some(name)).and_then(|read| {
-                        read.ok_or_else(|| format!("nothing tells where {name} started"))
-                    })
+                Some(Checkout::Branch {
+                    folder,
+                    name: branch,
+                }) => {
+                    let base = compared(name.as_deref());
+                    cox_git::commits::everything_of(folder, Some(branch), base.as_deref()).and_then(
+                        |read| read.ok_or_else(|| format!("nothing tells where {branch} started")),
+                    )
                 }
                 Some(checkout) => changes::read(checkout.folder()),
             };
@@ -281,17 +288,76 @@ fn canonical(path: &Path) -> PathBuf {
 }
 
 /// How many files changed in the repositories of `folder` in all (see
-/// [`of`]), as [`changes::count`] counts them.
+/// [`listed`]), as [`changes::count`] counts them, each in the checkout
+/// of it [`read`] reads, as `chosen` and `cwd` choose it, and in no other:
+/// what its other worktrees changed does not count; or, for one seen on a
+/// branch no checkout has, as `branches` chooses, the files that branch
+/// committed since it left the one `compared` gives for the repository's
+/// name. Which checkout that is, Git tells from the folder each worktree
+/// shares, without listing the worktrees, as [`listed`] does, since the
+/// bar counts again every few seconds, but for a repository seen on such
+/// a branch.
 ///
 /// # Errors
 ///
 /// When Git can tell what changed in none of them, as when `folder` is in
 /// no repository and has no directory that is one, with what Git said.
-pub fn count(folder: &Path) -> Result<usize, String> {
+pub fn count(
+    folder: &Path,
+    chosen: &[Chosen],
+    branches: &[ChosenBranch],
+    cwd: &Path,
+    compared: &dyn Fn(Option<&str>) -> Option<String>,
+) -> Result<usize, String> {
+    let found: Vec<(Option<String>, PathBuf, Option<Shared>)> = of(folder)
+        .into_iter()
+        .map(|(name, folder)| {
+            let shared = checkout_at(&folder);
+            (name, folder, shared)
+        })
+        .collect();
+    let mains: Vec<&Path> = found
+        .iter()
+        .filter_map(|(_, _, shared)| shared.as_ref())
+        .filter(|shared| shared.main)
+        .map(|shared| shared.common.as_path())
+        .collect();
+    let cwd = checkout_at(cwd).filter(|shared| shared.top == canonical(cwd));
     let mut counted = None;
     let mut failed = None;
-    for (_, folder) in of(folder) {
-        match changes::count(&folder) {
+    for (name, own, shared) in &found {
+        // A worktree of another of them counts as its checkout, if chosen.
+        if let Some(shared) = shared
+            && !shared.main
+            && mains.contains(&shared.common.as_path())
+        {
+            continue;
+        }
+        let of_it = |checkout: &Shared| {
+            shared
+                .as_ref()
+                .is_some_and(|shared| shared.common == checkout.common)
+        };
+        let branch = branches
+            .iter()
+            .find(|(named, _)| named == name)
+            .map(|(_, branch)| branch.as_str())
+            .filter(|branch| no_checkout_has(own, branch));
+        let checkout = chosen
+            .iter()
+            .find(|(named, _)| named == name)
+            .and_then(|(_, folder)| checkout_at(folder))
+            .filter(of_it)
+            .or_else(|| cwd.clone().filter(of_it))
+            .map_or_else(|| own.clone(), |checkout| checkout.top);
+        let count = match branch {
+            Some(branch) => {
+                let base = compared(name.as_deref());
+                cox_git::commits::count_of(own, branch, base.as_deref())
+            }
+            None => changes::count(&checkout),
+        };
+        match count {
             Ok(count) => *counted.get_or_insert(0) += count,
             Err(error) => {
                 failed.get_or_insert(error);
@@ -299,6 +365,89 @@ pub fn count(folder: &Path) -> Result<usize, String> {
         }
     }
     counted.ok_or_else(|| failed.unwrap_or_default())
+}
+
+/// Whether the repository whose main worktree is at `repository` has a
+/// branch `branch` that none of its worktrees has checked out (see
+/// [`checkouts`]).
+fn no_checkout_has(repository: &Path, branch: &str) -> bool {
+    let run = |args: &[&str]| cox_git::git::run(repository, args);
+    let exists = run(&[
+        "rev-parse",
+        "--verify",
+        "--quiet",
+        &format!("refs/heads/{branch}"),
+    ]);
+    let listed = run(&["worktree", "list", "--porcelain"]).unwrap_or_default();
+    let checked_out = format!("branch refs/heads/{branch}");
+    exists.is_ok() && !listed.lines().any(|line| line == checked_out)
+}
+
+/// The checkout a folder is the top of, as Git tells it.
+#[derive(Clone)]
+struct Shared {
+    /// The top of the checkout, as the file system resolves it.
+    top: PathBuf,
+    /// The folder of Git's its repository's worktrees share.
+    common: PathBuf,
+    /// Whether it is its repository's main worktree.
+    main: bool,
+}
+
+/// The project's folder and the name of its directory the repository of
+/// `folder` named `name` (see [`Repository::name`]) is, as a project in
+/// `projects`, by their folders, has it: the directory `name` of the
+/// project in `folder`; or, for none, '' of the project `folder` is, as a
+/// repository itself, or else the directory of a project whose worktree
+/// `folder` is. None when it is no project's.
+#[must_use]
+pub fn directory_of(
+    projects: &[PathBuf],
+    folder: &Path,
+    name: Option<&str>,
+) -> Option<(PathBuf, String)> {
+    let project = |folder: &Path| {
+        let folder = canonical(folder);
+        projects
+            .iter()
+            .find(|project| canonical(project) == folder)
+            .cloned()
+    };
+    if let Some(name) = name {
+        return project(folder).map(|project| (project, name.to_owned()));
+    }
+    if let Some(project) = project(folder) {
+        return Some((project, String::new()));
+    }
+    let main = checkout_at(folder)?.common.parent()?.to_owned();
+    let directories = main.parent()?;
+    if directories.file_name()? != DIRECTORIES {
+        return None;
+    }
+    let name = main.file_name()?.to_str()?.to_owned();
+    project(directories.parent()?).map(|project| (project, name))
+}
+
+/// The checkout `folder` is in, if it is in one.
+fn checkout_at(folder: &Path) -> Option<Shared> {
+    let told = cox_git::git::run(
+        folder,
+        &[
+            "rev-parse",
+            "--path-format=absolute",
+            "--show-toplevel",
+            "--git-dir",
+            "--git-common-dir",
+        ],
+    )
+    .ok()?;
+    let mut lines = told.lines().map(|line| canonical(Path::new(line)));
+    let (top, own, common) = (lines.next()?, lines.next()?, lines.next()?);
+    Some(Shared {
+        top,
+        main: own == common,
+        common,
+    })
 }
 
 /// How each file that changed in the repositories of `folder` changed,
@@ -369,12 +518,12 @@ mod tests {
         repository_with_a_new_file(&project.join(DIRECTORIES).join("app"));
         repository_with_a_new_file(&project.join(DIRECTORIES).join("lib"));
 
-        assert_eq!(count(&project), Ok(2));
+        assert_eq!(count(&project, &[], &[], &project, &|_| None), Ok(2));
     }
 
     #[test]
     fn a_folder_in_no_repository_has_no_count_of_what_changed() {
-        assert!(count(Path::new("/")).is_err());
+        assert!(count(Path::new("/"), &[], &[], Path::new("/"), &|_| None).is_err());
     }
 
     #[test]
@@ -478,13 +627,14 @@ mod tests {
                 .collect()
         };
 
-        let own = read(&project, &[], &[], &project);
-        let chats = read(&project, &[], &[], &search);
+        let own = read(&project, &[], &[], &project, &|_| None);
+        let chats = read(&project, &[], &[], &search, &|_| None);
         let chosen = read(
             &project,
             &[(Some("app".to_owned()), app.clone())],
             &[],
             &search,
+            &|_| None,
         );
 
         assert_eq!(paths(&own), [(0, vec![PathBuf::from("own.txt")])]);
@@ -506,8 +656,6 @@ mod tests {
         run_git(&app, &["add", "side.txt"]).unwrap();
         run_git(&app, &["commit", "--quiet", "-m", "side"]).unwrap();
         run_git(&app, &["checkout", "--quiet", "main"]).unwrap();
-        // Compared with `main`, which it left.
-        run_git(&app, &["config", cox_git::commits::BASE, "main"]).unwrap();
         worktree(&app, &project.join("worktrees/app/search"), "search");
         std::fs::write(app.join("own.txt"), "own\n").unwrap();
 
@@ -515,11 +663,13 @@ mod tests {
             .iter()
             .map(Checkout::label)
             .collect();
+        // Compared with `main`, which it left, as the human chose.
         let read = read(
             &project,
             &[],
             &[(Some("app".to_owned()), "side".to_owned())],
             &project,
+            &|_| Some("main".to_owned()),
         );
 
         // `main` and `search` are checked out; `side` is not.
@@ -534,6 +684,80 @@ mod tests {
             .map(|file| file.path.clone())
             .collect();
         assert_eq!(paths, [PathBuf::from("side.txt")]);
+        // The bar counts what it committed, not what its own checkout
+        // changed.
+        let side = [(Some("app".to_owned()), "side".to_owned())];
+        let main = |_: Option<&str>| Some("main".to_owned());
+        assert_eq!(count(&project, &[], &side, &project, &main), Ok(1));
+        assert_eq!(count(&project, &[], &[], &project, &main), Ok(1));
+        // A branch a worktree has checked out counts as none chosen.
+        let search = [(Some("app".to_owned()), "search".to_owned())];
+        std::fs::write(app.join("more.txt"), "more\n").unwrap();
+        assert_eq!(count(&project, &[], &search, &project, &main), Ok(2));
+    }
+
+    #[test]
+    fn only_the_checkout_read_counts() {
+        let project = TempDir::new();
+        let app = project.join(DIRECTORIES).join("app");
+        committed(&app);
+        let hotfix = project.join(DIRECTORIES).join("app-hotfix");
+        worktree(&app, &hotfix, "hotfix");
+        let search = project.join("worktrees/app/search");
+        worktree(&app, &search, "search");
+        std::fs::write(app.join("own.txt"), "own\n").unwrap();
+        std::fs::write(hotfix.join("h.txt"), "h\n").unwrap();
+        for name in ["s.txt", "t.txt"] {
+            std::fs::write(search.join(name), "s\n").unwrap();
+        }
+        let chosen = |folder: &Path| [(Some("app".to_owned()), folder.to_owned())];
+
+        // Its own checkout, not the worktree among the directories.
+        assert_eq!(count(&project, &[], &[], &project, &|_| None), Ok(1));
+        // The one the chat works in, or the one chosen.
+        assert_eq!(count(&project, &[], &[], &search, &|_| None), Ok(2));
+        assert_eq!(
+            count(&project, &chosen(&hotfix), &[], &search, &|_| None),
+            Ok(1)
+        );
+        assert_eq!(
+            count(&project, &chosen(&search), &[], &project, &|_| None),
+            Ok(2)
+        );
+        // A checkout of no repository of the folder's counts as none chosen.
+        let elsewhere = TempDir::new();
+        committed(&elsewhere);
+        std::fs::write(elsewhere.join("e.txt"), "e\n").unwrap();
+        assert_eq!(
+            count(&project, &chosen(&elsewhere), &[], &project, &|_| None),
+            Ok(1)
+        );
+        // Nor does a checkout that is gone.
+        std::fs::remove_dir_all(&search).unwrap();
+        assert_eq!(
+            count(&project, &chosen(&search), &[], &project, &|_| None),
+            Ok(1)
+        );
+    }
+
+    #[test]
+    fn a_repository_is_kept_as_a_directory_of_its_project_wherever_its_checkout_is() {
+        let project = TempDir::new();
+        let app = project.join(DIRECTORIES).join("app");
+        committed(&app);
+        let search = project.join("worktrees/app/search");
+        worktree(&app, &search, "search");
+        let elsewhere = TempDir::new();
+        committed(&elsewhere);
+        let projects = [project.to_path_buf()];
+        let kept = |folder: &Path, name: Option<&str>| directory_of(&projects, folder, name);
+
+        let as_app = Some((project.to_path_buf(), "app".to_owned()));
+        assert_eq!(kept(&project, Some("app")), as_app);
+        // A chat working in the worktree has it as the folder's own.
+        assert_eq!(kept(&search, None), as_app);
+        assert_eq!(kept(&elsewhere, None), None);
+        assert_eq!(kept(&elsewhere, Some("app")), None);
     }
 
     #[test]

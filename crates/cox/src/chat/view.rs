@@ -889,10 +889,10 @@ impl ChatView {
             Place::Cursor => {}
             Place::After => window.dispatch_action(Box::new(input::Right), cx),
             Place::LineStart | Place::LineAbove => {
-                window.dispatch_action(Box::new(input::Home), cx);
+                window.dispatch_action(Box::new(input::LineStart), cx);
             }
             Place::LineEnd | Place::LineBelow => {
-                window.dispatch_action(Box::new(input::End), cx);
+                window.dispatch_action(Box::new(input::LineEnd), cx);
             }
         }
         cx.notify();

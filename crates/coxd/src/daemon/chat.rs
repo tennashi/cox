@@ -535,12 +535,20 @@ impl Chat {
     /// the conversation go on: a line sent waits for the agent. The chat
     /// keeps it, to start its agent again each time it closes.
     pub fn take_again(&mut self) -> Option<Again> {
-        if self.conversation.state() != State::Closed || self.starting {
-            return None;
-        }
+        self.again_cwd()?;
         let again = self.again.clone()?;
         self.conversation.reopen();
         Some(again)
+    }
+
+    /// Where the agent of the closed chat would start again, as
+    /// [`Self::take_again`] would start it, if it would.
+    #[must_use]
+    pub fn again_cwd(&self) -> Option<&Path> {
+        if self.conversation.state() != State::Closed || self.starting {
+            return None;
+        }
+        self.again.as_ref().map(|again| again.cwd.as_path())
     }
 
     /// Talks to `agent`, of `generation`, from now on: sends it what the

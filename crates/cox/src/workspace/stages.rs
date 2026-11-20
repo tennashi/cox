@@ -12,7 +12,7 @@ use gpui::{App, Context, Window};
 use super::{Chat, NO_TAB, NO_TERMINAL, Staged, Workspace};
 use crate::chat::view::StageView;
 use crate::stage::Stage;
-use crate::stage::changes::ShowTurn;
+use crate::stage::changes::{CompareWith, ShowTurn};
 use crate::stage::owners::ShowChat;
 use coxd::agent::mcp::ToolRequest;
 use coxd::chat::conversation::State;
@@ -119,6 +119,14 @@ impl Workspace {
             },
         );
         self.shows_chats.push(turns);
+        let compares = cx.subscribe(&stage, |workspace, _, compare: &CompareWith, _| {
+            workspace.tell(ToDaemon::CompareWith {
+                folder: compare.folder.clone(),
+                directory: compare.directory.clone(),
+                base: compare.base.clone(),
+            });
+        });
+        self.shows_chats.push(compares);
         self.tell_names();
         self.at_work(cx);
     }
@@ -196,8 +204,8 @@ impl Workspace {
         }
     }
 
-    /// Tells the stages' Commands pages what the agent of the chat `key`
-    /// runs, as its view has the conversation (see
+    /// Tells the stages' Activity pages what the agent of the chat `key`
+    /// does now, as its view has the conversation (see
     /// [`crate::stage::commands`]).
     pub(super) fn tell_commands(&self, key: u64, cx: &App) {
         let Some(chat) = self.chat(key) else {
@@ -207,25 +215,13 @@ impl Workspace {
             return;
         };
         let entries = view.read(cx).conversation().entries();
-        crate::stage::commands::tell(crate::stage::commands::Chat {
-            key,
-            name: chat.name.to_string(),
-            cwd: self.cwd_of(chat),
-            project: self.projects[chat.project].folder.clone(),
-            working: matches!(
-                chat.state,
-                State::Busy | State::Asking | State::Stopping | State::Checking
-            ),
-            steps: crate::stage::commands::steps(entries),
-            asks: crate::stage::commands::asked(entries),
-        });
+        crate::stage::commands::tell(crate::stage::commands::Chat::of(key, entries));
     }
 
-    /// Tells the stages' Commands pages of every chat with a view, as the
+    /// Tells the stages' Activity pages of every chat with a view, as the
     /// list of chats changed, having the conversation of each chat at
-    /// work, or that asks the human something, told, for the Commands and
-    /// Activity pages to show what it runs and asks while no one looks at
-    /// it.
+    /// work, or that asks the human something, told, for the pages to show
+    /// what it runs and asks while no one looks at it.
     pub(super) fn follow_commands(&mut self, cx: &mut Context<Self>) {
         let unseen: Vec<u64> = self
             .chats
