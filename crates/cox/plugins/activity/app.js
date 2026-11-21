@@ -670,7 +670,7 @@ function pullRequests() {
     const failed = pull.failed.length ? `<div class="failed">Failed: ${pull.failed.map(esc).join(", ")}</div>` : "";
     return (
       `<div class="prow ${esc(pull.ci ?? pull.state ?? "")}">` +
-      `<div class="line">${where}<a class="number" href="${esc(pull.url)}" target="_blank" title="${esc(pull.repo)}">#${pull.number}</a> ` +
+      `<div class="line">${where}<a class="pull-number" href="${esc(pull.url)}" target="_blank" title="${esc(pull.repo)}">#${pull.number}</a> ` +
       `<span class="title">${esc(pull.title ?? pull.url)}</span>${draft} ${stands} ${by}${fix}</div>` +
       failed +
       `</div>`

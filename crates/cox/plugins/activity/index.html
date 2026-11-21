@@ -863,19 +863,20 @@
       }
       .prow .line {
         display: flex;
-        flex-wrap: wrap;
         align-items: baseline;
         gap: var(--space-1);
       }
-      .prow .number {
+      .prow .pull-number {
         font-family: var(--mono);
         color: var(--link);
       }
       .prow .title {
+        flex: 0 1 auto;
         color: var(--foreground);
         min-width: 0;
         overflow: hidden;
         text-overflow: ellipsis;
+        white-space: nowrap;
       }
       .prow .where,
       .prow .draft,
@@ -883,8 +884,15 @@
       .prow .failed {
         color: var(--faint);
       }
+      .prow .where,
+      .prow .draft,
+      .prow .by,
+      .prow .ci {
+        flex: none;
+        white-space: nowrap;
+      }
       .prow .by a:hover,
-      .prow .number:hover {
+      .prow .pull-number:hover {
         text-decoration: underline;
       }
       .prow .ci.running {
