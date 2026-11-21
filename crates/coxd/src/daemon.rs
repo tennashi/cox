@@ -463,6 +463,11 @@ struct Slot {
     kept: Option<ChatId>,
     name: String,
     named: Named,
+    /// The title the agent last gave its session, as it names a chat, once
+    /// one was seen in this run: a title it gives anew names the chat
+    /// again, while one it gave before does not undo the name it gave the
+    /// chat itself since (see [`Daemon::rename_chat`]).
+    titled: Option<String>,
     /// How it stood when last looked at.
     state: State,
     unread: bool,
@@ -528,6 +533,33 @@ impl Slot {
             && let Err(error) = store.name_chat(kept, name, named)
         {
             tracing::error!("the chat's name is not kept: {error:#}");
+        }
+    }
+
+    /// The chat named after what it is about: the title its agent gave
+    /// its session, `title`, else its first line, `line`, unless a name
+    /// that lasts more has. The agent may title its session anew, which
+    /// names the chat again; a title it gave before is stale once it named
+    /// the chat itself, as it is when first seen in a run for a chat that
+    /// has the agent's name already.
+    fn name_after(&mut self, title: Option<&str>, line: Option<&str>, store: &Store) {
+        let cut = |name: &str| -> String { name.chars().take(NAME_LENGTH).collect() };
+        let (name, named) = match (title, line) {
+            (Some(title), _) => {
+                let title = cut(title);
+                let retitled = self.titled.as_ref().is_some_and(|titled| *titled != title);
+                self.titled = Some(title.clone());
+                let lasts = self.named < Named::Agent || (self.named == Named::Agent && retitled);
+                if !lasts {
+                    return;
+                }
+                (title, Named::Agent)
+            }
+            (None, Some(line)) if self.named < Named::FirstLine => (cut(line), Named::FirstLine),
+            _ => return,
+        };
+        if name != self.name {
+            self.name_as(&name, named, store);
         }
     }
 
@@ -877,6 +909,7 @@ impl Daemon {
                 kept: Some(chat.id),
                 name: chat.name,
                 named: chat.named,
+                titled: None,
                 state: State::Closed,
                 unread: false,
                 plan_changes: 0,
@@ -1481,6 +1514,7 @@ impl Daemon {
             kept,
             name,
             named: Named::Numbered,
+            titled: None,
             state: State::Idle,
             unread: false,
             plan_changes: 0,
@@ -2451,6 +2485,28 @@ impl Daemon {
         Some(id)
     }
 
+    /// Names the chat `key` `name`, as its agent asked, cut to
+    /// [`NAME_LENGTH`], and answers what it is named now, or why it is
+    /// not: a name the human gave it stays.
+    fn rename_chat(&mut self, key: u64, name: &str) -> Result<String, String> {
+        let name: String = name.trim().chars().take(NAME_LENGTH).collect();
+        if name.is_empty() {
+            return Err("no name: give the chat's new name as `name`".to_owned());
+        }
+        let store = Rc::clone(&self.store);
+        let slot = self.slot_mut(key).ok_or("the chat has closed")?;
+        if slot.named == Named::Human {
+            return Err(format!(
+                "The human named this chat \"{}\", so it keeps that name: leave it be.",
+                slot.name
+            ));
+        }
+        if slot.name != name || slot.named != Named::Agent {
+            slot.name_as(&name, Named::Agent, &store);
+        }
+        Ok(format!("This chat is named \"{name}\" now."))
+    }
+
     /// Answers `request`, which the agent of the chat `key` asks: opens a
     /// sketch beside the chat, shows a goal it proposes, opens a chat under
     /// it, as the agent says, or waits for one.
@@ -2495,6 +2551,9 @@ impl Daemon {
             }
             ChatRequest::ResolveChat { chat, answer } => {
                 answer.send(self.resolve_chat(key, chat)).ok();
+            }
+            ChatRequest::RenameChat { name, answer } => {
+                answer.send(self.rename_chat(key, &name)).ok();
             }
             ChatRequest::ProposeAbout { about, why, answer } => {
                 answer.send(self.propose_about(key, &about, why)).ok();
@@ -3355,22 +3414,12 @@ impl Daemon {
             slot.asks = asks;
             (slot.state, slot.active) = (state, moved(slot.state, state, slot.active));
             slot.goal = conversation.goal().map(|goal| goal.what().clone());
-            let about = match (conversation.title(), conversation.first_line()) {
-                (Some(title), _) => Some((title.to_owned(), Named::Agent)),
-                (None, Some(line)) => Some((line.to_owned(), Named::FirstLine)),
-                (None, None) => None,
-            };
+            let title = conversation.title().map(str::to_owned);
+            let line = conversation.first_line().map(str::to_owned);
             if !at_work(state) {
                 stands.extend(slot.stands().map(|stands| (slot.key, stands)));
             }
-            if let Some((name, named)) = about {
-                let name: String = name.chars().take(NAME_LENGTH).collect();
-                // The agent may title its session anew.
-                let lasts = named > slot.named || (named == Named::Agent && slot.named == named);
-                if lasts && name != slot.name {
-                    slot.name_as(&name, named, &store);
-                }
-            }
+            slot.name_after(title.as_deref(), line.as_deref(), &store);
             if let Some(body) = told.filter(|_| !quiet) {
                 news.push(FromDaemon::News {
                     key: slot.key,
@@ -6361,6 +6410,75 @@ mod tests {
                 .map(|&key| resolved(&opener.daemon, key))
                 .collect();
             assert_eq!(done, [Some(ResolvedBy::Human), None, None]);
+        });
+    }
+
+    #[test]
+    fn an_agent_renames_its_own_chat_unless_the_human_named_it() {
+        on_daemon(async {
+            let mut opener = Opener::new(&[]).await;
+            let key = opener.key;
+            let named = |daemon: &Daemon| {
+                let slot = daemon.slot(key).unwrap();
+                (slot.name.clone(), slot.named)
+            };
+            let title = |opener: &mut Opener, title: &str| {
+                tells(&opener.agent(None), [AgentEvent::Titled(title.to_owned())]);
+            };
+            let rename = |daemon: &mut Daemon, name: &str| {
+                let (answer, mut renamed) = oneshot::channel();
+                daemon.asked(
+                    key,
+                    ChatRequest::RenameChat {
+                        name: name.to_owned(),
+                        answer,
+                    },
+                );
+                renamed.try_recv().unwrap()
+            };
+            title(&mut opener, "Fix the login");
+            opener.pump().await;
+            assert_eq!(
+                named(&opener.daemon),
+                ("Fix the login".to_owned(), Named::Agent)
+            );
+
+            let renamed = rename(&mut opener.daemon, " Cart totals ").unwrap();
+            assert_eq!(renamed, "This chat is named \"Cart totals\" now.");
+            assert_eq!(
+                named(&opener.daemon),
+                ("Cart totals".to_owned(), Named::Agent)
+            );
+            let kept = opener.daemon.slot(key).unwrap().kept.unwrap();
+            let store = Rc::clone(&opener.daemon.store);
+            assert_eq!(kept_chat(&store, kept).name, "Cart totals");
+            // The session's title, told again as it was, is stale: the
+            // name the agent gave the chat stays.
+            title(&mut opener, "Fix the login");
+            opener.pump().await;
+            assert_eq!(
+                named(&opener.daemon),
+                ("Cart totals".to_owned(), Named::Agent)
+            );
+            // A title the agent gives its session anew names the chat.
+            title(&mut opener, "Checkout");
+            opener.pump().await;
+            assert_eq!(named(&opener.daemon), ("Checkout".to_owned(), Named::Agent));
+            let long = "a".repeat(NAME_LENGTH + 10);
+            rename(&mut opener.daemon, &long).unwrap();
+            assert_eq!(named(&opener.daemon).0.chars().count(), NAME_LENGTH);
+
+            opener.daemon.act(ToDaemon::Rename {
+                key,
+                name: "Mine".to_owned(),
+            });
+            let refused = rename(&mut opener.daemon, "Cart totals").unwrap_err();
+            assert_eq!(
+                refused,
+                "The human named this chat \"Mine\", so it keeps that name: leave it be."
+            );
+            assert_eq!(named(&opener.daemon), ("Mine".to_owned(), Named::Human));
+            assert!(rename(&mut opener.daemon, " ").is_err());
         });
     }
 
