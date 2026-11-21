@@ -3,16 +3,17 @@
 //! agent that opened it, or a chat whose merge ended. A chat marked done
 //! stays in the list, folded away at its end; it is not unread, nor
 //! counted among what waits for the human, and its agent closes, its
-//! turn stopped first if one runs. Anything that arrives in it reopens
-//! it, as a line, a report or CI that ended, and a line starts its agent
-//! again, going on with its session.
+//! turn stopped first if one runs. What is sent to it reopens it, as a
+//! line or a report asked again, and a line starts its agent again,
+//! going on with its session. CI that ends on a pull request it opened
+//! does not: its project holds that (see [`super::pulls`]).
 
 use std::rc::Rc;
 use std::time::Instant;
 
 use cox_core::store::{Resolved, ResolvedBy};
 
-use super::{Daemon, Slot, State, at_work, working};
+use super::{Daemon, Slot, State, Whose, at_work, working};
 use crate::chat::conversation::Conversation;
 
 /// How a chat's turn bears on whether it is done, as its conversation
@@ -57,6 +58,10 @@ impl Daemon {
         slot.resolved = Some(resolved);
         slot.unread = false;
         slot.pulls.seen();
+        // Its agent no longer hears of CI that ended in a line of its own.
+        if slot.whose == Whose::Human {
+            slot.pulls.told.clear();
+        }
         if let Some(kept) = slot.kept
             && let Err(error) = store.resolve_chat(kept, Some(resolved))
         {
