@@ -2819,14 +2819,16 @@ impl Daemon {
 
     /// Marks the report of the chat `key` heard by the agent that opened
     /// it, so that Cox does not tell it again, and the chat done, once
-    /// its report reached that agent and nothing of it runs: a report of
-    /// CI that ended leaves it open, as CI ending reopened it.
+    /// its report reached that agent and nothing of it runs: CI that runs
+    /// or failed on a pull request it opened leaves it open, for the
+    /// agent to hear how it ends, or to have it fixed (see
+    /// [`Self::ci_holds`]).
     /// What it heard of what the chat runs in the background, it hears
     /// again once that ended (see [`Behind`]).
     fn heard(&mut self, key: u64) {
         let ci = self
             .slot(key)
-            .is_some_and(|slot| !slot.pulls.told.is_empty());
+            .is_some_and(|slot| self.ci_holds(&slot.pulls));
         let behind = if self
             .chat(key)
             .is_some_and(|chat| !chat.background().is_empty())
@@ -6000,6 +6002,59 @@ mod tests {
                 resolved(&opener.daemon, look),
                 Some(ResolvedBy::Agent),
                 "once what it ran ended was told"
+            );
+        });
+    }
+
+    /// Has the subagent of a chat open #423, and report while its CI
+    /// runs, which then ends as `ended`; answers whether it was done
+    /// while CI ran, and once its opener heard how CI ended.
+    async fn ci_ends_after_the_report(ended: crate::github::CheckState) -> [Option<ResolvedBy>; 2] {
+        use crate::github::CheckState;
+        let mut opener = Opener::new(&["Ship"]).await;
+        opener.prompts();
+        let ship = opener.subagents[0];
+        tells(&opener.agent(Some(0)), [opens_423()]);
+        opener.pump().await;
+        let (pull, status) = pull_423();
+        let now = Instant::now();
+        assert_eq!(opener.daemon.due_pulls(now), std::slice::from_ref(&pull));
+        opener
+            .daemon
+            .pulled(&pull, Ok(status(CheckState::Pending)), now);
+        opener.ends(0, "Opened the pull request; its CI runs.");
+        opener.pump().await;
+        assert_eq!(opener.prompts().len(), 1, "the report");
+        let running = resolved(&opener.daemon, ship);
+        tells(
+            &opener.agent(None),
+            [AgentEvent::TurnEnded(cox_acp::StopReason::EndTurn)],
+        );
+        opener.pump().await;
+
+        opener.daemon.pulled(&pull, Ok(status(ended)), now);
+        opener.pump().await;
+        let prompts = opener.prompts();
+        assert_eq!(prompts.len(), 1, "how CI ended: {prompts:?}");
+        [running, resolved(&opener.daemon, ship)]
+    }
+
+    #[test]
+    fn a_subagent_with_a_pull_request_is_done_once_its_opener_heard_its_ci_passed() {
+        on_daemon(async {
+            assert_eq!(
+                ci_ends_after_the_report(crate::github::CheckState::Passed).await,
+                [None, Some(ResolvedBy::Agent)]
+            );
+        });
+    }
+
+    #[test]
+    fn a_subagent_whose_ci_failed_is_left_open_for_its_opener() {
+        on_daemon(async {
+            assert_eq!(
+                ci_ends_after_the_report(crate::github::CheckState::Failed).await,
+                [None, None]
             );
         });
     }
