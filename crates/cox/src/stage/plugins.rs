@@ -52,6 +52,10 @@
 //!   `cox://api/activity/dismiss/<plans>` hides the plans the JSON of
 //!   `<plans>` names until their chats' agents send others, and answers
 //!   what goes on then. Only a plugin's own `fetch` has them hidden.
+//!   `cox://api/activity/fix/{"key":<key>,"repo":<repo>,"number":<n>}`
+//!   asks the chat `<key>` to fix the CI that failed on the pull request
+//!   its agent opened (see [`crate::stage::activity::fix`]), and answers
+//!   what goes on then.
 //!   `cox://api/activity/timeline/{"chat":<chat>}` tells, alone, the story
 //!   of the chat coxd keeps as `<chat>`: when it started, what it did
 //!   when, and when and how it ended (see
@@ -385,8 +389,9 @@ impl Plugins {
 
     /// What goes on in the folder, as `cox://api/activity` tells it, once
     /// what `cox://api/activity/<rest>` asks is done, if it asks: to
-    /// dismiss plans, to say a line on a step of a plan, or to show the
-    /// thread of a step, which it tells too.
+    /// dismiss plans, to say a line on a step of a plan, to have a chat
+    /// fix the CI of a pull request it opened, or to show the thread of a
+    /// step, which it tells too.
     fn activity(&self, rest: &str) -> Option<serde_json::Value> {
         use crate::stage::activity;
         let mut open = None;
@@ -395,6 +400,7 @@ impl Plugins {
             let asked = percent_decoded(asked);
             match what {
                 "dismiss" => activity::dismiss(&asked),
+                "fix" => activity::fix(&asked),
                 "say" => open = Some(activity::say(&asked)?),
                 "thread" => open = Some(serde_json::from_str::<activity::Open>(&asked).ok()?),
                 // A chat's story, alone, read only for the row the human

@@ -855,6 +855,71 @@
         color: var(--dim);
         margin-left: 48px;
       }
+      /* The pull requests the project holds, one line each. */
+      .prow {
+        padding: var(--space-1) var(--space-2);
+        font-size: var(--small);
+        color: var(--dim);
+      }
+      .prow .line {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: baseline;
+        gap: var(--space-1);
+      }
+      .prow .number {
+        font-family: var(--mono);
+        color: var(--link);
+      }
+      .prow .title {
+        color: var(--foreground);
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .prow .where,
+      .prow .draft,
+      .prow .by,
+      .prow .failed {
+        color: var(--faint);
+      }
+      .prow .by a:hover,
+      .prow .number:hover {
+        text-decoration: underline;
+      }
+      .prow .ci.running {
+        color: var(--link);
+      }
+      .prow .ci.passed {
+        color: var(--accent);
+      }
+      .prow .ci.failed {
+        color: var(--failed);
+      }
+      .prow.merged,
+      .prow.closed {
+        opacity: 0.6;
+      }
+      .prow .failed {
+        margin-left: var(--space-3);
+      }
+      .prow .fix {
+        margin-left: auto;
+        font-size: var(--small);
+        color: var(--foreground);
+        background: var(--button);
+        border: 0;
+        border-radius: var(--radius);
+        padding: 0 var(--space-2);
+        cursor: pointer;
+      }
+      .prow .fix:hover {
+        background: var(--button-hover);
+      }
+      .prow .fix:disabled {
+        opacity: 0.5;
+        cursor: default;
+      }
     </style>
   </head>
   <body>
