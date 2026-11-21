@@ -57,7 +57,7 @@ let sketching = null;
 // What a sketch the human starts beside the chat starts from, "project"
 // or "empty", as the input's chip has it.
 let sketchFrom = "project";
-let chat = null; // { key, entries, state, steers, title, goal, settings, commands }
+let chat = null; // { key, entries, from, state, steers, title, goal, settings, commands }
 let events = null;
 let drawing = false;
 // What the human opened of the conversation, folded otherwise, as the
@@ -153,7 +153,7 @@ function keyOf(kept) {
 function connect() {
   if (events) events.close();
   const kept = shownKept();
-  chat = kept === null ? null : { kept, key: keyOf(kept), entries: [], state: null, steers: false, title: null, goal: null, settings: [], commands: [], came: false };
+  chat = kept === null ? null : { kept, key: keyOf(kept), entries: [], from: 0, state: null, steers: false, title: null, goal: null, settings: [], commands: [], came: false };
   contents.clear();
   drawnPlaces = PLACES;
   events = new EventSource(kept === null ? "/events" : `/events?kept=${kept}`);
@@ -184,6 +184,9 @@ function hear(told) {
       contents.delete(at);
     }
     for (const at of contents.keys()) if (at >= patch.len) contents.delete(at);
+    // Of a long conversation, coxd tells the last entries first, from
+    // `from`, and those before them as the human reads back to them.
+    if (patch.from !== undefined) chat.from = patch.from;
     // A turn that ended may have made the sketch's pages, or opened one
     // on the stage.
     if (working(chat.state) && !working(patch.state) && pages) pages.asked = false;
@@ -1025,6 +1028,9 @@ function conversation(entries, current) {
     if (!entry) continue;
     const [kind, value] = kindOf(entry);
     if (kind === "switched") agent = value.to;
+    // Before the entries told in a row, those coxd told of them, for what
+    // the page reads, are not drawn alone.
+    if (at < chat.from) continue;
     // Two entries of work or more in a row fold into one place, and so
     // does a tool call alone, to show as a step.
     let end = at;
@@ -1054,22 +1060,45 @@ function conversation(entries, current) {
   const from = Math.max(0, found.length - drawnPlaces);
   const places = found.slice(from).map((made) => made()).filter(Boolean);
   if (from > 0) places.unshift(place(earlier(from), null, null, false));
+  else if (chat.from > 0) places.unshift(place(earlier(null), null, null, false));
   return places;
 }
 
 // The button over the places drawn, which draws as many again of the
-// `left` before them, where the human reads.
+// `left` before them, where the human reads, or, when all of those coxd
+// told are drawn, asks it for the entries before them first.
 function earlier(left) {
   return el("button", {
     type: "button",
     class: "earlier",
-    onclick: () => {
+    onclick: async (event) => {
+      if (left === null) {
+        event.currentTarget.disabled = true;
+        event.currentTarget.textContent = "Reading…";
+        if (!(await readEarlier())) {
+          draw();
+          return;
+        }
+      }
       const below = document.body.scrollHeight - window.scrollY;
       drawnPlaces += PLACES;
       draw();
       window.scrollTo(0, document.body.scrollHeight - below);
     },
-  }, `Earlier · ${left} more`);
+  }, left === null ? "Earlier" : `Earlier · ${left} more`);
+}
+
+// Asks coxd for the entries of the chat before those it told, and holds
+// them, saying whether it could.
+async function readEarlier() {
+  const reading = chat;
+  const told = await fetch(`/entries?kept=${reading.kept}&before=${reading.from}`)
+    .then((answer) => (answer.ok ? answer.json() : null))
+    .catch(() => null);
+  if (!told || chat !== reading) return false;
+  for (const [at, entry] of told.entries) reading.entries[at] = entry;
+  reading.from = told.from;
+  return true;
 }
 
 // What the entry at `at`, of `kind`, holding `value`, shows.

@@ -23,7 +23,10 @@
 //! chat named by `?kept=<number>`, all of it first, and the
 //! [`FromDaemon::News`] of the chats that come to wait for the human;
 //! but for what the conversation's tool calls show, which it asks for on
-//! `/content` as the human opens one (see [`for_the_phone`]).
+//! `/content` as the human opens one (see [`for_the_phone`]), and, of a
+//! long conversation, for the entries before its last [`TAIL`], which it
+//! asks for on `/entries` as the human reads back to them (see
+//! [`opened`]).
 //! What the human does on it, as sending a line or answering what the
 //! agent asks, it posts to `/act?kept=<number>`, a [`ToDaemon`] as JSON,
 //! as the window says it, which coxd does as the window's (see
@@ -589,6 +592,8 @@ pub async fn serve(
                         page.posted(request).await
                     } else if request.uri().path() == "/content" {
                         page.content(&request).await
+                    } else if request.uri().path() == "/entries" {
+                        page.entries(&request).await
                     } else if request.uri().path() == "/changes" {
                         page.changes(&request).await
                     } else if request.uri().path() == "/pages" {
@@ -802,6 +807,58 @@ impl Page {
             "application/json",
             serde_json::json!({ "content": content }).to_string(),
         )
+    }
+
+    /// The entries before `before=<n>` of the conversation of the chat
+    /// `request` names, `?kept=<number>`, as JSON, the last [`TAIL`] of them
+    /// at most, as the phone reads back through a long one: where they
+    /// start, `from`, and each with its place, as [`for_the_phone`] tells
+    /// them.
+    async fn entries(&self, request: &Request<Incoming>) -> Response<Body> {
+        if !self.paired(request) {
+            return answer(StatusCode::UNAUTHORIZED, TEXT, "Not paired");
+        }
+        let Some(before) = number_asked(request, "before") else {
+            return answer(StatusCode::BAD_REQUEST, TEXT, "No place");
+        };
+        let key = match self.chat_named(request).await {
+            Ok(key) => key,
+            Err((status, why)) => return answer(status, TEXT, why),
+        };
+        let from = before.saturating_sub(TAIL);
+        let (asked, entries) = tokio::sync::oneshot::channel();
+        if self
+            .internal
+            .send(Internal::Entries {
+                key,
+                from,
+                to: before,
+                answer: asked,
+            })
+            .is_err()
+        {
+            return answer(StatusCode::SERVICE_UNAVAILABLE, TEXT, "coxd is stopping");
+        }
+        let Ok(Some(entries)) = entries.await else {
+            return answer(StatusCode::NOT_FOUND, TEXT, "No such chat");
+        };
+        let told = entries
+            .into_iter()
+            .zip(from..)
+            .map(|(entry, at)| Ok(serde_json::json!([at, told_entry(entry)?])))
+            .collect::<serde_json::Result<Vec<_>>>();
+        match told {
+            Ok(told) => answer(
+                StatusCode::OK,
+                "application/json",
+                serde_json::json!({ "from": from, "entries": told }).to_string(),
+            ),
+            Err(error) => answer(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                TEXT,
+                format!("The entries cannot be told: {error}"),
+            ),
+        }
     }
 
     /// What changed where the chat `request` names works, `?kept=<number>`,
@@ -1090,6 +1147,7 @@ impl Page {
         }
         let events = Events {
             told,
+            opened: false,
             beat: tokio::time::interval(BEAT),
             id,
             internal: self.internal.clone(),
@@ -1262,9 +1320,14 @@ fn chat_asked(request: &Request<Incoming>) -> Option<i64> {
 
 /// The place in a conversation the query of `request` names, `at=<n>`.
 fn place_asked(request: &Request<Incoming>) -> Option<usize> {
+    number_asked(request, "at")
+}
+
+/// The number the query of `request` gives `name`, as `before=<n>`.
+fn number_asked(request: &Request<Incoming>, name: &str) -> Option<usize> {
     let query = request.uri().query()?;
     url::form_urlencoded::parse(query.as_bytes())
-        .find_map(|(name, value)| (name == "at").then(|| value.parse::<usize>().ok()))
+        .find_map(|(one, value)| (one == name).then(|| value.parse::<usize>().ok()))
         .flatten()
 }
 
@@ -1432,6 +1495,9 @@ impl http_body::Body for Body {
 /// The stream of events a phone follows the chats on, until it goes.
 struct Events {
     told: UnboundedReceiver<FromDaemon>,
+    /// Whether the phone was told the conversation it watches, which the
+    /// first patch it is told is of, whole (see [`opened`]).
+    opened: bool,
     beat: tokio::time::Interval,
     id: u64,
     internal: UnboundedSender<Internal>,
@@ -1440,7 +1506,9 @@ struct Events {
 impl Events {
     fn poll(&mut self, context: &mut Context<'_>) -> Poll<Option<Bytes>> {
         if let Poll::Ready(told) = self.told.poll_recv(context) {
-            return Poll::Ready(told.map(event));
+            let opens = matches!(told, Some(FromDaemon::Patch { .. })) && !self.opened;
+            self.opened |= opens;
+            return Poll::Ready(told.map(|told| event(told, opens)));
         }
         if self.beat.poll_tick(context).is_ready() {
             return Poll::Ready(Some(Bytes::from_static(b": beat\n\n")));
@@ -1455,9 +1523,10 @@ impl Drop for Events {
     }
 }
 
-/// `told` as a server-sent event: a line of JSON, as [`for_the_phone`] has it.
-fn event(told: FromDaemon) -> Bytes {
-    let json = for_the_phone(told)
+/// `told` as a server-sent event: a line of JSON, as [`for_the_phone`]
+/// has it, of the conversation the phone `opens`, if it opens one.
+fn event(told: FromDaemon, opens: bool) -> Bytes {
+    let json = for_the_phone(told, opens)
         .and_then(|told| serde_json::to_string(&told))
         .unwrap_or_else(|error| {
             tracing::error!("the phone cannot be told: {error}");
@@ -1473,18 +1542,82 @@ fn event(told: FromDaemon) -> Bytes {
 /// long chat, what they show, as the files the agent read and what its
 /// commands printed, is the most of the conversation, which a phone
 /// would wait for, and the human opens few of them.
-fn for_the_phone(told: FromDaemon) -> serde_json::Result<serde_json::Value> {
+///
+/// The conversation the phone `opens`, of which it is told the whole
+/// first, it is told the last of, as [`opened`] says, and where they
+/// start, as `from`.
+fn for_the_phone(told: FromDaemon, opens: bool) -> serde_json::Result<serde_json::Value> {
     let FromDaemon::Patch { key, mut patch } = told else {
         return serde_json::to_value(&told);
     };
-    let entries = std::mem::take(&mut patch.entries);
+    let mut entries = std::mem::take(&mut patch.entries);
+    let from = opens.then(|| {
+        let (from, last) = opened(std::mem::take(&mut entries), patch.len);
+        entries = last;
+        from
+    });
     let mut value = serde_json::to_value(FromDaemon::Patch { key, patch })?;
     let entries = entries
         .into_iter()
         .map(|(at, entry)| Ok(serde_json::json!([at, told_entry(entry)?])))
         .collect::<serde_json::Result<Vec<_>>>()?;
     value["Patch"]["patch"]["entries"] = entries.into();
+    if let Some(from) = from {
+        value["Patch"]["patch"]["from"] = from.into();
+    }
     Ok(value)
+}
+
+/// The most entries of a conversation a phone is told as it opens it,
+/// the last: about what it draws first, the last 40 places of it, as
+/// many tool calls in a row fold into one. A long chat's thousands of
+/// entries, told whole, the phone would wait seconds for, and draw few.
+const TAIL: usize = 200;
+
+/// Of the `entries` of a conversation that holds `len`, those a phone is
+/// told as it opens it, and where the last of them start: the last
+/// [`TAIL`], and, before them, those the page reads all the conversation
+/// for, which it would miss: the last line of the human's, the work they
+/// close after it, as what the agent showed, and the last of what the
+/// agent asked; and the agents the chat switched between.
+fn opened(entries: Vec<(usize, Entry)>, len: usize) -> (usize, Vec<(usize, Entry)>) {
+    let from = len.saturating_sub(TAIL);
+    if from == 0 {
+        return (0, entries);
+    }
+    let last = |kind: fn(&Entry) -> bool| entries.iter().rposition(|(_, entry)| kind(entry));
+    let human = last(|entry| matches!(entry, Entry::Human(_)));
+    let mut read: BTreeSet<usize> = [
+        human,
+        last(|entry| matches!(entry, Entry::Merge)),
+        last(|entry| matches!(entry, Entry::Plan(_))),
+        last(|entry| matches!(entry, Entry::Permission { .. })),
+        last(|entry| matches!(entry, Entry::Question { .. })),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+    for (place, (_, entry)) in entries.iter().enumerate() {
+        let closed = human.is_some_and(|human| place > human)
+            && matches!(
+                entry,
+                Entry::Media { .. }
+                    | Entry::Shown { .. }
+                    | Entry::PlanChanged { .. }
+                    | Entry::Checks(_)
+                    | Entry::Event { .. }
+            );
+        if closed || matches!(entry, Entry::Switched { .. }) {
+            read.insert(place);
+        }
+    }
+    let entries = entries
+        .into_iter()
+        .enumerate()
+        .filter(|(place, (at, _))| *at >= from || read.contains(place))
+        .map(|(_, entry)| entry)
+        .collect();
+    (from, entries)
 }
 
 /// `entry` as the phone is told it (see [`for_the_phone`]).
@@ -1888,7 +2021,7 @@ mod tests {
             keeps: true,
             steers: false,
         };
-        let told = for_the_phone(FromDaemon::Patch { key: 7, patch }).unwrap();
+        let told = for_the_phone(FromDaemon::Patch { key: 7, patch }, false).unwrap();
         let told = &told["Patch"];
         assert_eq!(told["key"], 7);
         assert_eq!(told["patch"]["len"], 4);
@@ -1968,6 +2101,139 @@ mod tests {
             answer.send(None).unwrap();
             let none = asked.await.unwrap();
             assert!(none.starts_with("HTTP/1.1 404"), "{none}");
+        });
+        tokio::time::timeout(Duration::from_secs(30), test)
+            .await
+            .expect("the page answers in time");
+    }
+
+    #[test]
+    fn tells_a_phone_opening_a_long_chat_its_last_entries_and_what_the_page_reads_before() {
+        use crate::chat::conversation::{Patch, State};
+        let len = TAIL + 10;
+        let mut entries = vec![
+            (0, Entry::Human("first".into())),
+            (
+                1,
+                Entry::Switched {
+                    from: "Claude".into(),
+                    to: "Codex".into(),
+                },
+            ),
+            (2, Entry::Thought("why".into())),
+            (3, Entry::Human("last".into())),
+            (4, Entry::Checks(Vec::new())),
+        ];
+        entries.extend((5..len).map(|at| (at, Entry::Reply(format!("{at}")))));
+        let patch = |entries| Patch {
+            len,
+            entries,
+            state: State::Idle,
+            title: None,
+            goal: None,
+            settings: Vec::new(),
+            commands: Vec::new(),
+            before_asking: State::Idle,
+            keeps: true,
+            steers: false,
+        };
+        let places = |told: &serde_json::Value| -> Vec<u64> {
+            told["Patch"]["patch"]["entries"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|entry| entry[0].as_u64().unwrap())
+                .collect()
+        };
+
+        let opened = for_the_phone(
+            FromDaemon::Patch {
+                key: 7,
+                patch: patch(entries.clone()),
+            },
+            true,
+        )
+        .unwrap();
+        assert_eq!(opened["Patch"]["patch"]["len"], len);
+        assert_eq!(opened["Patch"]["patch"]["from"], 10);
+        let told = places(&opened);
+        assert_eq!(told[..3], [1, 3, 4], "{told:?}");
+        assert_eq!(told[3..], (10..len as u64).collect::<Vec<_>>()[..]);
+
+        // A patch after it, as the conversation goes on, is told whole.
+        let after = for_the_phone(
+            FromDaemon::Patch {
+                key: 7,
+                patch: patch(entries),
+            },
+            false,
+        )
+        .unwrap();
+        assert!(after["Patch"]["patch"].get("from").is_none());
+        assert_eq!(places(&after).len(), len);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn tells_a_paired_phone_the_entries_before_those_it_was_told() {
+        let local = tokio::task::LocalSet::new();
+        let test = local.run_until(async {
+            let listener = listen(0).await.unwrap();
+            let port = listener.local_addr().unwrap().port();
+            let (internal, mut heard) = unbounded_channel();
+            tokio::task::spawn_local(serve(
+                listener,
+                Rc::new(Phones::new("secret".to_owned(), None)),
+                None,
+                internal,
+            ));
+            let get = |path: &str, cookie: &str| {
+                format!("GET {path} HTTP/1.1\r\nHost: x\r\n{cookie}Connection: close\r\n\r\n")
+            };
+            let cookie = "Cookie: cox_phone=secret\r\n";
+
+            let unpaired = ask(port, &get("/entries?kept=12&before=250", ""), "").await;
+            assert!(unpaired.starts_with("HTTP/1.1 401"), "{unpaired}");
+
+            let request = get("/entries?kept=12&before=250", cookie);
+            let asked = tokio::task::spawn_local(async move { ask(port, &request, "").await });
+            let Some(Internal::Key { number: 12, answer }) = heard.recv().await else {
+                panic!("coxd is not asked the key of the chat kept as 12");
+            };
+            answer.send(Some(7)).unwrap();
+            let Some(Internal::Entries {
+                key: 7,
+                from: 50,
+                to: 250,
+                answer,
+            }) = heard.recv().await
+            else {
+                panic!("coxd is not asked the entries before those told");
+            };
+            let call = Entry::ToolCall {
+                id: "1".into(),
+                title: "Read a.rs".into(),
+                command: false,
+                about: None,
+                content: vec![Content::Text("fn a() {}".into())],
+                result: None,
+            };
+            answer
+                .send(Some(vec![Entry::Reply("Done.".into()), call]))
+                .unwrap();
+            let told = asked.await.unwrap();
+            assert!(told.starts_with("HTTP/1.1 200"), "{told}");
+            let body: serde_json::Value =
+                serde_json::from_str(told.split("\r\n\r\n").nth(1).unwrap()).unwrap();
+            assert_eq!(
+                body,
+                serde_json::json!({
+                    "from": 50,
+                    "entries": [
+                        [50, {"reply": "Done."}],
+                        [51, {"tool_call": {"id": "1", "title": "Read a.rs", "result": null, "shows": 1}}],
+                    ],
+                })
+            );
         });
         tokio::time::timeout(Duration::from_secs(30), test)
             .await

@@ -260,6 +260,17 @@ pub enum Internal {
         at: usize,
         answer: oneshot::Sender<Option<Vec<Content>>>,
     },
+    /// The entries of the conversation of the chat `key` from `from` up to
+    /// `to`, or as many of them as it holds, for the phone, which is told
+    /// the last of a long conversation first and asks for those before
+    /// them as the human reads on, told on `answer`, or nothing of a chat
+    /// there is none of.
+    Entries {
+        key: u64,
+        from: usize,
+        to: usize,
+        answer: oneshot::Sender<Option<Vec<Entry>>>,
+    },
     /// Where the chat `key` works, and the pages of the stage there, each
     /// its address and title, for the phone to offer those of the Mac's
     /// own address to try, told on `answer`, or nothing of a chat there is
@@ -2104,6 +2115,21 @@ impl Daemon {
                     }
                 });
                 answer.send(content).ok();
+            }
+            Internal::Entries {
+                key,
+                from,
+                to,
+                answer,
+            } => {
+                let entries = self.chat(key).map(|chat| {
+                    let entries = chat.conversation().entries();
+                    entries
+                        .get(from..to.min(entries.len()))
+                        .unwrap_or_default()
+                        .to_vec()
+                });
+                answer.send(entries).ok();
             }
             Internal::Pages { key, answer } => {
                 let pages = self.slot(key).map(|slot| self.cwd(slot)).map(|folder| {
