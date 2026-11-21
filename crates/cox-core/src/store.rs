@@ -1285,6 +1285,33 @@ impl Store {
         Ok(())
     }
 
+    /// Keeps the pull request `number` of `repo`, kept with no chat that
+    /// opened it, as `project`'s, opened by the agent of `author`: one
+    /// found on GitHub before the chat that opened it was seen to.
+    ///
+    /// # Errors
+    ///
+    /// When the database cannot be written.
+    pub fn keep_pull_author(
+        &self,
+        project: Option<ProjectId>,
+        repo: &str,
+        number: u64,
+        author: ChatId,
+    ) -> anyhow::Result<()> {
+        self.connection.execute(
+            "UPDATE pulls SET project = ?1, author = ?2
+             WHERE repo = ?3 AND number = ?4 AND author IS NULL",
+            params![
+                project.map(|project| project.0),
+                author.0,
+                repo,
+                i64::try_from(number)?
+            ],
+        )?;
+        Ok(())
+    }
+
     /// Keeps `status` as how the pull request `number` of `repo` stood when
     /// last read, as `T` is written as JSON, and `ended`, when it was
     /// merged or closed, once it was.
@@ -2876,6 +2903,27 @@ mod tests {
         // They go with the project.
         store.delete_project(app).unwrap();
         assert_eq!(store.pulls::<String>(0).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn a_pull_request_found_with_no_chat_takes_the_chat_seen_to_open_it_once() {
+        let store = Store::in_memory().unwrap();
+        let app = store.project(Path::new("/work/app"), "app").unwrap();
+        let shop = store.project(Path::new("/work/shop"), "shop").unwrap();
+        let opener = store.add_chat(Some(app), "ship").unwrap();
+        let other = store.add_chat(Some(app), "other").unwrap();
+        store.keep_pull(Some(shop), "o/app", 7, None, 100).unwrap();
+        store
+            .keep_pull_author(Some(app), "o/app", 7, opener)
+            .unwrap();
+        // Not again: the first chat seen to open it keeps it.
+        store
+            .keep_pull_author(Some(app), "o/app", 7, other)
+            .unwrap();
+        let [pull] = &store.pulls::<String>(0).unwrap()[..] else {
+            panic!();
+        };
+        assert_eq!((pull.project, pull.author), (Some(app), Some(opener)));
     }
 
     #[test]

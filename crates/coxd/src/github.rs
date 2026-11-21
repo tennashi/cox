@@ -6,6 +6,8 @@
 //! as the address `gh` prints on a line of its own (see [`opened`]). How
 //! one stands is read with `gh pr view`, as the human is logged in to
 //! `gh` already: Cox asks for no token and keeps none (see [`fetch`]).
+//! The human's open pull requests of a repository, however they opened
+//! them, are listed with `gh pr list --author @me` (see [`mine`]).
 
 use std::time::Duration;
 
@@ -336,9 +338,98 @@ const PATIENCE: Duration = Duration::from_secs(30);
 ///
 /// When `gh` is missing, is not logged in, or cannot read it.
 pub async fn fetch(pull: &Pull) -> Result<Status, Problem> {
+    let json = gh(&["pr", "view", &pull.url(), "--json", FIELDS]).await?;
+    Status::parse(&json).map_err(Problem::Failed)
+}
+
+/// The most of the human's open pull requests of a repository Cox lists.
+const LISTED: &str = "30";
+
+/// The open pull requests of the repository `repo`, as `owner/name`, that
+/// the human opened, as the one logged in to `gh`, however they opened
+/// them: in Cox or not. Only the human's are listed, not everyone's, for
+/// a busy repository's not to fill the Activity page.
+///
+/// # Errors
+///
+/// When `gh` is missing, is not logged in, or cannot list them.
+pub async fn mine(repo: &str) -> Result<Vec<Pull>, Problem> {
+    let json = gh(&[
+        "pr", "list", "--repo", repo, "--author", "@me", "--state", "open", "--limit", LISTED,
+        "--json", "number",
+    ])
+    .await?;
+    listed(repo, &json).map_err(Problem::Failed)
+}
+
+/// The pull requests of `repo` `gh pr list --json number` told as `json`.
+///
+/// # Errors
+///
+/// When `json` is not what `gh` tells.
+pub fn listed(repo: &str, json: &str) -> Result<Vec<Pull>, String> {
+    #[derive(Deserialize)]
+    struct Listed {
+        number: u64,
+    }
+    let listed: Vec<Listed> = serde_json::from_str(json).map_err(|error| error.to_string())?;
+    Ok(listed
+        .into_iter()
+        .map(|listed| Pull {
+            repo: repo.to_owned(),
+            number: listed.number,
+        })
+        .collect())
+}
+
+/// The repository on GitHub, as `owner/name`, a remote of Git's at `url`
+/// is, if it is one: as `https://github.com/o/n.git`,
+/// `git@github.com:o/n.git` or `ssh://git@github.com/o/n`.
+#[must_use]
+pub fn repo_of_remote(url: &str) -> Option<String> {
+    let url = url.trim();
+    let rest = [
+        "https://github.com/",
+        "http://github.com/",
+        "ssh://git@github.com/",
+        "git@github.com:",
+    ]
+    .iter()
+    .find_map(|prefix| url.strip_prefix(prefix))?;
+    let rest = rest.trim_end_matches('/');
+    let rest = rest.strip_suffix(".git").unwrap_or(rest);
+    let link = format!("https://github.com/{rest}/pull/1");
+    Pull::of_line(&link).map(|pull| pull.repo)
+}
+
+/// The repositories on GitHub of the Git repositories at `folders`, each
+/// once: of each, its remote `upstream`, which a fork's pull requests are
+/// opened on, or else `origin`.
+#[must_use]
+pub fn repos(folders: &[std::path::PathBuf]) -> Vec<String> {
+    let mut repos = Vec::new();
+    for folder in folders {
+        let repo = ["upstream", "origin"].iter().find_map(|remote| {
+            cox_git::git::run(folder, &["remote", "get-url", remote])
+                .ok()
+                .and_then(|url| repo_of_remote(&url))
+        });
+        if let Some(repo) = repo.filter(|repo| !repos.contains(repo)) {
+            repos.push(repo);
+        }
+    }
+    repos
+}
+
+/// What `gh`, run with `args`, printed.
+///
+/// # Errors
+///
+/// When `gh` is missing, is not logged in, or fails.
+async fn gh(args: &[&str]) -> Result<String, Problem> {
     let mut command = tokio::process::Command::new("gh");
     command
-        .args(["pr", "view", &pull.url(), "--json", FIELDS])
+        .args(args)
         .stdin(std::process::Stdio::null())
         .kill_on_drop(true);
     let output = match tokio::time::timeout(PATIENCE, command.output()).await {
@@ -358,7 +449,7 @@ pub async fn fetch(pull: &Pull) -> Result<Status, Problem> {
             said.lines().next().unwrap_or_default().to_owned(),
         ));
     }
-    Status::parse(&String::from_utf8_lossy(&output.stdout)).map_err(Problem::Failed)
+    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
 #[cfg(test)]
@@ -537,5 +628,38 @@ mod tests {
             "ran between looks"
         );
         assert_eq!(at("b", &[]).ended_since(Some(&running)), None, "no checks");
+    }
+
+    #[test]
+    fn the_human_s_open_pull_requests_are_read_from_gh_pr_list() {
+        assert_eq!(
+            listed("tennashi/cox", r#"[{"number":478},{"number":479}]"#).unwrap(),
+            [pull(478), pull(479)]
+        );
+        assert_eq!(listed("tennashi/cox", "[]").unwrap(), []);
+        assert!(listed("tennashi/cox", "no").is_err());
+    }
+
+    #[test]
+    fn a_remote_on_github_names_its_repository() {
+        for url in [
+            "https://github.com/tennashi/cox.git",
+            "https://github.com/tennashi/cox",
+            "git@github.com:tennashi/cox.git",
+            "ssh://git@github.com/tennashi/cox.git\n",
+        ] {
+            assert_eq!(
+                repo_of_remote(url).as_deref(),
+                Some("tennashi/cox"),
+                "{url}"
+            );
+        }
+        for url in [
+            "https://gitlab.com/tennashi/cox.git",
+            "git@github.com:tennashi",
+            "/work/cox",
+        ] {
+            assert_eq!(repo_of_remote(url), None, "{url}");
+        }
     }
 }
