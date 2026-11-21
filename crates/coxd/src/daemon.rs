@@ -1828,18 +1828,22 @@ impl Daemon {
 
     /// The chats of the project at `index` but the chat `except`, as its
     /// chats' agents are told them, a line each: the last
-    /// [`CHATS_TOLD`] the list shows, by the numbers they are kept by,
-    /// which `read_chat` takes.
+    /// [`CHATS_TOLD`] the list shows of those not marked done, by the
+    /// numbers they are kept by, which `read_chat` takes, then how many
+    /// marked done it leaves out, if any.
     fn chats_told(&self, index: usize, except: Option<u64>) -> Vec<String> {
         let kept = |key: u64| self.slot(key).and_then(|slot| slot.kept);
-        let lines: Vec<String> = self
+        let (done, open): (Vec<&Slot>, Vec<&Slot>) = self
             .chats
             .iter()
-            .filter(|slot| slot.project == index && Some(slot.key) != except)
+            .filter(|slot| slot.project == index && Some(slot.key) != except && slot.kept.is_some())
+            .partition(|slot| slot.resolved.is_some());
+        let from = open.len().saturating_sub(CHATS_TOLD);
+        let mut lines: Vec<String> = open[from..]
+            .iter()
             .filter_map(|slot| {
                 let number = slot.kept?;
                 let state = match slot.state {
-                    _ if slot.resolved.is_some() => "marked done",
                     State::Asking => "waits for the human to answer it",
                     state if working(state) => "at work",
                     State::Closed => "closed",
@@ -1863,8 +1867,19 @@ impl Daemon {
                 Some(line)
             })
             .collect();
-        let from = lines.len().saturating_sub(CHATS_TOLD);
-        lines[from..].to_vec()
+        match done.len() {
+            0 => {}
+            1 => lines.push(
+                "- and 1 chat marked done, left out here; read_chat and resolve_chat still take \
+                 its number"
+                    .to_owned(),
+            ),
+            count => lines.push(format!(
+                "- and {count} chats marked done, left out here; read_chat and resolve_chat \
+                 still take their numbers"
+            )),
+        }
+        lines
     }
 
     /// The chats the agent of the chat `key` may ask about, open or not:
@@ -5749,7 +5764,7 @@ mod tests {
     }
 
     #[test]
-    fn the_chats_told_say_which_are_marked_done() {
+    fn the_chats_told_leave_out_those_marked_done_and_say_how_many() {
         let home = TempDir::new();
         let (store, chat) = one_chat(&home);
         let (mut daemon, _told) = daemon_of(&store, &home);
@@ -5762,16 +5777,60 @@ mod tests {
         });
         assert_eq!(
             daemon.chats_told(project, None),
-            [format!("- chat {}: \"Chat\", marked done", chat.number())]
+            [
+                "- and 1 chat marked done, left out here; read_chat and resolve_chat still take \
+              its number"
+            ]
         );
 
         daemon.act(ToDaemon::Resolve {
             key,
             resolved: false,
         });
+        assert_eq!(
+            daemon.chats_told(project, None),
+            [format!("- chat {}: \"Chat\", closed", chat.number())],
+            "reopened, it is told again"
+        );
+    }
+
+    #[test]
+    fn chats_marked_done_do_not_push_older_chats_out_of_those_told() {
+        let home = TempDir::new();
+        let (store, _) = one_chat(&home);
+        let folder = store.project(&home, "Project").unwrap();
+        let open: Vec<ChatId> = (1..CHATS_TOLD)
+            .map(|n| store.add_chat(Some(folder), &format!("Open {n}")).unwrap())
+            .collect();
+        let done: Vec<ChatId> = (0..CHATS_TOLD)
+            .map(|n| store.add_chat(Some(folder), &format!("Done {n}")).unwrap())
+            .collect();
+        let (mut daemon, _told) = daemon_of(&store, &home);
+        for &chat in &done {
+            let key = key_of(&mut daemon, chat);
+            daemon.act(ToDaemon::Resolve {
+                key,
+                resolved: true,
+            });
+        }
+        let first = key_of(&mut daemon, open[0]);
+        let project = daemon.slot(first).unwrap().project;
+
         let told = daemon.chats_told(project, None);
-        assert_eq!(told.len(), 1);
-        assert!(!told[0].contains("done"), "{told:?}");
+
+        assert_eq!(told.len(), CHATS_TOLD + 1, "{told:#?}");
+        assert!(
+            told.iter().any(|line| line.contains("\"Chat\"")),
+            "the oldest"
+        );
+        assert!(!told.iter().any(|line| line.contains("\"Done ")));
+        assert_eq!(
+            told.last().unwrap(),
+            &format!(
+                "- and {CHATS_TOLD} chats marked done, left out here; read_chat and \
+                 resolve_chat still take their numbers"
+            )
+        );
     }
 
     #[test]
