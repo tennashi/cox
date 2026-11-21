@@ -884,6 +884,7 @@ impl Daemon {
                 self.add(slot);
             }
         }
+        self.read_pulls(Instant::now());
         self.read_shown();
     }
 
@@ -2819,16 +2820,12 @@ impl Daemon {
 
     /// Marks the report of the chat `key` heard by the agent that opened
     /// it, so that Cox does not tell it again, and the chat done, once
-    /// its report reached that agent and nothing of it runs: CI that runs
-    /// or failed on a pull request it opened leaves it open, for the
-    /// agent to hear how it ends, or to have it fixed (see
-    /// [`Self::ci_holds`]).
+    /// its report reached that agent and nothing of it runs: the pull
+    /// requests it opened do not hold it open, as its project holds them
+    /// (see [`pulls`]).
     /// What it heard of what the chat runs in the background, it hears
     /// again once that ended (see [`Behind`]).
     fn heard(&mut self, key: u64) {
-        let ci = self
-            .slot(key)
-            .is_some_and(|slot| self.ci_holds(&slot.pulls));
         let behind = if self
             .chat(key)
             .is_some_and(|chat| !chat.background().is_empty())
@@ -2846,7 +2843,7 @@ impl Daemon {
         {
             if *report == Report::Pending {
                 *report = Report::Heard;
-                done = behind == Behind::Untold && !ci;
+                done = behind == Behind::Untold;
             }
             *heard = behind;
         }
@@ -3230,6 +3227,7 @@ impl Daemon {
             agents: std::collections::BTreeMap::new(),
             github: self.github.clone(),
             chosen: self.chosen,
+            pulls: self.project_pulls(),
         };
         let ids: HashSet<&str> = listing
             .chats
@@ -5431,7 +5429,10 @@ mod tests {
                 let slot = opener.daemon.slot(ship).unwrap();
                 opener.daemon.pull_rows(&slot.pulls)
             };
-            assert_eq!(row(&opener)[0].unseen, Some(CheckState::Failed));
+            // Done once its report reached its opener, it stays so, and
+            // waits for no one: its project holds how CI ended.
+            assert_eq!(resolved(&opener.daemon, ship), Some(ResolvedBy::Agent));
+            assert_eq!(row(&opener)[0].unseen, None);
             assert!(!row(&opener)[0].waits_on_ci());
             let prompts = opener.prompts();
             assert_eq!(prompts.len(), 1, "{prompts:?}");
@@ -5443,12 +5444,6 @@ mod tests {
                 "{}",
                 prompts[0]
             );
-
-            opener.daemon.act(ToDaemon::Shown {
-                key: Some(ship),
-                project: 0,
-            });
-            assert_eq!(row(&opener)[0].unseen, None, "seen");
         });
     }
 
@@ -5529,6 +5524,10 @@ mod tests {
                 chat.prompts(),
                 [FAILED_ON_423],
                 "one line, which starts a turn"
+            );
+            assert_eq!(
+                holds_423(&chat.daemon),
+                (Some(CheckState::Failed), Some(chat.key))
             );
             assert_eq!(
                 chat.daemon.chat(chat.key).unwrap().conversation().state(),
@@ -5912,8 +5911,84 @@ mod tests {
         });
     }
 
+    /// How the project of `daemon` holds #423, as the window lists it:
+    /// how its checks stand, as last read, and the chat that opened it.
+    fn holds_423(daemon: &Daemon) -> (Option<crate::github::CheckState>, Option<u64>) {
+        let pulls = daemon.project_pulls();
+        let [pull] = &pulls[..] else {
+            panic!("{pulls:?}");
+        };
+        assert_eq!((pull.pull.number, pull.project), (423, 0));
+        (
+            pull.status.as_ref().and_then(crate::github::Status::checks),
+            pull.author,
+        )
+    }
+
     #[test]
-    fn ci_that_ends_in_a_chat_marked_done_reopens_it() {
+    fn ci_that_ends_in_a_chat_marked_done_leaves_it_done_and_its_project_holds_how_it_stands() {
+        use crate::github::CheckState;
+        for ended in [CheckState::Failed, CheckState::Passed] {
+            on_daemon(async move {
+                let mut chat = Opener::new(&[]).await;
+                let (window, mut told) = unbounded_channel();
+                chat.daemon.window = Some(window);
+                submit(&mut chat.daemon, chat.key);
+                chat.pump().await;
+                tells(
+                    &chat.agent(None),
+                    [
+                        opens_423(),
+                        AgentEvent::TurnEnded(cox_acp::StopReason::EndTurn),
+                    ],
+                );
+                chat.pump().await;
+                chat.prompts();
+                chat.daemon.act(ToDaemon::Resolve {
+                    key: chat.key,
+                    resolved: true,
+                });
+                chat.pump().await;
+                assert!(!runs(&mut chat.daemon, chat.key));
+
+                let (pull, status) = pull_423();
+                let now = Instant::now();
+                assert_eq!(chat.daemon.due_pulls(now), std::slice::from_ref(&pull));
+                for state in [CheckState::Pending, ended, ended] {
+                    chat.daemon.pulled(&pull, Ok(status(state)), now);
+                    chat.pump().await;
+                }
+
+                assert_eq!(
+                    resolved(&chat.daemon, chat.key),
+                    Some(ResolvedBy::Human),
+                    "still done"
+                );
+                assert!(!runs(&mut chat.daemon, chat.key), "its agent stays closed");
+                assert_eq!(chat.prompts(), Vec::<String>::new(), "it hears nothing");
+                assert_eq!(holds_423(&chat.daemon), (Some(ended), Some(chat.key)));
+                let listed = std::iter::from_fn(|| told.try_recv().ok())
+                    .filter_map(|message| match message {
+                        FromDaemon::Listing(listing) => Some(listing),
+                        _ => None,
+                    })
+                    .last()
+                    .unwrap();
+                assert_eq!(
+                    listed.pulls[0]
+                        .status
+                        .as_ref()
+                        .and_then(crate::github::Status::checks),
+                    Some(ended)
+                );
+                let slot = chat.daemon.slot(chat.key).unwrap();
+                assert_eq!(chat.daemon.pull_rows(&slot.pulls)[0].unseen, None);
+            });
+        }
+    }
+
+    #[test]
+    fn the_pull_requests_a_project_holds_and_how_each_stood_outlast_a_restart() {
         use crate::github::CheckState;
         on_daemon(async {
             let mut chat = Opener::new(&[]).await;
@@ -5927,22 +6002,41 @@ mod tests {
                 ],
             );
             chat.pump().await;
-            chat.daemon.act(ToDaemon::Resolve {
-                key: chat.key,
-                resolved: true,
-            });
-            chat.pump().await;
-            assert!(!runs(&mut chat.daemon, chat.key));
-
+            chat.prompts();
             let (pull, status) = pull_423();
             let now = Instant::now();
-            assert_eq!(chat.daemon.due_pulls(now), std::slice::from_ref(&pull));
-            for state in [CheckState::Pending, CheckState::Failed, CheckState::Failed] {
-                chat.daemon.pulled(&pull, Ok(status(state)), now);
-                chat.pump().await;
-            }
+            chat.daemon.due_pulls(now);
+            chat.daemon
+                .pulled(&pull, Ok(status(CheckState::Pending)), now);
+            assert_eq!(
+                holds_423(&chat.daemon),
+                (Some(CheckState::Pending), Some(chat.key))
+            );
 
-            assert_eq!(resolved(&chat.daemon, chat.key), None);
+            // Another coxd, of the same store.
+            let (internal, mut heard) = unbounded_channel();
+            let mut again = Daemon::new(
+                chat.daemon.projects[0].folder.clone(),
+                false,
+                Rc::clone(&chat.daemon.store),
+                chat.agents.clone(),
+                internal,
+            );
+            let key = again.chats[0].key;
+            assert_eq!(holds_423(&again), (Some(CheckState::Pending), Some(key)));
+            // It reads it again at once, without its chat's conversation,
+            // and hears its CI ended while it was not running.
+            let now = Instant::now();
+            assert_eq!(again.due_pulls(now), std::slice::from_ref(&pull));
+            again.pulled(&pull, Ok(status(CheckState::Failed)), now);
+            assert_eq!(holds_423(&again), (Some(CheckState::Failed), Some(key)));
+            assert_eq!(
+                again.slot(key).unwrap().pulls.told.len(),
+                1,
+                "its open chat is to hear"
+            );
+            pump(&mut again, &mut heard).await;
+            pump(&mut again, &mut heard).await;
             assert_eq!(last_prompts(&chat.agents), [FAILED_ON_423]);
         });
     }
@@ -6008,7 +6102,8 @@ mod tests {
 
     /// Has the subagent of a chat open #423, and report while its CI
     /// runs, which then ends as `ended`; answers whether it was done
-    /// while CI ran, and once its opener heard how CI ended.
+    /// while CI ran, and once its opener heard how CI ended, as it does
+    /// though the subagent is done.
     async fn ci_ends_after_the_report(ended: crate::github::CheckState) -> [Option<ResolvedBy>; 2] {
         use crate::github::CheckState;
         let mut opener = Opener::new(&["Ship"]).await;
@@ -6036,25 +6131,30 @@ mod tests {
         opener.pump().await;
         let prompts = opener.prompts();
         assert_eq!(prompts.len(), 1, "how CI ended: {prompts:?}");
+        assert!(
+            prompts[0].contains("on the pull request it opened"),
+            "{prompts:?}"
+        );
+        assert!(!runs(&mut opener.daemon, ship), "not started again");
         [running, resolved(&opener.daemon, ship)]
     }
 
     #[test]
-    fn a_subagent_with_a_pull_request_is_done_once_its_opener_heard_its_ci_passed() {
+    fn a_subagent_with_a_pull_request_is_done_once_its_report_reached_its_opener() {
         on_daemon(async {
             assert_eq!(
                 ci_ends_after_the_report(crate::github::CheckState::Passed).await,
-                [None, Some(ResolvedBy::Agent)]
+                [Some(ResolvedBy::Agent), Some(ResolvedBy::Agent)]
             );
         });
     }
 
     #[test]
-    fn a_subagent_whose_ci_failed_is_left_open_for_its_opener() {
+    fn a_subagent_whose_ci_failed_stays_done_and_its_opener_hears_it_failed() {
         on_daemon(async {
             assert_eq!(
                 ci_ends_after_the_report(crate::github::CheckState::Failed).await,
-                [None, None]
+                [Some(ResolvedBy::Agent), Some(ResolvedBy::Agent)]
             );
         });
     }

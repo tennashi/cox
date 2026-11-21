@@ -22,7 +22,7 @@ use crate::settings::Setting;
 use crate::tabs::KeptTabs;
 
 /// The version of the tables below, as `SQLite`'s `user_version` holds it.
-const VERSION: i64 = 27;
+const VERSION: i64 = 28;
 
 const TABLES: &str = "
 CREATE TABLE projects (
@@ -204,6 +204,22 @@ CREATE TABLE bases (
     base TEXT NOT NULL,
     PRIMARY KEY (project, directory)
 ) WITHOUT ROWID;
+-- The pull requests the agents of a project's chats opened, which the
+-- project holds, whichever chat opened them: how each stood when last
+-- read, as JSON, once it was, and the chat that opened it, as a link.
+CREATE TABLE pulls (
+    -- NULL for one of Cox's own chats, in no project.
+    project INTEGER REFERENCES projects (id),
+    repo TEXT NOT NULL,
+    number INTEGER NOT NULL,
+    author INTEGER REFERENCES chats (id),
+    -- When Cox first saw it, in milliseconds since the epoch.
+    added INTEGER NOT NULL,
+    status TEXT,
+    -- When it was merged or closed, once it was, as Cox read it.
+    ended INTEGER,
+    PRIMARY KEY (repo, number)
+) WITHOUT ROWID;
 ";
 
 /// What makes the tables of each earlier version into those of the next:
@@ -323,6 +339,16 @@ const UPGRADES: &[&str] = &[
          base TEXT NOT NULL,
          PRIMARY KEY (project, directory)
      ) WITHOUT ROWID;",
+    "CREATE TABLE pulls (
+         project INTEGER REFERENCES projects (id),
+         repo TEXT NOT NULL,
+         number INTEGER NOT NULL,
+         author INTEGER REFERENCES chats (id),
+         added INTEGER NOT NULL,
+         status TEXT,
+         ended INTEGER,
+         PRIMARY KEY (repo, number)
+     ) WITHOUT ROWID;",
 ];
 
 /// What keeps an entry of a chat, in place of what was kept there.
@@ -363,6 +389,22 @@ impl std::fmt::Display for ChatId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         self.0.fmt(f)
     }
+}
+
+/// A pull request a project holds, as kept, with how it stood when last
+/// read as `T`, once it was (see [`Store::pulls`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct KeptPull<T> {
+    /// `None` for one of Cox's own chats, in no project.
+    pub project: Option<ProjectId>,
+    /// The repository, as `owner/name`.
+    pub repo: String,
+    pub number: u64,
+    /// The chat whose agent opened it, if it is kept.
+    pub author: Option<ChatId>,
+    /// When Cox first saw it, in milliseconds since the epoch.
+    pub added: i64,
+    pub status: Option<T>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1169,6 +1211,107 @@ impl Store {
         Ok(())
     }
 
+    /// The pull requests kept, of every project, the first seen first:
+    /// those not merged or closed, and those that were since `since`, in
+    /// milliseconds since the epoch, each with how it stood as `T` was
+    /// written as JSON, if it was read.
+    ///
+    /// # Errors
+    ///
+    /// When the database cannot be read, or holds a status that is not a
+    /// `T`.
+    pub fn pulls<T: serde::de::DeserializeOwned>(
+        &self,
+        since: i64,
+    ) -> anyhow::Result<Vec<KeptPull<T>>> {
+        let mut statement = self.connection.prepare(
+            "SELECT project, repo, number, author, added, status FROM pulls
+             WHERE ended IS NULL OR ended >= ?1
+             ORDER BY added, repo, number",
+        )?;
+        let rows = statement.query_map([since], |row| {
+            Ok((
+                row.get::<_, Option<i64>>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, i64>(2)?,
+                row.get::<_, Option<i64>>(3)?,
+                row.get::<_, i64>(4)?,
+                row.get::<_, Option<String>>(5)?,
+            ))
+        })?;
+        let mut pulls = Vec::new();
+        for row in rows {
+            let (project, repo, number, author, added, status) = row?;
+            pulls.push(KeptPull {
+                project: project.map(ProjectId),
+                repo,
+                number: u64::try_from(number)?,
+                author: author.map(ChatId),
+                added,
+                status: status
+                    .map(|status| serde_json::from_str(&status))
+                    .transpose()?,
+            });
+        }
+        Ok(pulls)
+    }
+
+    /// Keeps the pull request `number` of `repo` as `project`'s, opened by
+    /// the agent of `author`, first seen at `added`, unless it is kept
+    /// already.
+    ///
+    /// # Errors
+    ///
+    /// When the database cannot be written.
+    pub fn keep_pull(
+        &self,
+        project: Option<ProjectId>,
+        repo: &str,
+        number: u64,
+        author: Option<ChatId>,
+        added: i64,
+    ) -> anyhow::Result<()> {
+        self.connection.execute(
+            "INSERT INTO pulls (project, repo, number, author, added) VALUES (?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT (repo, number) DO NOTHING",
+            params![
+                project.map(|project| project.0),
+                repo,
+                i64::try_from(number)?,
+                author.map(|author| author.0),
+                added
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Keeps `status` as how the pull request `number` of `repo` stood when
+    /// last read, as `T` is written as JSON, and `ended`, when it was
+    /// merged or closed, once it was.
+    ///
+    /// # Errors
+    ///
+    /// When the database cannot be written, or `status` cannot be written
+    /// as JSON.
+    pub fn keep_pull_status<T: serde::Serialize>(
+        &self,
+        repo: &str,
+        number: u64,
+        status: &T,
+        ended: Option<i64>,
+    ) -> anyhow::Result<()> {
+        self.connection.execute(
+            "UPDATE pulls SET status = ?3, ended = ?4 WHERE repo = ?1 AND number = ?2",
+            params![
+                repo,
+                i64::try_from(number)?,
+                serde_json::to_string(status)?,
+                ended
+            ],
+        )?;
+        Ok(())
+    }
+
     /// Forgets `project`, its chats and what they showed, and the tabs
     /// of the stage of its folder, as when the human deletes it.
     ///
@@ -1209,6 +1352,13 @@ impl Store {
         )?;
         transaction.execute(
             "UPDATE chats SET parent = NULL WHERE project = ?1",
+            [project.0],
+        )?;
+        // Its pull requests go with it; one of another project that one
+        // of its chats opened forgets which did.
+        transaction.execute("DELETE FROM pulls WHERE project = ?1", [project.0])?;
+        transaction.execute(
+            &format!("UPDATE pulls SET author = NULL WHERE author IN ({chats})"),
             [project.0],
         )?;
         transaction.execute("DELETE FROM chats WHERE project = ?1", [project.0])?;
@@ -2666,6 +2816,66 @@ mod tests {
         assert_eq!(about(&store).as_deref(), Some("A shop that sells tea."));
         store.keep_about(app, None).unwrap();
         assert_eq!(about(&store), None);
+    }
+
+    #[test]
+    fn keeps_the_pull_requests_a_project_holds_and_how_each_stood() {
+        let directory = scratch();
+        let path = directory.path().join("chats.sqlite");
+        let (app, opener) = {
+            let store = Store::open(&path).unwrap();
+            let app = store.project(Path::new("/work/app"), "app").unwrap();
+            let opener = store.add_chat(Some(app), "ship").unwrap();
+            store
+                .keep_pull(Some(app), "o/app", 7, Some(opener), 100)
+                .unwrap();
+            store.keep_pull(None, "o/cox", 8, None, 200).unwrap();
+            // Kept once: the first that saw it opened it.
+            store.keep_pull(Some(app), "o/app", 7, None, 300).unwrap();
+            store
+                .keep_pull_status("o/app", 7, &"failed".to_owned(), None)
+                .unwrap();
+            store
+                .keep_pull_status("o/cox", 8, &"merged".to_owned(), Some(1_000))
+                .unwrap();
+            (app, opener)
+        };
+
+        // It holds them past a restart.
+        let store = Store::open(&path).unwrap();
+        let pulls = store.pulls::<String>(0).unwrap();
+        assert_eq!(
+            pulls,
+            [
+                KeptPull {
+                    project: Some(app),
+                    repo: "o/app".to_owned(),
+                    number: 7,
+                    author: Some(opener),
+                    added: 100,
+                    status: Some("failed".to_owned()),
+                },
+                KeptPull {
+                    project: None,
+                    repo: "o/cox".to_owned(),
+                    number: 8,
+                    author: None,
+                    added: 200,
+                    status: Some("merged".to_owned()),
+                },
+            ]
+        );
+        // One merged or closed long ago is left out.
+        let open: Vec<u64> = store
+            .pulls::<String>(2_000)
+            .unwrap()
+            .into_iter()
+            .map(|pull| pull.number)
+            .collect();
+        assert_eq!(open, [7]);
+        // They go with the project.
+        store.delete_project(app).unwrap();
+        assert_eq!(store.pulls::<String>(0).unwrap().len(), 1);
     }
 
     #[test]

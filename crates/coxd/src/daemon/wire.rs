@@ -269,6 +269,24 @@ pub struct Listing {
     /// as kept past a restart, for a window that starts to choose.
     #[serde(default)]
     pub chosen: usize,
+    /// The pull requests the projects hold, the first seen first: those
+    /// open, and those merged or closed lately.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pulls: Vec<ProjectPull>,
+}
+
+/// A pull request a project holds, whichever of its chats' agents opened
+/// it, as the window shows it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProjectPull {
+    pub pull: Pull,
+    /// Its project, by its place in the projects.
+    pub project: usize,
+    /// How it stood when Cox last read it, once it read it.
+    pub status: Option<Status>,
+    /// The chat whose agent opened it, by its key, while it is listed.
+    #[serde(default)]
+    pub author: Option<u64>,
 }
 
 /// What an agent's tools ask of its chat's stage, as Cox's
