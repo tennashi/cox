@@ -5,6 +5,15 @@
 //! the human, and the chat that opened one while it is open, once CI
 //! ends.
 //!
+//! A project holds too the human's open pull requests of its
+//! repositories (see [`crate::repositories::of`]) that Cox finds on
+//! GitHub, as `gh pr list --author @me` lists them, however the human
+//! opened them: in Cox, by hand, or with another tool. Cox lists them
+//! now and then, once for each repository, and holds each it does not
+//! yet, with no chat that opened it, unless a chat is seen to open it
+//! later. Not everyone's: a busy repository's would fill the Activity
+//! page.
+//!
 //! A chat's work does not wait on its pull requests: one marked done
 //! stays done as CI ends, which the Activity page shows. While it is
 //! open, its agent hears how CI ended as before: in a chat of the
@@ -12,7 +21,8 @@
 //! it, with its report, which it hears too once the subagent is done, as
 //! long as its own chat is open.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use tokio::sync::mpsc::UnboundedSender;
@@ -34,6 +44,10 @@ const LAST: usize = 5;
 const WHILE_CI_RUNS: Duration = Duration::from_secs(20);
 const WHILE_OPEN: Duration = Duration::from_mins(2);
 const AFTER_A_PROBLEM: Duration = Duration::from_mins(5);
+
+/// How often Cox lists the human's open pull requests of each project's
+/// repositories, as often as it reads one that waits on review.
+pub(super) const LIST_EVERY: Duration = WHILE_OPEN;
 
 /// How often coxd looks which pull requests are due to be read.
 pub(super) const LOOK_EVERY: Duration = Duration::from_secs(10);
@@ -82,6 +96,16 @@ impl Pulls {
     }
 }
 
+/// When Cox lists the human's open pull requests of the projects'
+/// repositories next, and of which projects it lists them now.
+#[derive(Default)]
+pub(super) struct Listing {
+    /// When it is due next; `None` until it first listed them.
+    next: Option<Instant>,
+    /// The projects whose pull requests `gh` lists now.
+    reading: HashSet<ProjectId>,
+}
+
 /// Has the daemon look, now and then, which pull requests are due to be
 /// read, as `internal` tells it.
 pub(super) async fn look(internal: UnboundedSender<Internal>) {
@@ -97,6 +121,20 @@ impl Daemon {
     /// Has `gh` read the pull requests that are due at `now` (see
     /// [`Self::due_pulls`]).
     pub(super) fn look_at_pulls(&mut self, now: Instant) {
+        for (project, folders) in self.due_listings(now) {
+            let internal = self.internal.clone();
+            tokio::task::spawn_local(async move {
+                let repos = tokio::task::spawn_blocking(move || github::repos(&folders))
+                    .await
+                    .unwrap_or_default();
+                let mut read = Vec::new();
+                for repo in repos {
+                    let listed = github::mine(&repo).await;
+                    read.push((repo, listed));
+                }
+                let _ = internal.send(Internal::Listed { project, read });
+            });
+        }
         for pull in self.due_pulls(now) {
             let internal = self.internal.clone();
             tokio::task::spawn_local(async move {
@@ -133,7 +171,18 @@ impl Daemon {
         }
         let added = cox_core::store::now();
         for (pull, project, author) in found {
-            if self.watches.contains_key(&pull) {
+            if let Some(watch) = self.watches.get_mut(&pull) {
+                // Found on GitHub before the chat was seen to open it.
+                if let (None, Some(author)) = (watch.author, author) {
+                    watch.project = project;
+                    watch.author = Some(author);
+                    if let Err(error) =
+                        self.store
+                            .keep_pull_author(project, &pull.repo, pull.number, author)
+                    {
+                        tracing::error!("the pull request's chat is not kept: {error:#}");
+                    }
+                }
                 continue;
             }
             if let Err(error) =
@@ -164,6 +213,83 @@ impl Daemon {
             .collect();
         due.sort();
         due
+    }
+
+    /// The projects whose open pull requests are due to be listed at
+    /// `now`, marked as listed from now on, each with the folders of its
+    /// repositories: once each [`LIST_EVERY`], of each project the human
+    /// has listed and not put away, unless they are listed still.
+    pub(super) fn due_listings(&mut self, now: Instant) -> Vec<(ProjectId, Vec<PathBuf>)> {
+        if self.listing.next.is_some_and(|next| next > now) {
+            return Vec::new();
+        }
+        self.listing.next = Some(now + LIST_EVERY);
+        let mut due = Vec::new();
+        for project in &self.projects {
+            let Some(id) = project.id else {
+                continue;
+            };
+            if project.deleted || project.archived || self.listing.reading.contains(&id) {
+                continue;
+            }
+            let folders: Vec<PathBuf> = crate::repositories::of(&project.folder)
+                .into_iter()
+                .map(|(_, folder)| folder)
+                .collect();
+            if folders.is_empty() {
+                continue;
+            }
+            self.listing.reading.insert(id);
+            due.push((id, folders));
+        }
+        due
+    }
+
+    /// Takes the open pull requests of the human's `gh` listed of each
+    /// repository of `project`, as `read` says, at `now`: the project
+    /// holds each that no project holds yet, with no chat that opened it,
+    /// to be read from now. One that is merged or closed is read so, as
+    /// any other, and listed no more.
+    pub(super) fn listed(
+        &mut self,
+        project: ProjectId,
+        read: Vec<(String, Result<Vec<Pull>, Problem>)>,
+        now: Instant,
+    ) {
+        self.listing.reading.remove(&project);
+        let added = cox_core::store::now();
+        for (repo, listed) in read {
+            let pulls = match listed {
+                Ok(pulls) => pulls,
+                Err(problem) => {
+                    tracing::warn!(repo, "gh does not list the pull requests: {problem:?}");
+                    if let Some(all) = problem.for_all() {
+                        self.github = Some(all.to_owned());
+                    }
+                    continue;
+                }
+            };
+            for pull in pulls {
+                if self.watches.contains_key(&pull) {
+                    continue;
+                }
+                if let Err(error) =
+                    self.store
+                        .keep_pull(Some(project), &pull.repo, pull.number, None, added)
+                {
+                    tracing::error!("the pull request is not kept: {error:#}");
+                }
+                self.watches.insert(
+                    pull,
+                    Watch {
+                        project: Some(project),
+                        added,
+                        next: Some(now),
+                        ..Watch::default()
+                    },
+                );
+            }
+        }
     }
 
     /// Reads the pull requests the projects hold, as kept, for coxd to

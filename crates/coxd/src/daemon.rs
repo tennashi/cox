@@ -303,6 +303,15 @@ pub enum Internal {
         pull: crate::github::Pull,
         read: Result<crate::github::Status, crate::github::Problem>,
     },
+    /// `gh` listed the human's open pull requests of each repository of
+    /// `project`, as `read` says (see [`pulls`]).
+    Listed {
+        project: ProjectId,
+        read: Vec<(
+            String,
+            Result<Vec<crate::github::Pull>, crate::github::Problem>,
+        )>,
+    },
     /// Cox took away the worktrees `removed`, of chats that were done
     /// (see [`tidy`]).
     Tidied {
@@ -654,6 +663,9 @@ pub struct Daemon {
     /// Why no chat shows its pull requests, as when `gh` is not logged
     /// in, if that is so.
     github: Option<String>,
+    /// When Cox lists the human's open pull requests of the projects'
+    /// repositories (see [`pulls`]).
+    listing: pulls::Listing,
     /// Whether coxd looks which worktrees it may take away (see
     /// [`tidy`]).
     tidying: tidy::Tidying,
@@ -802,6 +814,7 @@ impl Daemon {
             scheduled: HashMap::new(),
             watches: pulls::Watches::new(),
             github: None,
+            listing: pulls::Listing::default(),
             tidying: tidy::Tidying::default(),
         };
         daemon.read_kept();
@@ -2171,6 +2184,7 @@ impl Daemon {
                 self.tidy_worktrees(now, false);
             }
             Internal::Pulled { pull, read } => self.pulled(&pull, read, Instant::now()),
+            Internal::Listed { project, read } => self.listed(project, read, Instant::now()),
             Internal::Tidied { removed } => self.tidied(removed),
         }
     }
@@ -4248,7 +4262,7 @@ mod tests {
         agents: Rc<PlayedAgents>,
         key: u64,
         subagents: Vec<u64>,
-        _home: TempDir,
+        home: TempDir,
     }
 
     impl Opener {
@@ -4284,7 +4298,7 @@ mod tests {
                 agents,
                 key,
                 subagents,
-                _home: home,
+                home,
             };
             opener.pump().await;
             opener
@@ -6064,6 +6078,100 @@ mod tests {
             pump(&mut again, &mut heard).await;
             pump(&mut again, &mut heard).await;
             assert_eq!(last_prompts(&chat.agents), [FAILED_ON_423]);
+        });
+    }
+
+    #[test]
+    fn the_human_s_pull_requests_found_on_github_are_held_once_and_go_once_closed() {
+        use crate::github::{CheckState, Pull, PullState, Status};
+        on_daemon(async {
+            let mut chat = Opener::new(&[]).await;
+            // A project with a repository among its directories.
+            let folder = chat.home.join("app");
+            let repository = folder.join(crate::settings::DIRECTORIES).join("cox");
+            std::fs::create_dir_all(repository.join(".git")).unwrap();
+            let index = chat.daemon.project(folder);
+            let id = chat.daemon.projects[index].id.unwrap();
+
+            // Listed once each while, and not while listed still.
+            let now = Instant::now();
+            let every = pulls::LIST_EVERY;
+            assert_eq!(
+                chat.daemon.due_listings(now),
+                [(id, vec![repository.clone()])]
+            );
+            assert_eq!(chat.daemon.due_listings(now), []);
+            assert_eq!(chat.daemon.due_listings(now + every), [], "listed still");
+
+            let (pull, status) = pull_423();
+            let other = Pull {
+                repo: pull.repo.clone(),
+                number: 500,
+            };
+            let listed = |pulls: &[&Pull]| {
+                vec![(
+                    pull.repo.clone(),
+                    Ok(pulls.iter().map(|&pull| pull.clone()).collect()),
+                )]
+            };
+            for _ in 0..2 {
+                chat.daemon.listed(id, listed(&[&pull, &other]), now);
+            }
+            assert_eq!(
+                chat.daemon.due_listings(now + 2 * every),
+                [(id, vec![repository])]
+            );
+            let held = |daemon: &Daemon| -> Vec<(u64, usize, Option<u64>, Option<Status>)> {
+                daemon
+                    .project_pulls()
+                    .into_iter()
+                    .map(|held| (held.pull.number, held.project, held.author, held.status))
+                    .collect()
+            };
+            // Held once each, with no chat that opened it.
+            assert_eq!(
+                held(&chat.daemon),
+                [(423, index, None, None), (500, index, None, None)]
+            );
+
+            // A chat is seen to open one: held once still, now as its.
+            submit(&mut chat.daemon, chat.key);
+            chat.pump().await;
+            tells(
+                &chat.agent(None),
+                [
+                    opens_423(),
+                    AgentEvent::TurnEnded(cox_acp::StopReason::EndTurn),
+                ],
+            );
+            chat.pump().await;
+            chat.prompts();
+            assert_eq!(chat.daemon.due_pulls(now), [pull.clone(), other.clone()]);
+            assert_eq!(
+                held(&chat.daemon),
+                [(423, 0, Some(chat.key), None), (500, index, None, None)]
+            );
+            let kept: Vec<_> = chat
+                .daemon
+                .store
+                .pulls::<Status>(0)
+                .unwrap()
+                .into_iter()
+                .map(|kept| (kept.number, kept.author.is_some()))
+                .collect();
+            assert_eq!(kept, [(423, true), (500, false)]);
+
+            // Once closed, it is read no more, nor held again as listed.
+            let mut closed = status(CheckState::Passed);
+            closed.state = PullState::Closed;
+            chat.daemon.pulled(&other, Ok(closed.clone()), now);
+            chat.daemon
+                .pulled(&pull, Ok(status(CheckState::Pending)), now);
+            chat.daemon.listed(id, listed(&[&pull, &other]), now);
+            assert_eq!(chat.daemon.due_pulls(now + every), [pull]);
+            let after = held(&chat.daemon);
+            assert_eq!(after.len(), 2);
+            assert_eq!(after[1], (500, index, None, Some(closed)));
         });
     }
 

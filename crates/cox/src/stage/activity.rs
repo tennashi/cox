@@ -2745,7 +2745,7 @@ mod tests {
     /// hold: of `app`, #7, whose CI runs, opened by the chat 1; #8, whose
     /// CI failed, by the chat 2, marked done; #9, whose CI failed, by a
     /// chat gone; #10, merged lately, and #11, merged long ago, by the
-    /// chat 1; and of `shop`, #12.
+    /// chat 1; and of `shop`, #12, opened outside Cox, by no chat.
     fn holding(home: &Path) -> Told {
         use coxd::github::PullState;
         let root = home.join("app");
@@ -2850,6 +2850,11 @@ mod tests {
         let pulls = json["pulls"].as_array().unwrap();
         assert_eq!(pulls.len(), 5);
         assert_eq!(pulls[4]["where"], "shop");
+        // One opened outside Cox shows with no chat, and none to ask.
+        assert_eq!(pulls[4]["number"], 12);
+        assert_eq!(pulls[4]["state"], "open");
+        assert_eq!(pulls[4]["author"], Value::Null);
+        assert_eq!(pulls[4]["fix"], false);
     }
 
     #[test]
