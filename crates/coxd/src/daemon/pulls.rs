@@ -255,6 +255,22 @@ impl Daemon {
         told
     }
 
+    /// Whether CI holds open the chat whose pull requests `pulls` holds:
+    /// it runs, or failed, on one not merged or closed, as last read.
+    pub(super) fn ci_holds(&self, pulls: &Pulls) -> bool {
+        pulls
+            .opened
+            .iter()
+            .filter_map(|pull| self.watches.get(pull)?.status.as_ref())
+            .any(|status| {
+                !status.done()
+                    && matches!(
+                        status.checks(),
+                        Some(CheckState::Pending | CheckState::Failed)
+                    )
+            })
+    }
+
     /// The pull requests of the chat whose pull requests `pulls` holds, as
     /// the window shows them.
     pub(super) fn pull_rows(&self, pulls: &Pulls) -> Vec<PullRow> {
