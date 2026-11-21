@@ -231,8 +231,10 @@ function standing(row) {
   return { dot: "", words: "idle" };
 }
 
+// Whether the chat waits for the human, as the bell counts it: one
+// marked done never does.
 function waits(row) {
-  return row.state === "Asking" || row.unread;
+  return !row.resolved && (row.state === "Asking" || row.unread);
 }
 
 // A goal as the input that sets it reads it: the chat's, as the list
@@ -451,6 +453,29 @@ function openSettings(agent) {
   draw();
 }
 
+// The projects whose chats marked done the human unfolded, by their id,
+// as the window's "Resolved" toggles: folded until they tap it.
+const resolvedOpen = new Set();
+
+// "Resolved", after the chats of a project, if any of them were marked
+// done, as the window's list folds them away at its end: a tap unfolds
+// them, and another folds them again.
+function resolvedGroup(project, done) {
+  if (!done.length) return null;
+  const id = project.id === null ? "home" : String(project.id);
+  const open = resolvedOpen.has(id);
+  const toggle = () => {
+    if (open) resolvedOpen.delete(id);
+    else resolvedOpen.add(id);
+    draw();
+  };
+  return el("ul", { class: "chats resolved" },
+    el("li", { class: "new" },
+      el("button", { type: "button", "aria-expanded": String(open), onclick: toggle },
+        `Resolved (${done.length})`, el("span", { class: "fold" }, open ? "▴" : "▾"))),
+    open ? done.map((row) => chatRow(row, { child: true })) : null);
+}
+
 function drawHome() {
   compose.form.hidden = true;
   compose.goal.hidden = true;
@@ -476,13 +501,15 @@ function drawHome() {
     const shelf = (index, head) => {
       const project = listing.projects[index];
       const rows = listing.chats.filter((row) => row.project === index);
+      const done = rows.filter((row) => row.resolved);
       return el("section", { class: project.id === null ? "shelf own" : "shelf" },
         head,
         el("ul", { class: "chats" },
-          rows.map((row) => chatRow(row, { child: true })),
+          rows.filter((row) => !row.resolved).map((row) => chatRow(row, { child: true })),
           project.missing ? null : el("li", { class: "new" },
             el("button", { type: "button", onclick: (event) => newChat(event.currentTarget, index) },
-              el("span", { class: "plus" }, "+"), "New chat"))));
+              el("span", { class: "plus" }, "+"), "New chat"))),
+        resolvedGroup(project, done));
     };
     const own = listing.projects.findIndex((project) => project.id === null);
     if (own >= 0) shelves.push(shelf(own, null));
