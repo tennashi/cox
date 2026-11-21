@@ -26,7 +26,9 @@
 //! `/content` as the human opens one (see [`for_the_phone`]), and, of a
 //! long conversation, for the entries before its last [`TAIL`], which it
 //! asks for on `/entries` as the human reads back to them (see
-//! [`opened`]).
+//! [`opened`]), and which a page that holds them already, as it follows
+//! the chat again, names on `/events` by the first it holds, `&from=<n>`,
+//! to be told from there.
 //! What the human does on it, as sending a line or answering what the
 //! agent asks, it posts to `/act?kept=<number>`, a [`ToDaemon`] as JSON,
 //! as the window says it, which coxd does as the window's (see
@@ -1130,6 +1132,7 @@ impl Page {
             Some(kept) => self.key_of(kept).await,
             None => None,
         };
+        let holds = number_asked(request, "from").unwrap_or(usize::MAX);
         let id = self.last.get() + 1;
         self.last.set(id);
         let (phone, told) = unbounded_channel();
@@ -1148,6 +1151,7 @@ impl Page {
         let events = Events {
             told,
             opened: false,
+            holds,
             beat: tokio::time::interval(BEAT),
             id,
             internal: self.internal.clone(),
@@ -1498,6 +1502,10 @@ struct Events {
     /// Whether the phone was told the conversation it watches, which the
     /// first patch it is told is of, whole (see [`opened`]).
     opened: bool,
+    /// The first place of that conversation the page holds already, as
+    /// it follows the chat again, from which it is told it, or
+    /// `usize::MAX` when it holds none.
+    holds: usize,
     beat: tokio::time::Interval,
     id: u64,
     internal: UnboundedSender<Internal>,
@@ -1508,6 +1516,7 @@ impl Events {
         if let Poll::Ready(told) = self.told.poll_recv(context) {
             let opens = matches!(told, Some(FromDaemon::Patch { .. })) && !self.opened;
             self.opened |= opens;
+            let opens = opens.then_some(self.holds);
             return Poll::Ready(told.map(|told| event(told, opens)));
         }
         if self.beat.poll_tick(context).is_ready() {
@@ -1525,7 +1534,7 @@ impl Drop for Events {
 
 /// `told` as a server-sent event: a line of JSON, as [`for_the_phone`]
 /// has it, of the conversation the phone `opens`, if it opens one.
-fn event(told: FromDaemon, opens: bool) -> Bytes {
+fn event(told: FromDaemon, opens: Option<usize>) -> Bytes {
     let json = for_the_phone(told, opens)
         .and_then(|told| serde_json::to_string(&told))
         .unwrap_or_else(|error| {
@@ -1545,14 +1554,15 @@ fn event(told: FromDaemon, opens: bool) -> Bytes {
 ///
 /// The conversation the phone `opens`, of which it is told the whole
 /// first, it is told the last of, as [`opened`] says, and where they
-/// start, as `from`.
-fn for_the_phone(told: FromDaemon, opens: bool) -> serde_json::Result<serde_json::Value> {
+/// start, as `from`: `opens` is the first place of it the page holds
+/// already, from which it is told it all, or `usize::MAX`.
+fn for_the_phone(told: FromDaemon, opens: Option<usize>) -> serde_json::Result<serde_json::Value> {
     let FromDaemon::Patch { key, mut patch } = told else {
         return serde_json::to_value(&told);
     };
     let mut entries = std::mem::take(&mut patch.entries);
-    let from = opens.then(|| {
-        let (from, last) = opened(std::mem::take(&mut entries), patch.len);
+    let from = opens.map(|holds| {
+        let (from, last) = opened(std::mem::take(&mut entries), patch.len, holds);
         entries = last;
         from
     });
@@ -1576,12 +1586,15 @@ const TAIL: usize = 200;
 
 /// Of the `entries` of a conversation that holds `len`, those a phone is
 /// told as it opens it, and where the last of them start: the last
-/// [`TAIL`], and, before them, those the page reads all the conversation
-/// for, which it would miss: the last line of the human's, the work they
-/// close after it, as what the agent showed, and the last of what the
-/// agent asked; and the agents the chat switched between.
-fn opened(entries: Vec<(usize, Entry)>, len: usize) -> (usize, Vec<(usize, Entry)>) {
-    let from = len.saturating_sub(TAIL);
+/// [`TAIL`], or all from `holds`, the first the page holds already, as
+/// it follows the chat again after it read back to there, so that what
+/// it holds is told afresh, as it may have changed meanwhile; and,
+/// before them, those the page reads all the conversation for, which it
+/// would miss: the last line of the human's, the work they close after
+/// it, as what the agent showed, and the last of what the agent asked;
+/// and the agents the chat switched between.
+fn opened(entries: Vec<(usize, Entry)>, len: usize, holds: usize) -> (usize, Vec<(usize, Entry)>) {
+    let from = len.saturating_sub(TAIL).min(holds);
     if from == 0 {
         return (0, entries);
     }
@@ -2021,7 +2034,7 @@ mod tests {
             keeps: true,
             steers: false,
         };
-        let told = for_the_phone(FromDaemon::Patch { key: 7, patch }, false).unwrap();
+        let told = for_the_phone(FromDaemon::Patch { key: 7, patch }, None).unwrap();
         let told = &told["Patch"];
         assert_eq!(told["key"], 7);
         assert_eq!(told["patch"]["len"], 4);
@@ -2151,7 +2164,7 @@ mod tests {
                 key: 7,
                 patch: patch(entries.clone()),
             },
-            true,
+            Some(usize::MAX),
         )
         .unwrap();
         assert_eq!(opened["Patch"]["patch"]["len"], len);
@@ -2160,13 +2173,40 @@ mod tests {
         assert_eq!(told[..3], [1, 3, 4], "{told:?}");
         assert_eq!(told[3..], (10..len as u64).collect::<Vec<_>>()[..]);
 
+        // A page that read back to 6 is told all from there as it follows
+        // the chat again, and what it reads before.
+        let again = for_the_phone(
+            FromDaemon::Patch {
+                key: 7,
+                patch: patch(entries.clone()),
+            },
+            Some(6),
+        )
+        .unwrap();
+        assert_eq!(again["Patch"]["patch"]["from"], 6);
+        let told = places(&again);
+        assert_eq!(told[..3], [1, 3, 4], "{told:?}");
+        assert_eq!(told[3..], (6..len as u64).collect::<Vec<_>>()[..]);
+
+        // And a page that holds more than the conversation does, as it
+        // was cut short meanwhile, is told its last.
+        let shorter = for_the_phone(
+            FromDaemon::Patch {
+                key: 7,
+                patch: patch(entries.clone()),
+            },
+            Some(len + 50),
+        )
+        .unwrap();
+        assert_eq!(shorter["Patch"]["patch"]["from"], 10);
+
         // A patch after it, as the conversation goes on, is told whole.
         let after = for_the_phone(
             FromDaemon::Patch {
                 key: 7,
                 patch: patch(entries),
             },
-            false,
+            None,
         )
         .unwrap();
         assert!(after["Patch"]["patch"].get("from").is_none());

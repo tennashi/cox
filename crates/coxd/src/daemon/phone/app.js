@@ -150,21 +150,33 @@ function keyOf(kept) {
   return row ? row.key : null;
 }
 
-function connect() {
+// Follows the chats, and the chat the address names, anew, or, `again`,
+// as the page followed that chat before, keeping what it holds of it and
+// what it drew, as after the stream was lost or the page put away.
+function connect(again = false) {
   if (events) events.close();
   const kept = shownKept();
-  chat = kept === null ? null : { kept, key: keyOf(kept), entries: [], from: 0, state: null, steers: false, title: null, goal: null, settings: [], commands: [], came: false };
-  contents.clear();
-  drawnPlaces = PLACES;
-  events = new EventSource(kept === null ? "/events" : `/events?kept=${kept}`);
-  events.onopen = () => { head.lost.hidden = true; };
-  events.onerror = () => {
+  const keeps = again && chat !== null && chat.kept === kept;
+  if (!keeps) {
+    chat = kept === null ? null : { kept, key: keyOf(kept), entries: [], from: 0, state: null, steers: false, title: null, goal: null, settings: [], commands: [], came: false };
+    contents.clear();
+    drawnPlaces = PLACES;
+  }
+  // Of the entries before those coxd tells first, the page asks for no
+  // more of those it read back to already: coxd tells it all from there.
+  const holds = keeps && chat.from > 0 ? `&from=${chat.from}` : "";
+  const stream = new EventSource(kept === null ? "/events" : `/events?kept=${kept}${holds}`);
+  events = stream;
+  stream.onopen = () => { head.lost.hidden = true; };
+  stream.onerror = () => {
     head.lost.hidden = false;
-    // A stream the browser gave up on, as on 401, is not tried again by
-    // itself.
-    if (events.readyState === EventSource.CLOSED) setTimeout(connect, 3000);
+    // The page follows the chat again itself, rather than the browser,
+    // which would ask as it first did, to be told from where the human
+    // read back to.
+    stream.close();
+    setTimeout(() => { if (events === stream) connect(true); }, 3000);
   };
-  events.onmessage = (message) => hear(JSON.parse(message.data));
+  stream.onmessage = (message) => hear(JSON.parse(message.data));
   draw();
 }
 
@@ -178,6 +190,13 @@ function hear(told) {
     showOpened();
   } else if (told.Patch && chat && told.Patch.key === chat.key) {
     const patch = told.Patch.patch;
+    // The first patch of a long conversation holds all the page is to
+    // hold of it: what it held before, as it follows the chat again, may
+    // have changed meanwhile.
+    if (patch.from !== undefined) {
+      chat.entries = [];
+      contents.clear();
+    }
     chat.entries.length = patch.len;
     for (const [at, entry] of patch.entries) {
       chat.entries[at] = entry;
@@ -2135,7 +2154,7 @@ document.addEventListener("visibilitychange", () => {
     if (events) events.close();
     events = null;
   } else if (!events || events.readyState === EventSource.CLOSED) {
-    connect();
+    connect(true);
   }
 });
 
