@@ -33,6 +33,7 @@ const SHOW_MEDIA: &str = "show_media";
 const RUN_COMMAND: &str = "run_command";
 const READ_CHAT: &str = "read_chat";
 const RESOLVE_CHAT: &str = "resolve_chat";
+const RENAME_CHAT: &str = "rename_chat";
 const PROPOSE_GOAL: &str = "propose_goal";
 const PROPOSE_NAME: &str = "propose_name";
 const PROPOSE_ABOUT: &str = "propose_about";
@@ -227,6 +228,7 @@ fn all_tools() -> Value {
     subagent::agent_stop_tool(),
     read_chat_tool(),
     resolve_chat_tool(),
+    rename_chat_tool(),
     show_media_tool(),
     propose_goal_tool(),
     propose_name_tool(),
@@ -855,6 +857,30 @@ fn resolve_chat_tool() -> Value {
     })
 }
 
+/// The tool that renames the agent's own chat, as the agent learns of it.
+fn rename_chat_tool() -> Value {
+    json!(
+    {
+        "name": RENAME_CHAT,
+        "description": "Renames this chat, as the human's list of chats and their phone \
+            show it. The chat is named after the title your session was given, or its first \
+            line, which stays as the work moves on: rename it once what the chat works on \
+            has moved on from what its name says, as when its focus changed, or after a long \
+            conversation, with a short name of what it is about now. It names this chat \
+            alone, and not one the human named: that name stays.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string",
+                    "description": "The chat's new name, short, as a title.",
+                },
+            },
+            "required": ["name"],
+        },
+    })
+}
+
 /// The tool that proposes what the chat's project is, as the agent learns
 /// of it.
 fn propose_about_tool() -> Value {
@@ -977,6 +1003,7 @@ pub(super) async fn call(
         subagent::AGENT_STOP => subagent::agent_stop(arguments, chats).await,
         READ_CHAT => read_chat(arguments, chats).await,
         RESOLVE_CHAT => resolve_chat(arguments, chats).await,
+        RENAME_CHAT => rename_chat(arguments, chats).await,
         PROPOSE_GOAL => propose_goal(arguments, chats).await,
         PROPOSE_NAME => propose_name(arguments, chats).await,
         PROPOSE_ABOUT => propose_about(arguments, chats).await,
@@ -1557,6 +1584,28 @@ async fn resolve_chat(
     resolved
         .await
         .map_err(|_| "the chat closed before it marked the other done".to_owned())?
+}
+
+/// Asks the window to name the chat as `arguments` say, and tells the
+/// agent what it is named now.
+async fn rename_chat(
+    arguments: &Value,
+    chats: &UnboundedSender<ChatRequest>,
+) -> Result<String, String> {
+    let name = arguments
+        .get("name")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .ok_or("no name: give the chat's new name as `name`")?
+        .to_owned();
+    let (answer, renamed) = oneshot::channel();
+    chats
+        .send(ChatRequest::RenameChat { name, answer })
+        .map_err(|_| "the chat has closed".to_owned())?;
+    renamed
+        .await
+        .map_err(|_| "the chat closed before it was renamed".to_owned())?
 }
 
 /// Asks the window to show the human what `arguments` propose the chat's
@@ -2269,6 +2318,7 @@ mod tests {
             "agent_stop",
             "read_chat",
             "resolve_chat",
+            "rename_chat",
             "show_media",
             "propose_goal",
             "propose_name",
@@ -2968,6 +3018,38 @@ mod tests {
         // No number asks nothing.
         let none = resolve(json!({ "chat": "Cart" })).await;
         assert_eq!(none["isError"], true);
+    }
+
+    #[tokio::test]
+    async fn renames_its_own_chat() {
+        let (sent, _requests) = unbounded_channel();
+        let (chats, mut asked) = unbounded_channel();
+        let window = tokio::spawn(async move {
+            let Some(ChatRequest::RenameChat { name, answer }) = asked.recv().await else {
+                panic!("the window was not asked");
+            };
+            let _ = answer.send(Ok(format!("This chat is named \"{name}\" now.")));
+            name
+        });
+        let rename = |arguments: Value| {
+            let params = json!({ "name": RENAME_CHAT, "arguments": arguments });
+            let (sent, chats) = (sent.clone(), chats.clone());
+            async move {
+                call(&params, Path::new("/work"), None, false, &sent, &chats)
+                    .await
+                    .unwrap()
+            }
+        };
+        let answered = rename(json!({ "name": " Cart totals " })).await;
+        assert_eq!(answered["isError"], false);
+        assert_eq!(
+            answered["content"][0]["text"],
+            "This chat is named \"Cart totals\" now."
+        );
+        assert_eq!(window.await.unwrap(), "Cart totals");
+        // A blank name asks nothing.
+        let blank = rename(json!({ "name": " " })).await;
+        assert_eq!(blank["isError"], true);
     }
 
     #[tokio::test]
