@@ -69,7 +69,8 @@ use coxd::chat::sketch::{self, Sketch};
 use coxd::chat::spent::Spent;
 use coxd::daemon::Link;
 use coxd::daemon::wire::{
-    Background, ChatRow, FromDaemon, Listing, OnStepLine, ProjectRow, PullRow, ToDaemon,
+    Background, ChatRow, FromDaemon, Listing, OnStepLine, ProjectPull, ProjectRow, PullRow,
+    ToDaemon,
 };
 
 mod at_work;
@@ -495,6 +496,8 @@ pub struct Workspace {
     badged: usize,
     /// Why no chat shows its pull requests, as coxd says, if that is so.
     github: Option<String>,
+    /// The pull requests the projects hold, as coxd last listed them.
+    pulls: Vec<ProjectPull>,
     /// The menu of the right button, where it opened in the window, for
     /// the chat at an index in the list.
     menu: Option<(Point<Pixels>, usize)>,
@@ -628,7 +631,7 @@ impl Workspace {
                         key: say.key,
                         text: say.text,
                         attached: Vec::new(),
-                        step: Some(say.step),
+                        step: say.step,
                     });
                 });
                 if said.is_err() {
@@ -657,6 +660,7 @@ impl Workspace {
             chosen: 0,
             badged: 0,
             github: None,
+            pulls: Vec::new(),
             menu: None,
             project_menu: None,
             deleting: None,
@@ -771,9 +775,11 @@ impl Workspace {
             archived,
             github,
             chosen,
+            pulls,
             ..
         } = listing;
         self.github = github;
+        self.pulls = pulls;
         self.list_projects(projects);
         self.project_menu = self
             .project_menu
@@ -1583,6 +1589,19 @@ impl Workspace {
             home: self.projects[0].folder.clone(),
             github: self.github.clone(),
             shown: self.shown().map(Chat::key),
+            pulls: self
+                .pulls
+                .iter()
+                .filter_map(|pull| {
+                    let project = self.projects.get(pull.project)?;
+                    (!project.deleted).then(|| crate::stage::activity::Pull {
+                        project: project.folder.clone(),
+                        pull: pull.pull.clone(),
+                        status: pull.status.clone(),
+                        author: pull.author,
+                    })
+                })
+                .collect(),
         });
         let count = self.rings().count();
         if count != self.badged {

@@ -34,6 +34,13 @@
 // while the agent asks something, unless it takes the line into the
 // turn. A plan of a chat not at work the human may dismiss, until its
 // agent sends another.
+//
+// Last, the pull requests the project holds, whichever chat opened them:
+// each with its number, which opens it on GitHub, its title, how its CI
+// stands, and the chat that opened it, which a click shows; one whose CI
+// failed has a button that asks that chat to fix it, as a line the human
+// sends it, from `cox://api/activity/fix/<pull>`, which reopens it if it
+// was done. One merged or closed shows a while, as a chat done does.
 
 const API = "cox://api/activity";
 const EVERY = 2000;
@@ -640,6 +647,38 @@ function numbers(all) {
   );
 }
 
+/// The pull requests the project holds, as a section of their own, or
+/// nothing when it holds none.
+function pullRequests() {
+  const pulls = told.pulls ?? [];
+  if (!pulls.length) return "";
+  const rows = pulls.map((pull) => {
+    const where = told.home && pull.where ? `<span class="where">${esc(pull.where)}</span> ` : "";
+    const stands =
+      pull.state === "merged" || pull.state === "closed"
+        ? `<span class="ci done">${esc(pull.state)}</span>`
+        : pull.ci
+          ? `<span class="ci ${esc(pull.ci)}">CI ${esc(pull.ci)}</span>`
+          : `<span class="ci">${pull.state ? "no CI" : "not read yet"}</span>`;
+    const draft = pull.state === "draft" ? ` <span class="draft">draft</span>` : "";
+    const by = pull.author
+      ? `<span class="by">by <a href="cox://chat/${pull.author.key}" title="shows the chat">${esc(pull.author.name)}</a>${hint(pull.author)}${pull.author.resolved ? " (done)" : ""}</span>`
+      : "";
+    const fix = pull.fix
+      ? `<button class="fix" data-fix="${esc(JSON.stringify({ key: pull.author.key, repo: pull.repo, number: pull.number }))}" title="sends the chat that opened it a line asking it to fix its CI, reopening it if it is done">Ask to fix</button>`
+      : "";
+    const failed = pull.failed.length ? `<div class="failed">Failed: ${pull.failed.map(esc).join(", ")}</div>` : "";
+    return (
+      `<div class="prow ${esc(pull.ci ?? pull.state ?? "")}">` +
+      `<div class="line">${where}<a class="pull-number" href="${esc(pull.url)}" target="_blank" title="${esc(pull.repo)}">#${pull.number}</a> ` +
+      `<span class="title">${esc(pull.title ?? pull.url)}</span>${draft} ${stands} ${by}${fix}</div>` +
+      failed +
+      `</div>`
+    );
+  });
+  return `<div class="group pulls"><h2>Pull requests</h2>${rows.join("")}</div>`;
+}
+
 /// Draws the page, keeping what the human was writing on a step, and
 /// where, as it was.
 function draw() {
@@ -678,7 +717,8 @@ function drawn() {
     `<div class="head"><h1>Activity</h1><span class="where" title="${esc(told.folder)}">${esc(told.folder)}</span></div>` +
     (told.github ? `<div class="notice">${esc(told.github)}</div>` : "") +
     numbers(all) +
-    groups;
+    groups +
+    pullRequests();
 }
 
 app.addEventListener("click", (event) => {
@@ -740,6 +780,13 @@ app.addEventListener("click", (event) => {
     const chat = chats().find((chat) => chat.key === Number(fold.dataset.fold));
     if (chat) folds.set(chat.key, !folded(chat));
     draw();
+    return;
+  }
+  const fixing = event.target.closest("[data-fix]");
+  if (fixing) {
+    fixing.disabled = true;
+    fixing.textContent = "Asked";
+    load(`${API}/fix/${encodeURIComponent(fixing.dataset.fix)}`);
     return;
   }
   const button = event.target.closest("[data-dismiss]");

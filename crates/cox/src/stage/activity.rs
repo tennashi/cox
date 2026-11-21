@@ -22,6 +22,13 @@
 //! chats the window shows (see [`project_of`]), and the chat the window
 //! shows is marked there.
 //!
+//! Then the pull requests the project holds, whichever of its chats'
+//! agents opened them, and those of every project in the home (see
+//! [`pulls_in`]): each open one, with how its CI stands and the chat that
+//! opened it, and, once its CI failed, a button that has that chat fix
+//! it (see [`fix`]); one merged or closed shows as long as a chat done
+//! does.
+//!
 //! A chat's story, what it did when, is read for the chat alone, once the
 //! human opens its line (see [`timeline`]), and the thread of a step of
 //! its plan once they open the step (see [`thread`]), where a line they
@@ -173,6 +180,120 @@ fn pulls_of(chat: &Chat) -> Vec<Value> {
         .collect()
 }
 
+/// A pull request a project holds, as the Activity page is told of it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Pull {
+    /// The folder of its project.
+    pub project: PathBuf,
+    pub pull: coxd::github::Pull,
+    /// How it stood when coxd last read it, once it read it.
+    pub status: Option<coxd::github::Status>,
+    /// The chat whose agent opened it, by the number the window goes by
+    /// for it, while the window lists it.
+    pub author: Option<u64>,
+}
+
+impl Pull {
+    /// Whether it is merged or closed.
+    fn done(&self) -> bool {
+        self.status.as_ref().is_some_and(coxd::github::Status::done)
+    }
+
+    /// Whether its CI failed, while it is open.
+    fn failed(&self) -> bool {
+        !self.done()
+            && self.status.as_ref().and_then(coxd::github::Status::checks)
+                == Some(CheckState::Failed)
+    }
+
+    /// The names of its checks that failed.
+    fn failed_checks(&self) -> Vec<&str> {
+        self.status
+            .iter()
+            .flat_map(|status| &status.checks)
+            .filter(|check| check.state == CheckState::Failed)
+            .map(|check| check.name.as_str())
+            .collect()
+    }
+
+    /// What its author is told to fix its CI that failed, as the human
+    /// would ask it.
+    fn fix_line(&self) -> String {
+        let checks = self.failed_checks();
+        let checks = if checks.is_empty() {
+            String::new()
+        } else {
+            format!(": {}", checks.join(", "))
+        };
+        format!(
+            "CI failed on #{} ({}){checks}. Fix it.",
+            self.pull.number,
+            self.pull.url()
+        )
+    }
+}
+
+/// The pull requests the page of the folder `root` tells of, as JSON: of
+/// its project, or of every project in the home, the first seen first,
+/// those open, and those merged or closed within [`DONE_SHOWS`] of `at`,
+/// in milliseconds since the epoch. Each with its address, number,
+/// title, how it stands, how its CI does, the checks that failed, the
+/// chat that opened it, and whether that chat may be asked to fix it.
+fn pulls_in(told: &Told, root: &Path, at: i64) -> Vec<Value> {
+    told.pulls
+        .iter()
+        .filter(|pull| root == told.home || pull.project == root)
+        .filter(|pull| {
+            let Some(status) = pull.status.as_ref().filter(|status| status.done()) else {
+                return true;
+            };
+            status
+                .times
+                .merged
+                .or(status.times.closed)
+                .is_some_and(|ended| at - ended < DONE_SHOWS)
+        })
+        .map(|pull| {
+            let status = pull.status.as_ref();
+            let state = status.map(|status| match status.state {
+                coxd::github::PullState::Open => "open",
+                coxd::github::PullState::Draft => "draft",
+                coxd::github::PullState::Merged => "merged",
+                coxd::github::PullState::Closed => "closed",
+            });
+            let ci = status
+                .filter(|status| !status.done())
+                .and_then(coxd::github::Status::checks)
+                .map(|checks| match checks {
+                    CheckState::Pending => "running",
+                    CheckState::Passed => "passed",
+                    CheckState::Failed => "failed",
+                    CheckState::Skipped => "skipped",
+                });
+            let author = pull
+                .author
+                .and_then(|key| told.chats.iter().find(|chat| chat.key == key));
+            json!({
+                "repo": pull.pull.repo,
+                "number": pull.pull.number,
+                "url": pull.pull.url(),
+                "title": status.map(|status| status.title.as_str()),
+                "state": state,
+                "ci": ci,
+                "failed": pull.failed_checks(),
+                "where": where_of(told, &pull.project),
+                "author": author.map(|chat| json!({
+                    "key": chat.key,
+                    "name": chat.name,
+                    "resolved": chat.resolved,
+                    "working": chat.working,
+                })),
+                "fix": author.is_some() && pull.failed(),
+            })
+        })
+        .collect()
+}
+
 /// How the window's chats stand, and its projects, by folder and name,
 /// with the home, the folder of Cox's own chats.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -185,6 +306,8 @@ pub struct Told {
     /// The key of the chat the window shows, if it shows one, which the
     /// page marks wherever the chat is on it.
     pub shown: Option<u64>,
+    /// The pull requests the projects hold, the first seen first.
+    pub pulls: Vec<Pull>,
 }
 
 /// How the chats stood when the window last told.
@@ -388,14 +511,17 @@ fn thread_of(open: &Open, said: &[Said], zone: &TimeZone) -> Value {
     })
 }
 
-/// A line the human wrote on a step of a chat's plan, from the page, for
-/// the window to send the chat (see [`listen`]).
+/// A line the human wrote on a step of a chat's plan, or asked a chat to
+/// fix its CI with, from the page, for the window to send the chat (see
+/// [`listen`]).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Say {
     /// The chat, by the number the window goes by for it.
     pub key: u64,
     pub text: String,
-    pub step: OnStep,
+    /// The step it is written on, if it is: a line that has a chat fix
+    /// its CI is on none.
+    pub step: Option<OnStep>,
 }
 
 /// Where the lines written on steps go, to the window that listens.
@@ -460,10 +586,55 @@ fn says_on(told: &Told, kept: &[KeptPlan], asked: &Asked) -> Option<Say> {
     Some(Say {
         key: chat.key,
         text: text.to_owned(),
-        step: OnStep {
+        step: Some(OnStep {
             id: asked.open.step,
             text: step.text.clone(),
-        },
+        }),
+    })
+}
+
+/// What the page asks a chat to fix: the CI that failed on the pull
+/// request `number` of `repo`, which its agent opened, the chat by the
+/// key the window goes by for it.
+#[derive(Clone, Debug, serde::Deserialize)]
+pub struct Fix {
+    key: u64,
+    repo: String,
+    number: u64,
+}
+
+/// Has the window send the chat that opened the pull request `asked`
+/// names, as the JSON of [`Fix`] the page sent says, a line that asks it
+/// to fix its CI, as the human would: a chat marked done is reopened by
+/// it. Nothing is sent unless the pull request's CI failed, as last read,
+/// and the chat is the one that opened it.
+pub fn fix(asked: &str) {
+    let Ok(asked) = serde_json::from_str::<Fix>(asked) else {
+        return;
+    };
+    if let Some(say) = fixes(&now(), &asked)
+        && let Ok(listening) = SAYS.lock()
+        && let Some(listening) = listening.as_ref()
+    {
+        let _ = listening.send(say);
+    }
+}
+
+/// The line that has the chat `asked` names fix the CI of its pull
+/// request, of `told`, if it failed.
+fn fixes(told: &Told, asked: &Fix) -> Option<Say> {
+    let pull = told.pulls.iter().find(|pull| {
+        pull.pull.repo == asked.repo
+            && pull.pull.number == asked.number
+            && pull.author == Some(asked.key)
+    })?;
+    if !pull.failed() || !told.chats.iter().any(|chat| chat.key == asked.key) {
+        return None;
+    }
+    Some(Say {
+        key: asked.key,
+        text: pull.fix_line(),
+        step: None,
     })
 }
 
@@ -1057,6 +1228,7 @@ fn told_of(
         "plans": planned(told, root, plans, now),
         "summaries": summaries(told, root, plans),
         "busy": busy,
+        "pulls": pulls_in(told, root, plans.at),
     });
     hint(&mut told_json, &hints(told, root, plans));
     told_json
@@ -1447,6 +1619,7 @@ mod tests {
                 "github",
                 "home",
                 "plans",
+                "pulls",
                 "shown",
                 "summaries",
                 "waiting"
@@ -1538,10 +1711,10 @@ mod tests {
             Some(Say {
                 key: 1,
                 text: "keep the old name".to_owned(),
-                step: OnStep {
+                step: Some(OnStep {
                     id: 1,
                     text: "Rename the setting".to_owned(),
-                },
+                }),
             })
         );
         for (key, chat, step, text) in [
@@ -1961,6 +2134,7 @@ mod tests {
             home: folder.join("home"),
             github: None,
             shown: Some(3),
+            pulls: Vec::new(),
         };
         let moved = Progress {
             active: [1, 2, 3, 5, 6, 7]
@@ -2538,6 +2712,171 @@ mod tests {
             }),
             unseen,
         }
+    }
+
+    /// The pull request `number` a project in `project` holds, opened by
+    /// the chat `author`, its CI standing as `checks`, and itself as
+    /// `state`, merged or closed at `ended`, if it was.
+    fn held(
+        project: &Path,
+        number: u64,
+        author: Option<u64>,
+        checks: CheckState,
+        state: coxd::github::PullState,
+        ended: Option<i64>,
+    ) -> Pull {
+        let mut row = pull(number, checks, None);
+        let status = row.status.as_mut().unwrap();
+        status.state = state;
+        status.checks[0].name = "ci (macos-latest)".to_owned();
+        status.times.merged = ended;
+        Pull {
+            project: project.to_owned(),
+            pull: row.pull,
+            status: row.status,
+            author,
+        }
+    }
+
+    /// When the page is read in the tests of the pull requests.
+    const PULLS_AT: i64 = 10 * DONE_SHOWS;
+
+    /// The projects `app` and `shop` in `home`, and the pull requests they
+    /// hold: of `app`, #7, whose CI runs, opened by the chat 1; #8, whose
+    /// CI failed, by the chat 2, marked done; #9, whose CI failed, by a
+    /// chat gone; #10, merged lately, and #11, merged long ago, by the
+    /// chat 1; and of `shop`, #12.
+    fn holding(home: &Path) -> Told {
+        use coxd::github::PullState;
+        let root = home.join("app");
+        let other = home.join("shop");
+        let mut done = chat(2, &root, &root, false, false);
+        done.resolved = true;
+        let at = PULLS_AT;
+        Told {
+            chats: vec![chat(1, &root, &root, false, false), done],
+            projects: vec![
+                (root.clone(), "app".to_owned()),
+                (other.clone(), "shop".to_owned()),
+            ],
+            home: home.to_path_buf(),
+            pulls: vec![
+                held(
+                    &root,
+                    7,
+                    Some(1),
+                    CheckState::Pending,
+                    PullState::Open,
+                    None,
+                ),
+                held(&root, 8, Some(2), CheckState::Failed, PullState::Open, None),
+                held(&root, 9, None, CheckState::Failed, PullState::Draft, None),
+                held(
+                    &root,
+                    10,
+                    Some(1),
+                    CheckState::Passed,
+                    PullState::Merged,
+                    Some(at - 1000),
+                ),
+                held(
+                    &root,
+                    11,
+                    Some(1),
+                    CheckState::Passed,
+                    PullState::Merged,
+                    Some(at - DONE_SHOWS),
+                ),
+                held(&other, 12, None, CheckState::Passed, PullState::Open, None),
+            ],
+            ..Told::default()
+        }
+    }
+
+    #[test]
+    fn the_pull_requests_of_the_project_show_with_their_ci_and_the_chat_that_opened_each() {
+        let home = TempDir::new();
+        let told = holding(&home);
+        let root = home.join("app");
+        let at = PULLS_AT;
+        let plans = Plans { at, ..NO_PLANS };
+        let json = told_of(&told, &root, &plans, &|_| None);
+        let shown: Vec<(u64, &Value, &Value, &Value, &Value)> = json["pulls"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|pull| {
+                (
+                    pull["number"].as_u64().unwrap(),
+                    &pull["state"],
+                    &pull["ci"],
+                    &pull["author"]["key"],
+                    &pull["fix"],
+                )
+            })
+            .collect();
+        assert_eq!(
+            shown,
+            [
+                (
+                    7,
+                    &json!("open"),
+                    &json!("running"),
+                    &json!(1),
+                    &json!(false)
+                ),
+                // The chat that opened it is done: it may be asked to fix it.
+                (8, &json!("open"), &json!("failed"), &json!(2), &json!(true)),
+                // No chat is left to ask.
+                (
+                    9,
+                    &json!("draft"),
+                    &json!("failed"),
+                    &Value::Null,
+                    &json!(false)
+                ),
+                // Merged lately; one merged long ago is gone.
+                (10, &json!("merged"), &Value::Null, &json!(1), &json!(false)),
+            ]
+        );
+        let failed = &json["pulls"][1];
+        assert_eq!(failed["url"], "https://github.com/tennashi/cox/pull/8");
+        assert_eq!(failed["title"], "pull 8");
+        assert_eq!(failed["failed"], json!(["ci (macos-latest)"]));
+        assert_eq!(failed["author"]["name"], "chat 2");
+        assert_eq!(failed["author"]["resolved"], true);
+        // The home tells of every project's, with where each is.
+        let json = told_of(&told, &home, &plans, &|_| None);
+        let pulls = json["pulls"].as_array().unwrap();
+        assert_eq!(pulls.len(), 5);
+        assert_eq!(pulls[4]["where"], "shop");
+    }
+
+    #[test]
+    fn the_chat_that_opened_a_pull_request_whose_ci_failed_is_asked_to_fix_it() {
+        let home = TempDir::new();
+        let told = holding(&home);
+        // Asked to fix one, the chat that opened it is sent a line that
+        // says what failed.
+        let fix = |key, number| Fix {
+            key,
+            repo: "tennashi/cox".to_owned(),
+            number,
+        };
+        assert_eq!(
+            fixes(&told, &fix(2, 8)),
+            Some(Say {
+                key: 2,
+                text: "CI failed on #8 (https://github.com/tennashi/cox/pull/8): \
+                       ci (macos-latest). Fix it."
+                    .to_owned(),
+                step: None,
+            })
+        );
+        // Not one whose CI did not fail, nor by another chat.
+        assert_eq!(fixes(&told, &fix(1, 7)), None);
+        assert_eq!(fixes(&told, &fix(1, 8)), None);
+        assert_eq!(fixes(&told, &fix(1, 9)), None);
     }
 
     #[test]
