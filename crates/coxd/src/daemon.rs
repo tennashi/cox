@@ -1839,6 +1839,7 @@ impl Daemon {
             .filter_map(|slot| {
                 let number = slot.kept?;
                 let state = match slot.state {
+                    _ if slot.resolved.is_some() => "marked done",
                     State::Asking => "waits for the human to answer it",
                     state if working(state) => "at work",
                     State::Closed => "closed",
@@ -5745,6 +5746,32 @@ mod tests {
             listing.chats[0].active, kept,
             "as kept, before a turn moved it"
         );
+    }
+
+    #[test]
+    fn the_chats_told_say_which_are_marked_done() {
+        let home = TempDir::new();
+        let (store, chat) = one_chat(&home);
+        let (mut daemon, _told) = daemon_of(&store, &home);
+        let key = key_of(&mut daemon, chat);
+        let project = daemon.slot(key).unwrap().project;
+
+        daemon.act(ToDaemon::Resolve {
+            key,
+            resolved: true,
+        });
+        assert_eq!(
+            daemon.chats_told(project, None),
+            [format!("- chat {}: \"Chat\", marked done", chat.number())]
+        );
+
+        daemon.act(ToDaemon::Resolve {
+            key,
+            resolved: false,
+        });
+        let told = daemon.chats_told(project, None);
+        assert_eq!(told.len(), 1);
+        assert!(!told[0].contains("done"), "{told:?}");
     }
 
     #[test]
