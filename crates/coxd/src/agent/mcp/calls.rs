@@ -839,7 +839,8 @@ fn resolve_chat_tool() -> Value {
             at work nor asking the human are marked done with it, and the worktrees made \
             for them may go. Anything that arrives in it later, as a line, a report or CI \
             that ended, reopens it. Use it for a chat whose work is over, once you read \
-            with read_chat that it is. It marks neither this chat, nor one at work, nor one \
+            with read_chat that it is; the chats told you as your session starts leave out \
+            those marked done already. It marks neither this chat, nor one at work, nor one \
             that waits for the human to answer it.",
         "inputSchema": {
             "type": "object",
