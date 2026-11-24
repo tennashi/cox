@@ -232,6 +232,48 @@ fn drift_ids(map: &Generated) -> Vec<&str> {
 }
 
 #[test]
+fn a_library_target_rust_analyzer_names_is_no_module_another_is() {
+    let vocabulary = r#"{ "nodes": { "app": { "name": "App" }, "all": { "name": "All", "claims": ["app"] } },
+                          "top": { "center": "app" },
+                          "levels": { "app": { "box": [0, 0, 400, 300], "parts": { "all": [0, 0] } } } }"#;
+    let types = |symbols: &[&str]| -> Vec<String> {
+        let mut file = File::new("src/lib.rs", "pub struct Thing;\n");
+        for symbol in symbols {
+            file.define(&rust(symbol), kind::STRUCT, 0, "Thing", (0, 0));
+        }
+        // A function of an `extern` block, which no release names a
+        // target of.
+        file.define(&rust("dlopen()."), kind::FUNCTION, 0, "Thing", (0, 0));
+        generated(vocabulary, &index(&[file]))
+            .types
+            .into_keys()
+            .collect()
+    };
+    // A newer release names every module's target first: the library's
+    // is no module, and two binaries' modules stay apart.
+    assert_eq!(
+        types(&[
+            "lib/Thing#",
+            "lib/store/Thing#",
+            "bin/a/foo/Thing#",
+            "bin/b/foo/Thing#"
+        ]),
+        [
+            "app/Thing",
+            "app/bin/a/foo/Thing",
+            "app/bin/b/foo/Thing",
+            "app/store/Thing"
+        ]
+    );
+    // An older release names none, and names the crate's top `crate`,
+    // so its module `lib` is one.
+    assert_eq!(
+        types(&["crate/", "Thing#", "lib/store/Thing#"]),
+        ["app/Thing", "app/lib/store/Thing"]
+    );
+}
+
+#[test]
 fn each_box_owns_the_types_of_the_modules_it_claims() {
     let map = generated(APP, &app());
     let server = &map.types["app/server/Server"];

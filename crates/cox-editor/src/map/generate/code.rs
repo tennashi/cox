@@ -185,20 +185,48 @@ pub(super) fn module_parts(module: &str) -> impl Iterator<Item = &str> {
         .filter(|part| !part.is_empty())
 }
 
-/// A symbol's module: by its package and the namespaces its descriptors
-/// start with (see [`conventions::module_id`] and
-/// [`conventions::modules`]).
-fn module_of(parsed: &Symbol<'_>) -> String {
-    let namespaces: Vec<&str> = parsed
+/// The namespaces a symbol's descriptors start with.
+fn namespaces<'s>(parsed: &'s Symbol<'_>) -> Vec<&'s str> {
+    parsed
         .descriptors
         .iter()
         .take_while(|descriptor| descriptor.suffix == Suffix::Namespace)
         .map(|descriptor| descriptor.name.as_ref())
-        .collect();
+        .collect()
+}
+
+/// A symbol's module: by its package and the namespaces its descriptors
+/// start with, but for the library target it names first, when its
+/// package's symbols all name their targets, `names_targets` (see
+/// [`conventions::module_id`] and [`conventions::modules`]).
+fn module_of(parsed: &Symbol<'_>, names_targets: bool) -> String {
     conventions::module_id(
         &parsed.package,
-        conventions::modules(&parsed.scheme, &namespaces),
+        conventions::modules(names_targets, &namespaces(parsed)),
     )
+}
+
+/// The packages, by their scheme, manager and name, whose symbols that
+/// start with a namespace all name the Cargo target they are of first,
+/// as rust-analyzer's newer releases write them, of `symbols` (see
+/// [`conventions::names_target`]).
+fn naming_targets<'s>(symbols: &'s [Sym<'_>]) -> HashSet<(&'s str, &'s str, &'s str)> {
+    let mut packages: HashMap<(&str, &str, &str), bool> = HashMap::new();
+    for parsed in symbols.iter().filter_map(|sym| sym.parsed.as_ref()) {
+        let namespaces = namespaces(parsed);
+        if namespaces.is_empty() {
+            continue;
+        }
+        let names = conventions::names_target(&parsed.scheme, &namespaces);
+        packages
+            .entry((&parsed.scheme, &parsed.manager, &parsed.package))
+            .and_modify(|all| *all &= names)
+            .or_insert(names);
+    }
+    packages
+        .into_iter()
+        .filter_map(|(package, all)| all.then_some(package))
+        .collect()
 }
 
 impl<'a> Code<'a> {
@@ -323,8 +351,22 @@ impl<'a> Code<'a> {
         for sym in &mut self.symbols {
             sym.parsed = symbol::parse(sym.text);
             sym.kind = sym.info.map_or(0, |info| info.kind);
+        }
+        let modules: Vec<String> = {
+            let naming = naming_targets(&self.symbols);
+            self.symbols
+                .iter()
+                .map(|sym| {
+                    sym.parsed.as_ref().map_or_default(|parsed| {
+                        let package = (&*parsed.scheme, &*parsed.manager, &*parsed.package);
+                        module_of(parsed, naming.contains(&package))
+                    })
+                })
+                .collect()
+        };
+        for (sym, module) in self.symbols.iter_mut().zip(modules) {
             if let Some(parsed) = &sym.parsed {
-                sym.module = module_of(parsed);
+                sym.module = module;
                 sym.is_type = is_type(parsed, sym.kind);
                 sym.role = role_of(parsed, sym.kind);
                 sym.in_tests = parsed.descriptors.iter().any(|descriptor| {

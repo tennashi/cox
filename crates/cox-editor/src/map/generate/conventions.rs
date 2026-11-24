@@ -32,18 +32,31 @@ pub(super) fn module_id(package: &str, namespaces: &[&str]) -> String {
     }
 }
 
-/// The namespaces of a symbol of the indexer `scheme` that are its
-/// code's modules: all of them, but for the target that rust-analyzer
-/// names first since its releases of November 2026, as `lib`, or
-/// `bin/cox` for the binary `cox`, which the modules are not told by,
-/// as they were not before.
-pub(super) fn modules<'a, 'b>(scheme: &str, namespaces: &'b [&'a str]) -> &'b [&'a str] {
-    if scheme != "rust-analyzer" {
-        return namespaces;
-    }
+/// Whether a symbol of the indexer `scheme` that starts with
+/// `namespaces` names the Cargo target it is of first, as rust-analyzer's
+/// releases since November 2026 do: `lib`, `proc-macro` or
+/// `custom-build`, or `bin`, `test`, `example` or `bench` and the
+/// target's name. Older releases name none, so a package's symbols name
+/// their targets only when all of them that start with a namespace do:
+/// those that start with none, as the functions of an `extern` block, a
+/// newer release names no target of either (see [`modules`]).
+pub(super) fn names_target(scheme: &str, namespaces: &[&str]) -> bool {
+    scheme == "rust-analyzer"
+        && matches!(
+            namespaces,
+            ["lib" | "proc-macro" | "custom-build", ..]
+                | ["bin" | "test" | "example" | "bench", _, ..]
+        )
+}
+
+/// The namespaces of a symbol that are its code's modules: all of them,
+/// but for the library target its package's symbols name first, when
+/// they name their targets (see [`names_target`]), which the library's
+/// modules were not told by before. Another target's name stays, as
+/// `bin/xtask`, so that the modules of two binaries stay apart.
+pub(super) fn modules<'a, 'b>(names_targets: bool, namespaces: &'b [&'a str]) -> &'b [&'a str] {
     match namespaces {
-        ["lib" | "proc-macro" | "custom-build", modules @ ..]
-        | ["bin" | "test" | "example" | "bench", _, modules @ ..] => modules,
+        ["lib" | "proc-macro", modules @ ..] if names_targets => modules,
         _ => namespaces,
     }
 }
@@ -324,23 +337,27 @@ mod tests {
     }
 
     #[test]
-    fn the_target_rust_analyzer_names_is_no_module() {
-        let modules = |scheme, namespaces: &[&str]| modules(scheme, namespaces).join("/");
+    fn the_library_target_rust_analyzer_names_is_no_module() {
+        let rust = |namespaces: &[&str]| names_target("rust-analyzer", namespaces);
+        assert!(rust(&["lib", "daemon"]));
+        assert!(rust(&["proc-macro"]));
+        assert!(rust(&["bin", "xtask", "ci"]));
+        assert!(!rust(&["bin"]), "a module `bin` of an older release");
+        assert!(!rust(&["daemon", "chat"]));
+        assert!(!rust(&[]));
+        assert!(!names_target("scip-go", &["lib", "x"]));
+
+        let modules = |named, namespaces: &[&str]| modules(named, namespaces).join("/");
+        assert_eq!(modules(true, &["lib", "daemon", "chat"]), "daemon/chat");
+        assert_eq!(modules(true, &["lib"]), "");
+        assert_eq!(modules(true, &["proc-macro", "derive"]), "derive");
+        assert_eq!(modules(true, &["bin", "a", "foo"]), "bin/a/foo");
         assert_eq!(
-            modules("rust-analyzer", &["lib", "daemon", "chat"]),
-            "daemon/chat"
+            modules(true, &["test", "window", "fake"]),
+            "test/window/fake"
         );
-        assert_eq!(modules("rust-analyzer", &["lib"]), "");
-        assert_eq!(modules("rust-analyzer", &["bin", "xtask", "ci"]), "ci");
-        assert_eq!(
-            modules("rust-analyzer", &["test", "window", "fake"]),
-            "fake"
-        );
-        assert_eq!(modules("rust-analyzer", &["proc-macro"]), "");
-        // As older releases named them, with no target.
-        assert_eq!(modules("rust-analyzer", &["daemon", "chat"]), "daemon/chat");
-        assert_eq!(modules("rust-analyzer", &["test"]), "test");
-        assert_eq!(modules("scip-go", &["lib", "x"]), "lib/x");
+        // An older release's module `lib`.
+        assert_eq!(modules(false, &["lib", "x"]), "lib/x");
     }
 
     #[test]
