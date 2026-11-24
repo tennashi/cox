@@ -1,11 +1,12 @@
 //! The programs of the ACP Registry's agents that Cox downloads, as the
 //! registry lists them for each platform, and of the language servers, as
-//! their `servers.json` does (see `cox::stage::servers`): Cox
-//! downloads the archive the first time it starts the program, checks it
-//! by the SHA-256 it is given, and unpacks it in `<id>/<version>`, in
-//! `cache/agents` or `cache/servers` where Cox keeps what lasts (see
-//! [`crate::storage`]), for every chat and run after to start the program
-//! from there.
+//! their `servers.json` does (see [`server_program`]), for the stage (see
+//! `cox::stage::servers`) and the maps' indexers (see
+//! [`crate::map::indexers`]): Cox downloads the archive the first time it
+//! starts the program, checks it by the SHA-256 it is given, and unpacks
+//! it in `<id>/<version>`, in `cache/agents` or `cache/servers` where Cox
+//! keeps what lasts (see [`crate::storage`]), for every chat and run after
+//! to start the program from there.
 //!
 //! An archive is a `.tar.gz` (or `.tgz`), a `.tar.bz2` (or `.tbz2`), a
 //! `.zip`, the program gzipped (`.gz`), or else the program itself.
@@ -19,6 +20,7 @@ use std::fs::{self, File};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 
+use cox_editor::lsp::servers::{Got, Server};
 use sha2::{Digest, Sha256};
 
 use crate::storage::Kept;
@@ -34,6 +36,10 @@ pub struct Download {
     /// The archive's SHA-256, in hexadecimal.
     pub sha256: String,
 }
+
+/// How long `go install` has to fetch and build a package, past which it
+/// is stopped.
+const GO_INSTALLS_WITHIN: std::time::Duration = std::time::Duration::from_mins(15);
 
 /// What a folder holds once all of the archive is unpacked in it.
 const UNPACKED: &str = ".cox-unpacked";
@@ -206,28 +212,76 @@ pub fn go_installed(
         let partial = beside(&folder, "partial");
         let _ = fs::remove_dir_all(&partial);
         fs::create_dir_all(&partial)?;
-        let installed = std::process::Command::new("go")
-            .args(["install", &format!("{package}@{version}")])
-            .env("GOBIN", &partial)
-            .output()
-            .map_err(|error| anyhow::anyhow!("go could not be run: {error}"))
-            .and_then(|output| {
-                anyhow::ensure!(
-                    output.status.success(),
-                    "go install {package}@{version} failed: {}",
-                    String::from_utf8_lossy(&output.stderr).trim()
-                );
-                File::create(partial.join(UNPACKED))?;
-                let _ = fs::remove_dir_all(&folder);
-                fs::rename(&partial, &folder)?;
-                Ok(())
-            });
+        let installed = crate::process::run_with_deadline(
+            std::process::Command::new("go")
+                .args(["install", &format!("{package}@{version}")])
+                .env("GOBIN", &partial),
+            None,
+            GO_INSTALLS_WITHIN,
+            |_| {},
+        )
+        .map_err(|error| anyhow::anyhow!("go could not be run: {error}"))
+        .and_then(|output| {
+            anyhow::ensure!(
+                output.status.is_some(),
+                "go install {package}@{version} took longer than {} minutes, and was stopped",
+                GO_INSTALLS_WITHIN.as_secs() / 60
+            );
+            anyhow::ensure!(
+                output.success(),
+                "go install {package}@{version} failed: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            );
+            File::create(partial.join(UNPACKED))?;
+            let _ = fs::remove_dir_all(&folder);
+            fs::rename(&partial, &folder)?;
+            Ok(())
+        });
         if installed.is_err() {
             let _ = fs::remove_dir_all(&partial);
         }
         installed
     })?;
     Ok(folder)
+}
+
+/// `server`, to start from where Cox gets its program, in
+/// `cache/servers/<name>/<version>` where Cox keeps what lasts, when it
+/// says where Cox gets it from on this platform: got first if it is not
+/// there yet, downloaded from GitHub, or installed with `go install`.
+///
+/// # Errors
+///
+/// When the program cannot be downloaded or installed.
+pub fn server_program(mut server: Server) -> anyhow::Result<Server> {
+    let told = |note: String| tracing::info!(server = %server.name, "{note}");
+    let program = match server.got_on(&platform()) {
+        None => return Ok(server),
+        Some(Got::GitHub {
+            repository,
+            version,
+            asset,
+            program,
+        }) => installed_at(Kept::ServerDownloads, &server.name, version)
+            .map_or_else(
+                || {
+                    let from = from_github(repository, version, &asset)?;
+                    installed(Kept::ServerDownloads, &server.name, &from, &told)
+                },
+                Ok,
+            )?
+            .join(program),
+        Some(Got::Go {
+            package,
+            version,
+            program,
+        }) => go_installed(Kept::ServerDownloads, &server.name, package, version, &told)?
+            .join(program),
+    };
+    if let Some(command) = server.command.first_mut() {
+        *command = program.to_string_lossy().into_owned();
+    }
+    Ok(server)
 }
 
 /// The path beside `folder` named after it, with `.` and `suffix`.

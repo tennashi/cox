@@ -32,6 +32,8 @@
 //!   [`github`] the pull requests the agents open there, and their CI;
 //!   [`worktrees`] is the other checkouts of a project's repositories,
 //!   which Cox makes for its chats and takes away once they are done.
+//! - [`map`] is the maps of a project drawn from the indexes of its
+//!   code, which coxd makes and keeps.
 //! - [`media`] is the pictures and files the conversations show, kept as
 //!   they were shown.
 //! - [`theme`] is how Cox looks, which the window and the page coxd
@@ -56,6 +58,7 @@ pub mod github;
 pub mod home;
 pub mod login;
 pub mod logs;
+pub mod map;
 pub mod media;
 pub mod paths;
 pub mod process;

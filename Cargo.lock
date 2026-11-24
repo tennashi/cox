@@ -1729,6 +1729,7 @@ dependencies = [
  "libc",
  "mermaid-rs-renderer",
  "proc-macro2",
+ "prost",
  "pulldown-cmark",
  "quote",
  "resvg",

@@ -701,6 +701,9 @@ pub struct Daemon {
     /// Whether coxd looks which worktrees it may take away (see
     /// [`tidy`]).
     tidying: tidy::Tidying,
+    /// The maps of the projects, drawn from the indexes of their code,
+    /// unless Cox has nowhere to keep those.
+    maps: Option<crate::map::Maps>,
 }
 
 /// How the daemon is reached: what to tell it.
@@ -848,6 +851,9 @@ impl Daemon {
             github: None,
             listing: pulls::Listing::default(),
             tidying: tidy::Tidying::default(),
+            maps: crate::map::Maps::of_this_cox()
+                .inspect_err(|error| tracing::error!("no map can be drawn: {error:#}"))
+                .ok(),
         };
         daemon.read_kept();
         daemon
@@ -1857,7 +1863,38 @@ impl Daemon {
                 self.settle();
                 self.tell(FromDaemon::Settled { id });
             }
+            ToDaemon::Map {
+                id,
+                folder,
+                name,
+                again,
+            } => self.tell_map(id, folder, name, again),
         }
+    }
+
+    /// Tells the window the map of the project in `folder` named `name`,
+    /// as it asked for it as `id`, once it is drawn, apart from the
+    /// daemon's loop, as drawing it reads the indexes and asks Git (see
+    /// [`crate::map::Maps::told`]).
+    fn tell_map(&self, id: u64, folder: PathBuf, name: Option<String>, again: bool) {
+        let Some(window) = self.window.clone() else {
+            return;
+        };
+        let failed =
+            |why: String| serde_json::json!({ "state": "invalid", "problems": [why] }).to_string();
+        let Some(maps) = self.maps.clone() else {
+            let told = failed("Cox has nowhere to keep the indexes of the code".to_owned());
+            let _ = window.send(FromDaemon::Map { id, told });
+            return;
+        };
+        tokio::task::spawn_local(async move {
+            let told = tokio::task::spawn_blocking(move || {
+                maps.told(&folder, name.as_deref(), again).json()
+            })
+            .await
+            .unwrap_or_else(|error| failed(format!("the map was not drawn: {error}")));
+            let _ = window.send(FromDaemon::Map { id, told });
+        });
     }
 
     /// What the agent of a chat of the project at `index` that works in
