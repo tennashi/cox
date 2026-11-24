@@ -32,6 +32,22 @@ pub(super) fn module_id(package: &str, namespaces: &[&str]) -> String {
     }
 }
 
+/// The namespaces of a symbol of the indexer `scheme` that are its
+/// code's modules: all of them, but for the target that rust-analyzer
+/// names first since its releases of November 2026, as `lib`, or
+/// `bin/cox` for the binary `cox`, which the modules are not told by,
+/// as they were not before.
+pub(super) fn modules<'a, 'b>(scheme: &str, namespaces: &'b [&'a str]) -> &'b [&'a str] {
+    if scheme != "rust-analyzer" {
+        return namespaces;
+    }
+    match namespaces {
+        ["lib" | "proc-macro" | "custom-build", modules @ ..]
+        | ["bin" | "test" | "example" | "bench", _, modules @ ..] => modules,
+        _ => namespaces,
+    }
+}
+
 /// Whether a reference on `line`, in no function, is an import, where
 /// the indexer does not mark imports: it is above the file's first
 /// definition, as a file's `use` and `import` lines are.
@@ -305,6 +321,26 @@ mod tests {
         assert_eq!(Language::of("", Some("scip-go")), Some(Language::Go));
         assert_eq!(Language::of("", Some("scip-java")), None);
         assert_eq!(Language::of("Haskell", Some("rust-analyzer")), None);
+    }
+
+    #[test]
+    fn the_target_rust_analyzer_names_is_no_module() {
+        let modules = |scheme, namespaces: &[&str]| modules(scheme, namespaces).join("/");
+        assert_eq!(
+            modules("rust-analyzer", &["lib", "daemon", "chat"]),
+            "daemon/chat"
+        );
+        assert_eq!(modules("rust-analyzer", &["lib"]), "");
+        assert_eq!(modules("rust-analyzer", &["bin", "xtask", "ci"]), "ci");
+        assert_eq!(
+            modules("rust-analyzer", &["test", "window", "fake"]),
+            "fake"
+        );
+        assert_eq!(modules("rust-analyzer", &["proc-macro"]), "");
+        // As older releases named them, with no target.
+        assert_eq!(modules("rust-analyzer", &["daemon", "chat"]), "daemon/chat");
+        assert_eq!(modules("rust-analyzer", &["test"]), "test");
+        assert_eq!(modules("scip-go", &["lib", "x"]), "lib/x");
     }
 
     #[test]

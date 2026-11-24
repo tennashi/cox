@@ -186,7 +186,8 @@ pub(super) fn module_parts(module: &str) -> impl Iterator<Item = &str> {
 }
 
 /// A symbol's module: by its package and the namespaces its descriptors
-/// start with (see [`conventions::module_id`]).
+/// start with (see [`conventions::module_id`] and
+/// [`conventions::modules`]).
 fn module_of(parsed: &Symbol<'_>) -> String {
     let namespaces: Vec<&str> = parsed
         .descriptors
@@ -194,7 +195,10 @@ fn module_of(parsed: &Symbol<'_>) -> String {
         .take_while(|descriptor| descriptor.suffix == Suffix::Namespace)
         .map(|descriptor| descriptor.name.as_ref())
         .collect();
-    conventions::module_id(&parsed.package, &namespaces)
+    conventions::module_id(
+        &parsed.package,
+        conventions::modules(&parsed.scheme, &namespaces),
+    )
 }
 
 impl<'a> Code<'a> {
