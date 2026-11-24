@@ -18,6 +18,15 @@
 //! and up on the boxes that open their tiers, and a box whose paths are
 //! gone is stale, for an agent to bring the map up to date (see
 //! [`all_facts`]).
+//!
+//! A map of the newer form is generated rather than written: a person
+//! keeps its [`vocabulary`], the boxes and where they sit, and the code
+//! each box owns; [`generate`] reads the rest from an index of the code,
+//! into the map as [`generated`], with where the two disagree.
+
+pub mod generate;
+pub mod generated;
+pub mod vocabulary;
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};

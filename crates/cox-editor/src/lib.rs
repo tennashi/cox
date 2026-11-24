@@ -11,7 +11,9 @@
 //! - [`words`] is what changed within the lines a change replaced, of
 //!   those [`cox_git::changes`] reads.
 //! - [`map`] is the project's map, in tiers, as an agent wrote it, with
-//!   what changed laid over it.
+//!   what changed laid over it; or generated from an index of the code.
+//! - [`scip`] reads such an index, as an indexer of any language writes
+//!   it.
 //! - [`language`] is the languages the editor knows, and what in their
 //!   code is drawn how.
 //! - [`syntax`] is the syntax of a text in its language.
@@ -26,6 +28,7 @@ pub mod language;
 pub mod line;
 pub mod lsp;
 pub mod map;
+pub mod scip;
 pub mod syntax;
 pub mod words;
 

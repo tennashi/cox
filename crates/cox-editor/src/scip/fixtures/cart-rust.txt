@@ -1,0 +1,13 @@
+/// Holds the items.
+pub struct Cart {
+    items: Vec<String>,
+    count: usize,
+}
+
+impl Cart {
+    /// Puts an item in the cart.
+    pub fn add(&mut self, item: String) {
+        self.items.push(item);
+        self.count += 1;
+    }
+}

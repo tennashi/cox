@@ -1640,6 +1640,7 @@ version = "0.1.2"
 dependencies = [
  "cox-git",
  "ignore",
+ "prost",
  "ropey",
  "serde",
  "serde_json",

@@ -1,0 +1,20 @@
+
+\;
+scip-go0.2.10(--output=/tmp/pr1-work/fix-go/index.scipfile:///tmp/pr1-work/fix-go ì
+cart.go>4scip-go gomod example.com/shop . `example.com/shop`/BM9scip-go gomod example.com/shop . `example.com/shop`/Cart#B	Z S?scip-go gomod example.com/shop . `example.com/shop`/Cart#items.BRS?scip-go gomod example.com/shop . `example.com/shop`/Cart#count.BR
+local 0B	E9scip-go gomod example.com/shop . `example.com/shop`/Cart#B		S?scip-go gomod example.com/shop . `example.com/shop`/Cart#Add().B	Z	 local 1B	local 0B
+K?scip-go gomod example.com/shop . `example.com/shop`/Cart#items.B
+local 0B
+K?scip-go gomod example.com/shop . `example.com/shop`/Cart#items.B
+local 1B
+local 0BK?scip-go gomod example.com/shop . `example.com/shop`/Cart#count.BŒ
+?scip-go gomod example.com/shop . `example.com/shop`/Cart#Add().Add puts an item in the cart.(2Add:#"go*func (*Cart).Add(item string)R
+4scip-go gomod example.com/shop . `example.com/shop`/(#2shop:"go*package shop—
+9scip-go gomod example.com/shop . `example.com/shop`/Cart#Cart holds the items.(12Cart:;"go*5type Cart struct {
+    items []string
+    count int
+}m
+?scip-go gomod example.com/shop . `example.com/shop`/Cart#items.(2items:!"go*struct field items []stringh
+?scip-go gomod example.com/shop . `example.com/shop`/Cart#count.(2count:"go*struct field count int!
+local 0(=2c:"go*var c *Cart(
+local 1(=2item:"go*var item string"go0

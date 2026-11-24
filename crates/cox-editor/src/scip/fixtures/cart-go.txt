@@ -1,0 +1,13 @@
+package shop
+
+// Cart holds the items.
+type Cart struct {
+	items []string
+	count int
+}
+
+// Add puts an item in the cart.
+func (c *Cart) Add(item string) {
+	c.items = append(c.items, item)
+	c.count++
+}
