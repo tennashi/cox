@@ -14,6 +14,10 @@ cox-git.workspace = true
 # Listing a project's files as Git sees them: see
 # `src/files.rs`.
 ignore = "0.4.33"
+# Reading a SCIP index, which an indexer writes of a project's code, for
+# its map: see `src/scip.rs`. The messages are written out by hand, the
+# few the map reads, so no build script compiles `scip.proto`.
+prost = "0.14.4"
 # The text, as a rope: see `src/buffer.rs`. Only `\n` breaks lines, as in
 # the files Cox edits; a `\r` before it stays out of the line.
 ropey = { version = "1.6.1", default-features = false, features = ["simd"] }
