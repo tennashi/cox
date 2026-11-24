@@ -305,6 +305,10 @@ fn what_the_window_and_coxd_say_reads_back_as_it_was() {
         FromDaemon::Outdated,
         FromDaemon::Busy,
         FromDaemon::Settled { id: 3 },
+        FromDaemon::Map {
+            id: 4,
+            told: r#"{"state":"ready"}"#.to_owned(),
+        },
     ] {
         let line = serde_json::to_string(&message).unwrap();
         assert_eq!(serde_json::from_str::<FromDaemon>(&line).unwrap(), message);
@@ -323,4 +327,65 @@ fn what_the_window_and_coxd_say_reads_back_as_it_was() {
     let line = serde_json::to_string(&told).unwrap();
     assert!(!line.contains('\n'), "a message is one line");
     assert_eq!(serde_json::from_str::<ToDaemon>(&line).unwrap(), told);
+    let asked = ToDaemon::Map {
+        id: 4,
+        folder: PathBuf::from("/work"),
+        name: Some("use".to_owned()),
+        again: true,
+    };
+    let line = serde_json::to_string(&asked).unwrap();
+    assert_eq!(serde_json::from_str::<ToDaemon>(&line).unwrap(), asked);
+}
+
+#[test]
+fn a_window_is_told_the_map_it_asks_for() {
+    let folder = folder("map");
+    let socket = folder.join("run").join("coxd.sock");
+    let home = folder.join("home");
+    let project = folder.join("project");
+    std::fs::create_dir_all(project.join("maps")).unwrap();
+    std::fs::write(
+        project.join("maps/shop.json"),
+        r#"{ "says": "The shop", "nodes": { "shop": { "name": "Shop" } }, "top": { "center": "shop" } }"#,
+    )
+    .unwrap();
+    let coxd = {
+        let (socket, home) = (socket.clone(), home.clone());
+        std::thread::spawn(move || {
+            // Its indexes kept apart from the human's.
+            scratch::data();
+            coxd::daemon::process::run(
+                &socket,
+                home,
+                || Rc::new(Store::in_memory().unwrap()),
+                || Rc::new(NoAgents),
+            )
+        })
+    };
+    waits::until("coxd listens", || socket.exists());
+    let gone = Arc::new(AtomicBool::new(false));
+    let mut window = reach(&socket, &home, &gone).expect("the window is welcome");
+    let _ = window.link.to.send(ToDaemon::Map {
+        id: 7,
+        folder: project,
+        name: None,
+        again: false,
+    });
+    let told = loop {
+        if let FromDaemon::Map { id: 7, told } =
+            window.from_daemon.blocking_recv().expect("coxd answers")
+        {
+            break told;
+        }
+    };
+    let told: serde_json::Value = serde_json::from_str(&told).unwrap();
+    assert_eq!(told["name"], "shop");
+    assert_eq!(told["maps"][0]["says"], "The shop");
+    // The folder is no repository, so nothing of its code is indexed.
+    assert_eq!(told["state"], "incomplete");
+    assert_eq!(told["indexes"][0]["state"], "uncommitted");
+    assert_eq!(told["map"]["top"]["center"], "shop");
+
+    std::fs::remove_file(&socket).unwrap();
+    coxd.join().unwrap().unwrap();
 }

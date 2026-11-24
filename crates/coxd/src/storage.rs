@@ -117,11 +117,16 @@ pub enum Kept {
     /// and the target folder their Rust shares (see
     /// `cox::stage::playground`).
     Playgrounds,
+    /// The indexes of the code of the commits the maps were drawn from
+    /// (see [`crate::map`]).
+    Indexes,
+    /// The indexers Cox installed for the maps (see [`crate::map`]).
+    IndexerDownloads,
 }
 
 impl Kept {
     /// All that Cox keeps.
-    pub const ALL: [Self; 26] = [
+    pub const ALL: [Self; 28] = [
         Self::Settings,
         Self::Agents,
         Self::Servers,
@@ -148,6 +153,8 @@ impl Kept {
         Self::History,
         Self::DismissedPlans,
         Self::Playgrounds,
+        Self::Indexes,
+        Self::IndexerDownloads,
     ];
 
     /// Where it is kept, from the folder Cox keeps what lasts in.
@@ -180,6 +187,8 @@ impl Kept {
             Self::History => "state/history.json",
             Self::DismissedPlans => "state/dismissed-plans.json",
             Self::Playgrounds => "cache/playgrounds",
+            Self::Indexes => "cache/indexes",
+            Self::IndexerDownloads => "cache/indexers",
         }
     }
 }

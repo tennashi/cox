@@ -59,6 +59,8 @@ pub fn run(data: Option<&Path>) -> ExitCode {
         move || Rc::new(open_store()),
         move || Rc::new(launcher),
     );
+    // As the indexers of the maps, which would run on for minutes.
+    crate::process::stop_all();
     crate::scratch::take_away();
     match ran {
         Ok(()) => ExitCode::SUCCESS,

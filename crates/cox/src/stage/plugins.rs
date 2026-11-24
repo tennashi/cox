@@ -13,6 +13,14 @@
 //!   its file in `maps` has it, with what changed and what is stale
 //!   laid over its boxes, and the names of the project's other maps (see
 //!   [`crate::stage::map`]); `cox://api/map`, its first map.
+//! - `cox://api/generated-map/<name>`: the map of the project named
+//!   `<name>`, as coxd generates it from its vocabulary in `maps` and the
+//!   indexes of the project's code, which asking for it has coxd make
+//!   when they are not made yet, with how each stands (see
+//!   [`crate::stage::map::generated`]); `cox://api/generated-map`, its
+//!   first map; and `cox://api/generated-map/again/<name>`, the map,
+//!   making again the indexes that failed, which only a plugin's own
+//!   `fetch` has done.
 //! - `cox://api/file/<path>`: what the project's language server says of
 //!   the file at `<path>`, an absolute path in the project: the symbols
 //!   it defines and what uses them, once the server has answered, which
@@ -305,6 +313,7 @@ impl Plugins {
         let json = match what {
             "map" if rest.is_empty() => map::told(&self.root, None),
             "map" if !rest.contains('/') => map::told(&self.root, Some(&percent_decoded(rest))),
+            "generated-map" => return self.generated_map(rest),
             "wiki" => {
                 let root = coxd::settings::wiki();
                 if rest.is_empty() {
@@ -384,6 +393,21 @@ impl Plugins {
         Some(Resource {
             mime: "application/json".to_owned(),
             body: serde_json::to_vec(&json).ok()?,
+        })
+    }
+
+    /// The map `cox://api/generated-map/<rest>` asks for, as coxd draws
+    /// it (see [`map::generated`]).
+    fn generated_map(&self, rest: &str) -> Option<Resource> {
+        let (again, name) = match rest.strip_prefix("again/") {
+            Some(name) => (true, name),
+            None if !rest.contains('/') => (false, rest),
+            None => return None,
+        };
+        let name = (!name.is_empty()).then(|| percent_decoded(name));
+        Some(Resource {
+            mime: "application/json".to_owned(),
+            body: map::generated(&self.root, name.as_deref(), again).into_bytes(),
         })
     }
 
@@ -577,6 +601,7 @@ fn acts(url: &str) -> bool {
         return false;
     };
     path.starts_with("activity/dismiss/")
+        || path.starts_with("generated-map/again/")
         || path
             .strip_prefix("triggers/")
             .is_some_and(|ask| !ask.starts_with("discussion/") && !ask.starts_with("tried/"))
@@ -749,6 +774,47 @@ mod tests {
         );
         assert_eq!(body("cox://api/activity/command/not-a-command"), None);
         coxd::storage::keep_on_this_thread(None);
+    }
+
+    #[test]
+    fn a_generated_map_is_asked_of_coxd_as_named() {
+        let root = TempDir::new();
+        let plugins = Plugins::new(root.to_path_buf(), Outlines::new().0, Calls::new().0);
+        // In the window's place: answers what it was asked.
+        let mut asks = map::listen();
+        std::thread::spawn(move || {
+            while let Some(ask) = asks.blocking_recv() {
+                let told = serde_json::json!({
+                    "folder": ask.folder,
+                    "name": ask.name,
+                    "again": ask.again,
+                });
+                let _ = ask.answer.send(told.to_string());
+            }
+        });
+        let serve = plugins.serve();
+        let asked = |url: &str, asker| {
+            serve(url, asker).map(|resource| {
+                assert_eq!(resource.mime, "application/json");
+                serde_json::from_slice::<serde_json::Value>(&resource.body).unwrap()
+            })
+        };
+        let json = asked("cox://api/generated-map", Asker::Anyone).unwrap();
+        assert_eq!(json["folder"], root.display().to_string());
+        assert_eq!(json["name"], serde_json::Value::Null);
+        assert_eq!(json["again"], false);
+        let json = asked("cox://api/generated-map/use%20it", Asker::Anyone).unwrap();
+        assert_eq!(json["name"], "use it");
+        assert_eq!(json["again"], false);
+        // Making a failed index again is a plugin's to ask.
+        assert_eq!(
+            asked("cox://api/generated-map/again/use", Asker::Anyone),
+            None
+        );
+        let json = asked("cox://api/generated-map/again/use", Asker::Plugin).unwrap();
+        assert_eq!(json["name"], "use");
+        assert_eq!(json["again"], true);
+        assert_eq!(asked("cox://api/generated-map/a/b", Asker::Plugin), None);
     }
 
     #[test]

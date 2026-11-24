@@ -561,6 +561,12 @@ pub struct Workspace {
     /// with.
     syncs: HashMap<u64, tokio::sync::oneshot::Sender<()>>,
     last_sync: u64,
+    /// Where the maps the stages' pages asked the daemon for go, by the
+    /// number each was asked with (see [`crate::stage::map::generated`]).
+    /// When each was asked, for those no page waits for any longer, as of
+    /// a coxd that went without answering, to be let go.
+    maps_asked: HashMap<u64, (std::time::Instant, std::sync::mpsc::Sender<String>)>,
+    last_map: u64,
     focus_handle: FocusHandle,
     /// The rail, and the list of chats, as Vim's keys select along them.
     rail: vim::Picker,
@@ -584,6 +590,8 @@ pub struct Workspace {
     /// What sends the chats the lines the human writes on the steps of
     /// their plans on the Activity page.
     _said_on_steps: Task<()>,
+    /// What asks the daemon for the maps the stages' pages ask for.
+    _asking_maps: Task<()>,
 }
 
 impl Workspace {
@@ -639,6 +647,7 @@ impl Workspace {
                 }
             }
         });
+        let asking_maps = Self::asking_maps(cx);
         Self {
             projects: vec![Project {
                 id: None,
@@ -686,6 +695,8 @@ impl Workspace {
             rail_step: 0,
             syncs: HashMap::new(),
             last_sync: 0,
+            maps_asked: HashMap::new(),
+            last_map: 0,
             focus_handle: cx.focus_handle(),
             rail: vim::Picker::new(cx),
             list: vim::Picker::new(cx),
@@ -697,6 +708,7 @@ impl Workspace {
             chat_names: Rc::default(),
             _from_daemon: heard,
             _said_on_steps: said_on_steps,
+            _asking_maps: asking_maps,
         }
     }
 
@@ -713,6 +725,38 @@ impl Workspace {
         self.syncs.insert(self.last_sync, settled);
         self.tell(ToDaemon::Sync { id: self.last_sync });
         heard
+    }
+
+    /// What asks the daemon for the maps the stages' pages ask for from
+    /// now on (see [`crate::stage::map::generated`]).
+    fn asking_maps(cx: &mut Context<Self>) -> Task<()> {
+        let mut maps = crate::stage::map::listen();
+        cx.spawn(async move |this, cx| {
+            while let Some(ask) = maps.recv().await {
+                if this
+                    .update(cx, |workspace, _| workspace.ask_map(ask))
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        })
+    }
+
+    /// Asks the daemon for the map a page asks for, for its answer to go
+    /// where the page waits for it.
+    fn ask_map(&mut self, ask: crate::stage::map::Ask) {
+        self.maps_asked
+            .retain(|_, (asked, _)| asked.elapsed() < crate::stage::map::PATIENCE);
+        self.last_map += 1;
+        self.maps_asked
+            .insert(self.last_map, (std::time::Instant::now(), ask.answer));
+        self.tell(ToDaemon::Map {
+            id: self.last_map,
+            folder: ask.folder,
+            name: ask.name,
+            again: ask.again,
+        });
     }
 
     /// Does what the daemon says.
@@ -753,6 +797,11 @@ impl Workspace {
             FromDaemon::Unpaired { failed } => {
                 if let Some((settings, _)) = &self.settings {
                     settings.update(cx, |settings, cx| settings.phones_unpaired(failed, cx));
+                }
+            }
+            FromDaemon::Map { id, told } => {
+                if let Some((_, answer)) = self.maps_asked.remove(&id) {
+                    let _ = answer.send(told);
                 }
             }
             // The greeting is over before the window hears the daemon.

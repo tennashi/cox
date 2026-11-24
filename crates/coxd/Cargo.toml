@@ -70,6 +70,9 @@ tracing-subscriber = { version = "0.3.23", default-features = false, features = 
 # Fetching the ACP Registry's agents: see `src/agents.rs`.
 ureq = "3.4.2"
 url = "2.5.8"
+# Keeping the SCIP indexes of the maps: see `src/map/cache.rs`. The
+# version cox-editor reads them with.
+prost = "0.14.4"
 # Downloading the programs of the ACP Registry's agents, checking each
 # archive's SHA-256 and unpacking it: see `src/agents/download.rs`.
 sha2 = "0.10.9"

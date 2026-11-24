@@ -557,6 +557,9 @@ pub enum FromDaemon {
     /// Every phone is unpaired, as the window asked with
     /// [`ToDaemon::UnpairPhones`], unless `failed` says why not.
     Unpaired { failed: Option<String> },
+    /// The map the window asked for with [`ToDaemon::Map`] with `id`, as
+    /// the JSON of [`crate::map::Told`].
+    Map { id: u64, told: String },
 }
 
 /// What a window tells the daemon: what the human did.
@@ -691,6 +694,16 @@ pub enum ToDaemon {
     /// Answer [`FromDaemon::Settled`] with `id` once all asked before is
     /// done.
     Sync { id: u64 },
+    /// Answer [`FromDaemon::Map`] with `id`: the map of the project in
+    /// `folder` named `name`, or its first, making the indexes of its code
+    /// that are not made yet, and again those that failed, when `again`
+    /// (see [`crate::map::Maps::told`]).
+    Map {
+        id: u64,
+        folder: PathBuf,
+        name: Option<String>,
+        again: bool,
+    },
 }
 
 #[cfg(test)]

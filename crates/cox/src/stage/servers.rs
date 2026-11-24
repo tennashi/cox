@@ -15,7 +15,6 @@ use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::rc::Rc;
 
-use cox_editor::lsp::servers::Got;
 use cox_editor::lsp::{self, Client, Error, Server, Status, languages};
 use gpui::{App, AppContext as _, Context, Entity, Global, Task};
 
@@ -42,51 +41,17 @@ impl Global for Servers {}
 
 impl Default for Servers {
     /// Servers started as programs: got as each says, for a server that
-    /// says where from on this platform, or else found on `PATH`.
+    /// says where from on this platform, or else found on `PATH` (see
+    /// [`download::server_program`]).
     fn default() -> Self {
         Self::new(Rc::new(|server, root| {
             Box::pin(async move {
-                let server = downloaded(server)?;
+                let server = download::server_program(server)
+                    .map_err(|error| Error::Io(std::io::Error::other(format!("{error:#}"))))?;
                 Client::start(&server, &root).await
             })
         }))
     }
-}
-
-/// `server`, to start from where Cox gets its program, in
-/// `cache/servers/<name>/<version>` where Cox keeps what lasts, when it
-/// says where Cox gets it from on this platform: got first if it is not
-/// there yet, downloaded from GitHub, or installed with `go install`.
-fn downloaded(mut server: Server) -> Result<Server, Error> {
-    let told = |note: String| tracing::info!(server = %server.name, "{note}");
-    let got = match server.got_on(&download::platform()) {
-        None => return Ok(server),
-        Some(Got::GitHub {
-            repository,
-            version,
-            asset,
-            program,
-        }) => download::installed_at(Kept::ServerDownloads, &server.name, version)
-            .map_or_else(
-                || {
-                    let from = download::from_github(repository, version, &asset)?;
-                    download::installed(Kept::ServerDownloads, &server.name, &from, &told)
-                },
-                Ok,
-            )
-            .map(|folder| folder.join(program)),
-        Some(Got::Go {
-            package,
-            version,
-            program,
-        }) => download::go_installed(Kept::ServerDownloads, &server.name, package, version, &told)
-            .map(|folder| folder.join(program)),
-    };
-    let program = got.map_err(|error| Error::Io(std::io::Error::other(format!("{error:#}"))))?;
-    if let Some(command) = server.command.first_mut() {
-        *command = program.to_string_lossy().into_owned();
-    }
-    Ok(server)
 }
 
 impl Servers {
