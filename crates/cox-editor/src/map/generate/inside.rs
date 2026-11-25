@@ -72,8 +72,16 @@ impl<'c> Map<'c, '_> {
                     code: self.types[index].kind,
                 })
                 .collect();
+            // A box the level shows only by its edge, as `outer`, has no
+            // place to pull a type toward; a rule's line to it still
+            // wires the types it picks.
+            let shown: BTreeSet<&str> = around
+                .keys()
+                .copied()
+                .chain(level.outer.keys().map(String::as_str))
+                .collect();
             let mut placing = lines.clone();
-            placing.extend(self.reached_types(reaches, owner, &around));
+            placing.extend(self.reached_types(reaches, owner, &shown));
             let (size, parts) = layout::types(&cards, &placing, &around, me);
             out.push((
                 owner,

@@ -3,7 +3,8 @@
 //! boxes, and swaps two boxes' places when that shortens those lines, so
 //! that a box moves only to untangle them. The types inside a box are
 //! placed on a grid, each near what it is wired to, and pulled toward
-//! the side of the box that the boxes it is wired to are on.
+//! the side of the box that the boxes it is wired to are on; those wired
+//! to nothing after them, in name order.
 
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -23,6 +24,9 @@ const SIDE: i32 = 24;
 const TOP: i32 = 56;
 const BOTTOM: i32 = 28;
 const MOST_COLUMNS: usize = 5;
+/// The room between the types wired to something and those wired to
+/// nothing, beyond a row's.
+const APART: i32 = CARD_HEIGHT;
 /// How many times the types are placed again, each nearer what it is
 /// wired to.
 const ROUNDS: usize = 12;
@@ -206,18 +210,76 @@ pub(super) struct Card<'t> {
 }
 
 /// Places the `cards` of a box sitting at `me`, with `lines` between
-/// them and to the boxes `around`: on a grid, placed again each round in
-/// the order of where each wants to be, the mean of what it is wired to,
-/// another box being where it lies as seen from this one. Gives the
-/// level's size, and where each card sits, from its top left.
+/// them and to the boxes `around`. Those a line ends on sit together, on
+/// a grid sized by their own count. Those wired to nothing
+/// follow below, a little apart, in rows as wide as the grid of all the
+/// cards would be, in name order, so that they read as a list and leave
+/// the others where they are. Gives the level's size, and where each
+/// card sits, from its top left.
 pub(super) fn types(
     cards: &[Card<'_>],
     lines: &BTreeSet<(String, String)>,
     around: &BTreeMap<&str, [i32; 2]>,
     me: [i32; 2],
 ) -> ([i32; 2], BTreeMap<String, [i32; 2]>) {
+    let ends: BTreeSet<&str> = lines
+        .iter()
+        .flat_map(|(a, b)| [a.as_str(), b.as_str()])
+        .collect();
+    let (wired, mut loose): (Vec<&Card>, Vec<&Card>) =
+        cards.iter().partition(|card| ends.contains(card.id));
+    let grid = wired_grid(&wired, lines, around, me);
+    let mut parts: BTreeMap<String, [i32; 2]> = grid
+        .iter()
+        .map(|(&id, &(column, row))| {
+            (
+                id.to_owned(),
+                [SIDE + int(column) * COLUMN, TOP + int(row) * ROW],
+            )
+        })
+        .collect();
+    let below = grid
+        .values()
+        .map(|&(_, row)| row + 1)
+        .max()
+        .map_or(TOP, |rows| TOP + int(rows) * ROW + APART);
+    let columns = columns(cards.len());
+    loose.sort_by(|a, b| a.name.cmp(b.name).then(a.id.cmp(b.id)));
+    for (index, card) in loose.iter().enumerate() {
+        parts.insert(
+            card.id.to_owned(),
+            [
+                SIDE + int(index % columns) * COLUMN,
+                below + int(index / columns) * ROW,
+            ],
+        );
+    }
+    let right = cards
+        .iter()
+        .map(|card| parts[card.id][0] + card_width(card.name, card.code))
+        .max()
+        .unwrap_or(0);
+    let bottom = parts.values().map(|at| at[1]).max().unwrap_or(0);
+    ([right + SIDE, bottom + CARD_HEIGHT + BOTTOM], parts)
+}
+
+/// How many columns a grid of `count` cards has.
+fn columns(count: usize) -> usize {
+    whole((float(count) * 1.3).sqrt().ceil()).clamp(2, MOST_COLUMNS)
+}
+
+/// Where each of the `cards` that a line ends on sits, by column and
+/// row, on a grid of their own: placed again each round in the order of
+/// where each wants to be, the mean of what it is wired to, another box
+/// being where it lies as seen from this one.
+fn wired_grid<'t>(
+    cards: &[&Card<'t>],
+    lines: &BTreeSet<(String, String)>,
+    around: &BTreeMap<&str, [i32; 2]>,
+    me: [i32; 2],
+) -> BTreeMap<&'t str, (usize, usize)> {
     let count = cards.len();
-    let columns = whole((float(count) * 1.3).sqrt().ceil()).clamp(2, MOST_COLUMNS);
+    let columns = columns(count);
     let rows = count.div_ceil(columns);
     let (width, height) = (
         float(columns) * f64::from(COLUMN),
@@ -247,14 +309,14 @@ pub(super) fn types(
             f64::from(int(row) * ROW + CARD_HEIGHT / 2),
         )
     };
-    let mut by_name: Vec<&Card> = cards.iter().collect();
+    let mut by_name: Vec<&Card> = cards.to_vec();
     by_name.sort_by(|a, b| a.name.cmp(b.name).then(a.id.cmp(b.id)));
     let mut at: BTreeMap<&str, (f64, f64)> = by_name
         .iter()
         .enumerate()
         .map(|(index, card)| (card.id, cell(index % columns, index / columns)))
         .collect();
-    let mut grid: BTreeMap<&str, (usize, usize)> = BTreeMap::new();
+    let mut grid: BTreeMap<&'t str, (usize, usize)> = BTreeMap::new();
     for _ in 0..ROUNDS {
         let mut want: BTreeMap<&str, (f64, f64)> = BTreeMap::new();
         for card in cards {
@@ -290,7 +352,7 @@ pub(super) fn types(
             };
             want.insert(card.id, mean);
         }
-        let mut by_x: Vec<&str> = cards.iter().map(|card| card.id).collect();
+        let mut by_x: Vec<&'t str> = cards.iter().map(|card| card.id).collect();
         by_x.sort_by(|a, b| wanted(&want, a, b, |point| point.0));
         for (column, chunk) in by_x.chunks(rows.max(1)).enumerate() {
             let mut chunk = chunk.to_vec();
@@ -301,22 +363,7 @@ pub(super) fn types(
             }
         }
     }
-    let parts: BTreeMap<String, [i32; 2]> = grid
-        .iter()
-        .map(|(&id, &(column, row))| {
-            (
-                id.to_owned(),
-                [SIDE + int(column) * COLUMN, TOP + int(row) * ROW],
-            )
-        })
-        .collect();
-    let right = cards
-        .iter()
-        .map(|card| parts[card.id][0] + card_width(card.name, card.code))
-        .max()
-        .unwrap_or(0);
-    let bottom = parts.values().map(|at| at[1]).max().unwrap_or(0);
-    ([right + SIDE, bottom + CARD_HEIGHT + BOTTOM], parts)
+    grid
 }
 
 /// `a` before `b` if it wants to be further up or left, as `pick` reads
