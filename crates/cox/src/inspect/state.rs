@@ -604,6 +604,13 @@ fn describe_entry(entry: &Entry) -> String {
             (false, Some((first, last))) => format!("shown: {path}, lines {first}-{last}"),
             (false, None) => format!("shown: {path}"),
         },
+        Entry::MapShown { map, at } => {
+            let map = map.as_deref().unwrap_or("the first");
+            match at.last() {
+                Some(at) => format!("map shown: {map}, at {at}"),
+                None => format!("map shown: {map}"),
+            }
+        }
         Entry::Plan(steps) => describe_plan(steps),
         Entry::ToolCall {
             title,

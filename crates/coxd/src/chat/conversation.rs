@@ -1144,6 +1144,12 @@ impl Conversation {
         });
     }
 
+    /// Notes that the agent showed the human the map `map`, or the
+    /// project's first, open `at`, from the top down.
+    pub fn show_map(&mut self, map: Option<String>, at: Vec<String>) {
+        self.push(Entry::MapShown { map, at });
+    }
+
     /// Has the triggers named `names` gather what the human needs to
     /// answer the permission request the agent waits on, which shows that
     /// they do until each has said, or [`Self::stop_gathering`].

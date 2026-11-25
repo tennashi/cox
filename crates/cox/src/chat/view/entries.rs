@@ -281,7 +281,9 @@ pub(super) fn closing(entries: &[Entry]) -> Option<Closing<'_>> {
     for (index, entry) in entries.iter().enumerate().skip(from + 1) {
         match entry {
             Entry::Merge => return None,
-            Entry::Media { .. } | Entry::Shown { .. } => closing.shown.push(index),
+            Entry::Media { .. } | Entry::Shown { .. } | Entry::MapShown { .. } => {
+                closing.shown.push(index);
+            }
             Entry::PlanChanged { added, removed } => {
                 closing.decided = Some((added.as_slice(), removed.as_slice()));
             }
@@ -934,6 +936,7 @@ impl ChatView {
                 lines,
                 ..
             } => render_shown(index, path, *markdown, *lines, cx),
+            Entry::MapShown { map, at } => render_map_shown(index, map.as_deref(), at, cx),
             Entry::Commits(commits) => render_commits(index, commits, cx),
             Entry::Checks(checks) => self.render_checks(index, "TURN END", checks, &mut writer, cx),
             Entry::Event { on, checks } => {
@@ -2170,6 +2173,7 @@ fn render_tile(index: usize, entry: &Entry, cx: &mut Context<ChatView>) -> Optio
             lines,
             ..
         } => Some(render_shown_tile(index, path, *markdown, *lines, cx)),
+        Entry::MapShown { map, at } => Some(render_map_tile(index, map.as_deref(), at, cx)),
         _ => None,
     }
 }
@@ -2282,6 +2286,98 @@ fn render_shown_tile(
                 .child(ellipsis(SharedString::from(name))),
         )
         .tooltip(crate::ui::tip(path.to_owned()))
+        .on_hint_click(cx.listener(move |view, _, window, cx| view.show_link(&link, window, cx)))
+        .into_any_element()
+}
+
+/// What a map the agent showed is called: the map, by its name, unless
+/// the project's first, and the node it opened at last, by its id.
+fn map_shown_name(map: Option<&str>, at: &[String]) -> (String, Option<String>) {
+    let name = map.map_or_else(|| "Map".to_owned(), |map| format!("Map {map}"));
+    (name, at.last().cloned())
+}
+
+/// A map of the project the agent showed on the stage, as a row, which
+/// a click opens there again, where the agent opened it.
+fn render_map_shown(
+    index: usize,
+    map: Option<&str>,
+    at: &[String],
+    cx: &mut Context<ChatView>,
+) -> AnyElement {
+    let link = crate::stage::links::map_url(map, at);
+    let (name, last) = map_shown_name(map, at);
+    div()
+        .id(("map-shown", index))
+        .debug_selector(move || format!("map-shown-{index}"))
+        .flex()
+        .items_center()
+        .gap_2()
+        .px(px(12.))
+        .py(px(8.))
+        .rounded(px(8.))
+        .bg(rgb(RAISED))
+        .cursor_pointer()
+        .hover(|row| row.bg(rgb(HOVER)))
+        .child(crate::ui::icons::icon(
+            crate::ui::icons::Icon::Map,
+            14.,
+            LINK,
+        ))
+        .child(div().flex_none().child(SharedString::from(name)))
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .text_size(px(12.))
+                .text_color(rgb(DIM))
+                .children(last.map(|last| ellipsis(SharedString::from(last)))),
+        )
+        .on_hint_click(cx.listener(move |view, _, window, cx| view.show_link(&link, window, cx)))
+        .into_any_element()
+}
+
+/// A map the agent showed, as a tile of the card the human closes the
+/// work on, beside the pictures, which a click opens on the stage.
+fn render_map_tile(
+    index: usize,
+    map: Option<&str>,
+    at: &[String],
+    cx: &mut Context<ChatView>,
+) -> AnyElement {
+    let link = crate::stage::links::map_url(map, at);
+    let (name, last) = map_shown_name(map, at);
+    let tip = last
+        .as_ref()
+        .map_or_else(|| name.clone(), |last| format!("{name}: {last}"));
+    div()
+        .id(("map-tile", index))
+        .debug_selector(move || format!("map-tile-{index}"))
+        .size(px(THUMBNAIL))
+        .flex()
+        .flex_col()
+        .items_center()
+        .justify_center()
+        .gap_1()
+        .p_1()
+        .rounded(px(8.))
+        .overflow_hidden()
+        .bg(rgb(RAISED))
+        .cursor_pointer()
+        .child(crate::ui::icons::icon(
+            crate::ui::icons::Icon::Map,
+            18.,
+            LINK,
+        ))
+        .child(
+            div()
+                .w_full()
+                .text_size(px(11.))
+                .text_color(rgb(DIM))
+                .text_center()
+                .child(ellipsis(SharedString::from(last.unwrap_or(name)))),
+        )
+        .tooltip(crate::ui::tip(tip))
         .on_hint_click(cx.listener(move |view, _, window, cx| view.show_link(&link, window, cx)))
         .into_any_element()
 }
@@ -2858,6 +2954,10 @@ mod tests {
                 markdown: true,
                 lines: None,
             },
+            Entry::MapShown {
+                map: None,
+                at: vec!["shop".to_owned()],
+            },
             Entry::PlanChanged {
                 added: added.clone(),
                 removed: Vec::new(),
@@ -2870,7 +2970,7 @@ mod tests {
         ];
 
         let closing = closing(&entries).expect("the work closes");
-        assert_eq!(closing.shown, [4, 5]);
+        assert_eq!(closing.shown, [4, 5, 6]);
         assert_eq!(closing.decided, Some((added.as_slice(), &[][..])));
         assert_eq!(
             closing

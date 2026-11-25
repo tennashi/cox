@@ -60,6 +60,32 @@ const EARLIER: usize = 50;
 /// reads 30 MB of indexes, and takes a second or two.
 const DRAWN: usize = 4;
 
+/// The Map page's files, by their paths within it, built into Cox: the
+/// Map plugin, which the window's stage serves at `cox://map/` and the
+/// phone at `/map/`, each beside the JSON the page reads.
+pub const PAGE: &[(&str, &[u8])] = &[
+    (
+        "plugin.json",
+        include_bytes!("../../cox/plugins/map/plugin.json"),
+    ),
+    (
+        "index.html",
+        include_bytes!("../../cox/plugins/map/index.html"),
+    ),
+    ("map.css", include_bytes!("../../cox/plugins/map/map.css")),
+    ("app.js", include_bytes!("../../cox/plugins/map/app.js")),
+    (
+        "canvas.js",
+        include_bytes!("../../cox/plugins/map/canvas.js"),
+    ),
+    (
+        "detail.js",
+        include_bytes!("../../cox/plugins/map/detail.js"),
+    ),
+    ("drift.js", include_bytes!("../../cox/plugins/map/drift.js")),
+    ("icons.js", include_bytes!("../../cox/plugins/map/icons.js")),
+];
+
 /// What a page is told of one of the project's maps: all it draws the
 /// map from, with nothing to ask back.
 #[derive(Clone, Debug, PartialEq, Serialize)]

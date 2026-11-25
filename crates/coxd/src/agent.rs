@@ -1392,6 +1392,18 @@ fn told_so_far(entries: &[Entry]) -> Option<(String, bool)> {
     Some((told, switched))
 }
 
+/// That the agent showed the human the map `map`, or the project's
+/// first, open `at`, as [`told_so_far`] tells it.
+fn map_shown(map: Option<&str>, at: &[String]) -> String {
+    let map = map.map_or("the project's map".to_owned(), |map| {
+        format!("the map `{map}`")
+    });
+    match at.last() {
+        Some(at) => format!("[you showed the human {map}, open at {at}]"),
+        None => format!("[you showed the human {map}]"),
+    }
+}
+
 /// What was said in `entries`, whole, as [`told_so_far`] tells it, and
 /// whether the human switched the chat from one agent to another.
 fn said(entries: &[Entry]) -> Option<(String, bool)> {
@@ -1445,6 +1457,7 @@ fn said(entries: &[Entry]) -> Option<(String, bool)> {
                 None => format!("[shown to the human: {from}]"),
             }),
             Entry::Shown { path, .. } => Some(format!("[you showed the human {path}]")),
+            Entry::MapShown { map, at } => Some(map_shown(map.as_deref(), at)),
             Entry::Commits(commits) => Some(format!(
                 "[you committed: {}]",
                 commits

@@ -4,11 +4,11 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width,initial-scale=1" />
     <title>Map</title>
-    <!-- The page's own colors first, then the window's, which Cox gives
-         every plugin as `cox://api/theme.css`, where there is one. Nothing
-         is inline: the page is served under `default-src 'self'` too. -->
+    <!-- The page's own colors first, then the window's, which Cox serves
+         beside the page, on the stage as on the phone. Nothing is inline:
+         the phone serves the page under `default-src 'self'`. -->
     <link rel="stylesheet" href="./map.css" />
-    <link rel="stylesheet" href="cox://api/theme.css" />
+    <link rel="stylesheet" href="./theme.css" />
     <script type="module" src="./app.js"></script>
   </head>
   <body>

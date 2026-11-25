@@ -551,6 +551,8 @@ vocabulary, change the code, or agree to leave it in the vocabulary's
 `agreed`. What changed in the code shows on the boxes it falls in. The
 agent's `show_map` tool tells it how the vocabulary is written, opens
 the Map at a box or a type, and answers what is there, with the drift.
+The conversation keeps a row for each map the agent showed, which opens
+it there again: on the stage, or on the phone, over the chat.
 
 `coxd` indexes the commit each of the project's repositories has checked
 out, not what is not committed, by the files at the repository's top:
@@ -575,7 +577,8 @@ A plugin is a folder with an `index.html`, and optionally a
 `plugin.json` naming its `title`. The stage's bar shows a button for it,
 which opens it at `cox://<name>/`. The page reads what Cox knows as JSON
 from `cox://api/...`, and draws in Cox's colors by linking
-`cox://api/theme.css`. Cox's own plugins, in
+`cox://api/theme.css`, or `theme.css` beside its page, unless it has a
+file of that name. Cox's own plugins, in
 [`crates/cox/plugins`](../crates/cox/plugins), show how;
 [`plugins.rs`](../crates/cox/src/stage/plugins.rs) lists what
 `cox://api/` answers.

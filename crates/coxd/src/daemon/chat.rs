@@ -1452,6 +1452,13 @@ impl Chat {
             .show_file(file, shown.display().to_string(), markdown, lines);
     }
 
+    /// Notes in the conversation that the agent showed the human the map
+    /// `map`, or the project's first, open `at`, for the human to open it
+    /// there again, on the phone too.
+    pub fn show_map(&mut self, map: Option<String>, at: Vec<String>) {
+        self.conversation.show_map(map, at);
+    }
+
     /// Shows the pictures and videos a trigger's command printed as
     /// Markdown does, `![caption](path)`, its paths from the chat's
     /// folder, noting those it cannot.

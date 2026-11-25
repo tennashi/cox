@@ -251,6 +251,17 @@ pub enum Internal {
         key: u64,
         answer: oneshot::Sender<Option<PathBuf>>,
     },
+    /// The map named `name`, or the first, of the project where the chat
+    /// `key` works, as JSON, as the window's Map page is told it, for the
+    /// phone's, drawn again after a failed index when it says `again`,
+    /// told on `answer`, or nothing of a chat there is none of (see
+    /// [`crate::map::Maps::told`]).
+    Map {
+        key: u64,
+        name: Option<String>,
+        again: bool,
+        answer: oneshot::Sender<Option<String>>,
+    },
     /// What the tool call, or the permission request, at `at` in the
     /// conversation of the chat `key` shows, for the phone, which is told
     /// the conversation without it, to show as the human opens it, told
@@ -1880,21 +1891,33 @@ impl Daemon {
         let Some(window) = self.window.clone() else {
             return;
         };
-        let failed =
-            |why: String| serde_json::json!({ "state": "invalid", "problems": [why] }).to_string();
-        let Some(maps) = self.maps.clone() else {
-            let told = failed("Cox has nowhere to keep the indexes of the code".to_owned());
-            let _ = window.send(FromDaemon::Map { id, told });
-            return;
-        };
+        let drawn = self.map_json(folder, name, again);
         tokio::task::spawn_local(async move {
-            let told = tokio::task::spawn_blocking(move || {
-                maps.told(&folder, name.as_deref(), again).json()
-            })
-            .await
-            .unwrap_or_else(|error| failed(format!("the map was not drawn: {error}")));
+            let told = drawn.await;
             let _ = window.send(FromDaemon::Map { id, told });
         });
+    }
+
+    /// The map of the project in `folder` named `name`, as JSON, once it
+    /// is drawn, apart from the daemon's loop, for a page to draw: the
+    /// window's, or the phone's (see [`crate::map::Maps::told`]).
+    fn map_json(
+        &self,
+        folder: PathBuf,
+        name: Option<String>,
+        again: bool,
+    ) -> impl Future<Output = String> + use<> {
+        let failed =
+            |why: String| serde_json::json!({ "state": "invalid", "problems": [why] }).to_string();
+        let maps = self.maps.clone();
+        async move {
+            let Some(maps) = maps else {
+                return failed("Cox has nowhere to keep the indexes of the code".to_owned());
+            };
+            tokio::task::spawn_blocking(move || maps.told(&folder, name.as_deref(), again).json())
+                .await
+                .unwrap_or_else(|error| failed(format!("the map was not drawn: {error}")))
+        }
     }
 
     /// What the agent of a chat of the project at `index` that works in
@@ -2189,6 +2212,21 @@ impl Daemon {
             Internal::Folder { key, answer } => {
                 answer.send(self.slot(key).map(|slot| self.cwd(slot))).ok();
             }
+            Internal::Map {
+                key,
+                name,
+                again,
+                answer,
+            } => {
+                let Some(folder) = self.slot(key).map(|slot| self.cwd(slot)) else {
+                    answer.send(None).ok();
+                    return;
+                };
+                let drawn = self.map_json(folder, name, again);
+                tokio::task::spawn_local(async move {
+                    answer.send(Some(drawn.await)).ok();
+                });
+            }
             Internal::Content { key, at, answer } => {
                 let content = self.chat(key).and_then(|chat| {
                     match chat.conversation().entries().get(at)? {
@@ -2450,6 +2488,11 @@ impl Daemon {
             };
             let markdown = matches!(request, ToolRequest::ShowMarkdown { .. });
             chat.show_file((path, &cwd), text, markdown, lines);
+        }
+        if let ToolRequest::ShowMap { map, at } = &request
+            && let Some(chat) = self.chat(key)
+        {
+            chat.show_map(map.clone(), at.clone());
         }
         let ask = match request {
             ToolRequest::ShowMarkdown { path, text } => StageAsk::ShowMarkdown { path, text },
@@ -3718,6 +3761,86 @@ mod tests {
         );
         let none = store.add_chat(Some(here), "Not listed").unwrap();
         assert_eq!(key_of(&mut after, none), None);
+    }
+
+    #[test]
+    fn the_phone_is_told_the_map_of_the_project_the_chat_works_in() {
+        let folder = TempDir::new();
+        std::fs::create_dir_all(folder.join("maps")).unwrap();
+        std::fs::write(
+            folder.join("maps/shop.json"),
+            r#"{ "nodes": { "shop": { "name": "Shop" } }, "top": { "center": "shop" } }"#,
+        )
+        .unwrap();
+        let (store, chat) = one_chat(&folder);
+        let home = TempDir::new();
+        let (mut daemon, _) = daemon_of(&store, &home);
+        daemon.maps = Some(crate::map::Maps::new(
+            home.join("indexes"),
+            Some(home.join("scratch")),
+            Vec::new(),
+        ));
+        let key = key_of(&mut daemon, chat);
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let mut map_of = |key: u64, name: Option<&str>| {
+            tokio::task::LocalSet::new().block_on(&runtime, async {
+                let (answer, told) = oneshot::channel();
+                daemon.hear(Internal::Map {
+                    key,
+                    name: name.map(str::to_owned),
+                    again: false,
+                    answer,
+                });
+                told.await.unwrap()
+            })
+        };
+
+        let told: serde_json::Value = serde_json::from_str(&map_of(key, None).unwrap()).unwrap();
+        assert_eq!(told["root"], folder.display().to_string());
+        assert_eq!(told["name"], "shop");
+        assert_eq!(told["map"]["top"]["center"], "shop");
+        let other: serde_json::Value =
+            serde_json::from_str(&map_of(key, Some("other")).unwrap()).unwrap();
+        assert_eq!(other["state"], "none");
+        assert_eq!(map_of(key + 1, None), None, "no chat, no map");
+    }
+
+    #[test]
+    fn a_map_shown_is_noted_in_the_conversation_for_the_phone_and_shown_on_the_stage() {
+        let folder = TempDir::new();
+        let (store, chat) = one_chat(&folder);
+        let home = TempDir::new();
+        let (mut daemon, mut told) = daemon_of(&store, &home);
+        let key = key_of(&mut daemon, chat);
+        let at = vec!["shop".to_owned(), "shop/cart/Cart".to_owned()];
+
+        daemon.hear(Internal::Stage {
+            key,
+            request: ToolRequest::ShowMap {
+                map: Some("use".to_owned()),
+                at: at.clone(),
+            },
+        });
+
+        let entries = daemon.chat(key).unwrap().conversation().entries().to_vec();
+        assert_eq!(
+            entries.last(),
+            Some(&Entry::MapShown {
+                map: Some("use".to_owned()),
+                at: at.clone(),
+            })
+        );
+        let shown = std::iter::from_fn(|| told.try_recv().ok()).find_map(|message| match message {
+            FromDaemon::Stage {
+                key: of,
+                ask: StageAsk::ShowMap { map, at },
+            } => Some((of, map, at)),
+            _ => None,
+        });
+        assert_eq!(shown, Some((key, Some("use".to_owned()), at)));
     }
 
     /// A daemon of `store`, whose home is `home` and whose chats stay

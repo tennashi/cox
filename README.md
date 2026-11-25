@@ -39,7 +39,8 @@ things change often.
   vault works), and keep the sources they read. Cox can translate what
   you read into your language.
 - **On the phone.** Follow and answer your chats from your phone, over
-  Tailscale, and try the web app you are making there too.
+  Tailscale, and try the web app you are making there too, or open the
+  map an agent showed you.
 
 ## Installing
 
