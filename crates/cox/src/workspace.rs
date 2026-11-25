@@ -562,7 +562,7 @@ pub struct Workspace {
     syncs: HashMap<u64, tokio::sync::oneshot::Sender<()>>,
     last_sync: u64,
     /// Where the maps the stages' pages asked the daemon for go, by the
-    /// number each was asked with (see [`crate::stage::map::generated`]).
+    /// number each was asked with (see [`crate::stage::map::told`]).
     /// When each was asked, for those no page waits for any longer, as of
     /// a coxd that went without answering, to be let go.
     maps_asked: HashMap<u64, (std::time::Instant, std::sync::mpsc::Sender<String>)>,
@@ -728,7 +728,7 @@ impl Workspace {
     }
 
     /// What asks the daemon for the maps the stages' pages ask for from
-    /// now on (see [`crate::stage::map::generated`]).
+    /// now on (see [`crate::stage::map::told`]).
     fn asking_maps(cx: &mut Context<Self>) -> Task<()> {
         let mut maps = crate::stage::map::listen();
         cx.spawn(async move |this, cx| {

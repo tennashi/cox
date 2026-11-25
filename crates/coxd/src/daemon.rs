@@ -2671,7 +2671,32 @@ impl Daemon {
                 });
                 answer.send(whereabouts).ok();
             }
+            ChatRequest::Map {
+                folder,
+                name,
+                answer,
+            } => self.draw_map(folder, name, answer),
         }
+    }
+
+    /// Answers `answer` the map of the project in `folder` named `name`,
+    /// once it is drawn, apart from the daemon's loop, as the window is
+    /// told it (see [`Self::tell_map`]).
+    fn draw_map(
+        &self,
+        folder: PathBuf,
+        name: Option<String>,
+        answer: oneshot::Sender<Result<Box<crate::map::Told>, String>>,
+    ) {
+        let Some(maps) = self.maps.clone() else {
+            let why = "Cox has nowhere to keep the indexes of the code".to_owned();
+            answer.send(Err(why)).ok();
+            return;
+        };
+        tokio::task::spawn_blocking(move || {
+            let told = maps.told(&folder, name.as_deref(), false);
+            answer.send(Ok(Box::new(told))).ok();
+        });
     }
 
     /// Asks the agent of the chat kept as `chat`, or of the chat `key`, to

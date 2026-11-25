@@ -85,6 +85,20 @@ pub struct Told {
     /// drift unless every language's code is in it; none when the
     /// vocabulary does not read.
     pub map: Option<Generated>,
+    /// What changed in the code of the map's nodes, by id, as the
+    /// Changes tab shows each repository's changes: of a box, in the
+    /// files it owns and those of the boxes inside it, all the way down;
+    /// of a type, in its file. A node nothing changed in is left out.
+    pub changed: BTreeMap<String, Changed>,
+}
+
+/// What changed in the code of a node: in how many files, and how many
+/// lines they gained and lost.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
+pub struct Changed {
+    pub files: usize,
+    pub added: usize,
+    pub removed: usize,
 }
 
 /// How a map stands, as a whole.
@@ -242,6 +256,7 @@ impl Maps {
             problems: Vec::new(),
             indexes: Vec::new(),
             map: None,
+            changed: BTreeMap::new(),
         };
         let Some(named) = named else {
             if let Some(name) = name {
@@ -290,6 +305,7 @@ impl Maps {
             }
         }
         told.state = State::of(&told.indexes);
+        told.changed = changed(&map, &changed_files(root));
         told.map = Some(map);
         told
     }
@@ -625,6 +641,69 @@ impl Drop for Ending {
         }
         self.maps.jobs().end(&self.slot, &self.key, self.job, ended);
     }
+}
+
+/// The files that changed in the project in `root`, by their paths from
+/// its folder, with the lines each gained and lost, as the Changes tab
+/// shows each of its repositories' changes (see [`cox_git::changes`]).
+fn changed_files(root: &Path) -> BTreeMap<String, (usize, usize)> {
+    let roots = [Some(root.to_owned()), std::fs::canonicalize(root).ok()];
+    let mut files = BTreeMap::new();
+    for (_, folder) in crate::repositories::of(root) {
+        let Ok(diff) = cox_git::changes::read(&folder) else {
+            continue;
+        };
+        for (path, lines) in cox_git::changes::changed_files(&diff) {
+            let relative = roots
+                .iter()
+                .flatten()
+                .find_map(|root| path.strip_prefix(root).ok());
+            if let Some(relative) = relative {
+                files.insert(relative.to_string_lossy().into_owned(), lines);
+            }
+        }
+    }
+    files
+}
+
+/// What changed in the code of each node of `map`, of `files`, the
+/// files of the project that changed (see [`Told::changed`]).
+fn changed(map: &Generated, files: &BTreeMap<String, (usize, usize)>) -> BTreeMap<String, Changed> {
+    // The level each node is a part of, by the node that opens it.
+    let mut parents: BTreeMap<&str, &str> = BTreeMap::new();
+    for (opens, level) in &map.levels {
+        for part in level.parts.keys() {
+            parents.entry(part.as_str()).or_insert(opens.as_str());
+        }
+    }
+    let mut of: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+    for file in files.keys() {
+        let mut node = map.files.get(file).map(String::as_str);
+        // A box, and each box it is inside of, once each, however the
+        // levels nest.
+        let mut seen = Vec::new();
+        while let Some(at) = node.filter(|at| !seen.contains(at)) {
+            seen.push(at);
+            of.entry(at).or_default().push(file);
+            node = parents.get(at).copied();
+        }
+    }
+    for ty in map.types.values() {
+        if files.contains_key(&ty.file) {
+            of.entry(ty.id.as_str()).or_default().push(&ty.file);
+        }
+    }
+    of.into_iter()
+        .map(|(node, changed)| {
+            let lines = changed.iter().filter_map(|file| files.get(*file));
+            let told = Changed {
+                files: changed.len(),
+                added: lines.clone().map(|(added, _)| added).sum(),
+                removed: lines.map(|(_, removed)| removed).sum(),
+            };
+            (node.to_owned(), told)
+        })
+        .collect()
 }
 
 impl State {

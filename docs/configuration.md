@@ -449,7 +449,7 @@ more, so move them up out of it.
 | `triggers/*.md` | The project's [triggers](#triggers). |
 | `wiki/` | The project's own wiki, for what holds only of it. Only its chats see it. |
 | `raw/` | The project's own sources, what its chats read (`raw_keep`), as they read it. Only its chats see them. |
-| `maps/<name>.json` | The project's maps. Agents write them; `show_map` tells an agent the format. |
+| `maps/<name>.json` | The project's maps, one for each viewpoint of it. See [Maps](#maps). |
 | `plugins/<name>/` | A [plugin](#plugins): a view of the project's own on the stage. |
 | `servers.json` | Language servers for the project. See [Language servers](#language-servers). |
 
@@ -535,6 +535,39 @@ source as JSON, `<NAME>` being the server's name upper-cased with `_`
 for what is not a letter or a digit, as
 `COX_SERVER_RUST_ANALYZER_VERSION`. Cox reads its environment as it
 starts, so these hold for every project.
+
+### Maps
+
+A map shows the project as boxes, from what it is among at the top,
+through what is inside each box, down to the types of the code each box
+owns. You and the agents keep its vocabulary in `maps/<name>.json`: the
+boxes and the people and systems around them, where each sits on the
+levels you place, the lines no code backs, and the code each box claims.
+Cox reads the rest from an index of the code: each box's types, their
+fields and functions, where each is used and what each calls, the lines
+between boxes whose code meets, and the drift, where the vocabulary and
+the code disagree, for you and the agent to talk through, then fix the
+vocabulary, change the code, or agree to leave it in the vocabulary's
+`agreed`. What changed in the code shows on the boxes it falls in. The
+agent's `show_map` tool tells it how the vocabulary is written, opens
+the Map at a box or a type, and answers what is there, with the drift.
+
+`coxd` indexes the commit each of the project's repositories has checked
+out, not what is not committed, by the files at the repository's top:
+
+| Language | When the top has | Indexer |
+| --- | --- | --- |
+| Rust | `Cargo.toml` | `rust-analyzer`, as Cox downloads it for the [language server](#language-servers) |
+| TypeScript | `tsconfig.json` | `scip-typescript`, run with `npx` |
+| JavaScript | `package.json` and no `tsconfig.json` | `scip-typescript`, run with `npx` |
+| Python | `pyproject.toml`, `setup.py` or `setup.cfg` | `scip-python`, run with `npx` |
+| Go | `go.mod` | `scip-go`, which Cox installs with `go install` |
+
+An index takes from seconds to minutes, as rust-analyzer does on a large
+project; meanwhile the Map draws from the last commit's index, if there
+is one, and says what it waits for, or what an indexer needs that is not
+there. Cox keeps the indexes of the commits it drew last in
+`cache/indexes` in its [data folder](#the-data-folder).
 
 ### Plugins
 

@@ -8,8 +8,7 @@ use std::path::{Path, PathBuf};
 
 use cox_core::goal::Goal;
 use cox_core::tabs::Lines;
-use cox_editor::map::{self, Facts, Map, Tier};
-use cox_git::changes::{self, Diff};
+use cox_git::changes::Diff;
 use serde_json::{Value, json};
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::oneshot;
@@ -23,12 +22,12 @@ use crate::{raw, wiki, worktrees};
 
 mod android;
 mod mac;
+mod map;
 mod subagent;
 
 const SHOW_MARKDOWN: &str = "show_markdown";
 const SHOW_FILE: &str = "show_file";
 const SHOW_CHANGES: &str = "show_changes";
-const SHOW_MAP: &str = "show_map";
 const SHOW_MEDIA: &str = "show_media";
 const RUN_COMMAND: &str = "run_command";
 const READ_CHAT: &str = "read_chat";
@@ -51,40 +50,6 @@ const HUMAN: &str = "human";
 const RAW_KEEP: &str = "raw_keep";
 const RAW_SEARCH: &str = "raw_search";
 const RAW_READ: &str = "raw_read";
-
-/// How the map's file is written, as the agent is told it when it is to
-/// write one: the form the Map tab draws, not what to put in it, which is
-/// the project's to decide.
-const MAP_FORMAT: &str = "\
-A project has a map for each picture of it from a top of its own, as one of what it is made \
-of and one of how it is deployed, each a file in `maps` in the project's folder, named \
-after the map, as `maps/parts.json` for the map `parts`. A map is a JSON object with `says`, one line on what it shows \
-as against the project's other maps, `tiers`, `parts`, `edges` and `flows`. `tiers` is a list, the top tier first, each `{\"id\", \"name\", \"says\", \"rows\", \
-\"frame\"}`: `says` is one line on what the tier shows; `rows` are the lines of boxes, from the \
-top, each `{\"name\", \"parts\": [ids], \"under\": id}`, where `under` hangs the row under a \
-box of a row above, as what that box holds; `frame` is `{\"above\": [ids], \"below\": [ids]}`, \
-boxes of other tiers drawn above and below the tier when it is open, for the lines out of it \
-to reach. `parts` is an object of the boxes by id, each `{\"name\", \"says\", \"each\", \
-\"many\", \"holds\", \"tier\", \"kinds\", \"note\"}`: `says` is one line on what it is; `each` \
-says how many there are and of what (\"one per chat\"), with `many: true` when there are \
-several; `holds` are the paths of the code it is, from the project's folder, a file or a \
-folder, a file with a line as `path:12`; `tier` is the id of the tier that opens inside it; \
-`kinds` names the kinds of a box that is not one thing; `note` is a remark, such as where the \
-code does not match the map. `edges` is a list of `{\"from\", \"to\", \"says\", \"dir\"}` \
-between boxes, by id, `dir` being `to` (an arrow into `to`, the default), `both` or `none`; a \
-tier draws the edges among its boxes and those to the boxes in its frame. `flows` is a list \
-of `{\"id\", \"name\", \"says\", \"steps\"}`, the orders in which boxes talk, each step \
-`{\"from\", \"to\", \"says\", \"at\", \"back\"}` from one box to another, by id, written between \
-the boxes that hold the code: the tab rolls the steps up to the boxes of the tier it shows, or \
-of the tiers above it, draws them in sequence, and opens the box a step happens inside of; `at` is where the step is \
-made, a path with a line, the line of the call, which the tab asks the project's language server what it calls, to \
-name the step by that function where it is drawn between the boxes it is written between, so give every step its \
-`at`; `back: true` marks a step \
-back, the answer to an earlier step, which ends what the box was doing since that step. A box opens the tier \
-it names, or, holding paths, the code; a box may be in more than one tier. The tab lays what \
-changed since the last commit on the boxes that hold the files, and up on the boxes that open \
-their tiers, so a box that opens a tier holds paths only for the code that is its own, and \
-marks a box whose paths are gone stale. Change the map as you move the code it holds.";
 
 /// The most files the agent is told of, of those that changed.
 const FILES_TOLD: usize = 50;
@@ -198,7 +163,7 @@ fn all_tools() -> Value {
         },
     },
     show_changes_tool(),
-    show_map_tool(),
+    map::tool(),
     {
         "name": RUN_COMMAND,
         "description": "Runs a shell command in a terminal on the stage beside the \
@@ -494,44 +459,6 @@ fn show_changes_tool() -> Value {
                     "description": "A folder of the repository, or a project's folder, \
                         absolute or from the working directory, such as a sketch's folder: the \
                         working directory unless given.",
-                },
-            },
-        },
-    })
-}
-
-/// The tool that shows the map of the project, as the agent learns of it.
-fn show_map_tool() -> Value {
-    json!(
-    {
-        "name": SHOW_MAP,
-        "description": "Shows the human the map of the project on a tab of the stage \
-            beside the conversation: a picture of the project in tiers, from the few things \
-            it is among at the top, through what is inside each, down to boxes that hold \
-            paths of the code, with what changed since the last commit laid over the boxes, \
-            and the boxes whose paths are gone marked stale. A click on a box opens the tier \
-            inside it, or the code it holds. Use it to show the human where what you talk \
-            of is in the project, before you talk it through or show the diff: open it at \
-            the tier or box you talk of, and the human sees the boxes around it. Answers \
-            what the map shows there, box by box, and names the project's other maps. A \
-            map is a file of the project, in `maps`, which you write when the project \
-            has none, or when the human wants another picture of it from another top, \
-            deciding with the human what it is to show, and keep as you change the code it \
-            holds; shown with none, the tool says how the file is written.",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "map": {
-                    "type": "string",
-                    "description": "Which map to open, by its name, its file's in \
-                        `maps` without `.json`; the project's first when not given.",
-                },
-                "at": {
-                    "type": "array",
-                    "items": { "type": "string" },
-                    "description": "Where to open the map: the id of a tier, and after it \
-                        the id of a box in that tier to open on its own, as [\"cox\", \
-                        \"stage\"]; the top tier when empty or not given.",
                 },
             },
         },
@@ -989,7 +916,7 @@ pub(super) async fn call(
         SHOW_MARKDOWN => show_markdown(arguments, cwd, requests),
         SHOW_FILE => show_file(arguments, cwd, requests),
         SHOW_CHANGES => show_changes(arguments, cwd, requests),
-        SHOW_MAP => show_map(arguments, cwd, requests),
+        map::SHOW_MAP => map::show_map(arguments, cwd, requests, chats).await,
         RUN_COMMAND => run_command(arguments, cwd, requests).await,
         subagent::AGENT => {
             let kinds = subagent::Kinds::of_claude(cwd);
@@ -1143,180 +1070,6 @@ fn show_changes(
         })
         .collect::<Vec<_>>()
         .join("\n\n"))
-}
-
-/// Asks the chat to show the map of the project open where `arguments`
-/// say, a tier and a box in it by their ids, or at its top, and answers
-/// what is there; or, when the project has no map, how to write one.
-fn show_map(
-    arguments: &Value,
-    cwd: &Path,
-    requests: &UnboundedSender<ToolRequest>,
-) -> Result<String, String> {
-    let at: Vec<String> = match arguments.get("at") {
-        None | Some(Value::Null) => Vec::new(),
-        Some(at) => at
-            .as_array()
-            .ok_or("at is to be a list of ids, as strings")?
-            .iter()
-            .map(|name| {
-                name.as_str()
-                    .map(str::to_owned)
-                    .ok_or("at is to be a list of ids, as strings")
-            })
-            .collect::<Result<_, _>>()?,
-    };
-    let name = match arguments.get("map") {
-        None | Some(Value::Null) => None,
-        Some(name) => Some(
-            name.as_str()
-                .ok_or("map is to be a map's name, as a string")?,
-        ),
-    };
-    let Some((named, map)) = map::read(cwd, name)? else {
-        ask(
-            requests,
-            ToolRequest::ShowMap {
-                map: None,
-                at: Vec::new(),
-            },
-        )?;
-        return Ok(format!(
-            "The project has no map yet: the Map tab on the stage says so. Write one, and \
-             show it again. What the tiers are, and what goes in each, is for you and the \
-             human to decide for this project, as its COX.md may say: the map says what the \
-             parts of the project mean, for a reader who does not know it, not what its \
-             files are. {MAP_FORMAT}"
-        ));
-    };
-    let tier = match at.first() {
-        None => map.tiers.first().ok_or("the map has no tier")?,
-        Some(id) => map.tier(id).ok_or_else(|| {
-            let there: Vec<&str> = map.tiers.iter().map(|tier| tier.id.as_str()).collect();
-            format!("the map has no tier `{id}`; it has: {}", there.join(", "))
-        })?,
-    };
-    let part = match at.get(1) {
-        None => None,
-        Some(id) => Some(
-            tier.parts()
-                .find(|part| *part == id)
-                .ok_or_else(|| {
-                    format!(
-                        "the tier `{}` has no box `{id}`; it has: {}",
-                        tier.id,
-                        tier.parts().collect::<Vec<_>>().join(", ")
-                    )
-                })?
-                .to_owned(),
-        ),
-    };
-    if at.len() > 2 {
-        return Err("at is a tier's id, and a box's after it, at most".to_owned());
-    }
-    let changed = changes::read(cwd)
-        .ok()
-        .map_or_default(|diff| changes::changed_files(&diff));
-    let all = map::all_facts(cwd, &map, &changed);
-    let facts = |id: &str| all.get(id).cloned();
-    ask(
-        requests,
-        ToolRequest::ShowMap {
-            map: name.map(str::to_owned),
-            at: at.clone(),
-        },
-    )?;
-    let others: Vec<map::Named> = map::list(cwd)
-        .into_iter()
-        .filter(|other| other.name != named.name)
-        .collect();
-    Ok(told_map(
-        &map,
-        &named,
-        &others,
-        tier,
-        part.as_deref(),
-        &facts,
-    ))
-}
-
-/// What the map `named` shows at `tier`, or at the box `part` of it, as
-/// the agent is told it: a line for each box, with how many there are,
-/// what it says of itself, what it holds, what changed in it, and what
-/// of it is gone; then the project's `others` maps, if it has others.
-fn told_map(
-    map: &Map,
-    named: &map::Named,
-    others: &[map::Named],
-    tier: &Tier,
-    part: Option<&str>,
-    facts: &dyn Fn(&str) -> Option<Facts>,
-) -> String {
-    let which = if others.is_empty() {
-        "The map of the project".to_owned()
-    } else {
-        format!("The map `{}` of the project", named.name)
-    };
-    let mut told = format!(
-        "{which} is on the stage, open at the tier `{}`{}, for the human to see where things \
-         are:",
-        tier.id,
-        part.map_or_else(String::new, |part| format!(", at the box `{part}`"))
-    );
-    if !tier.says.is_empty() {
-        let _ = write!(told, "\n{}", tier.says);
-    }
-    let ids: Vec<&str> = match part {
-        Some(part) => Vec::from([part]),
-        None => tier.parts().collect(),
-    };
-    for id in ids {
-        let Some(part) = map.parts.get(id) else {
-            let _ = write!(told, "\n`{id}`: not in the map's parts");
-            continue;
-        };
-        let _ = write!(told, "\n`{id}` {}", part.name);
-        if let Some(each) = &part.each {
-            let _ = write!(told, " ({each})");
-        }
-        if !part.says.is_empty() {
-            let _ = write!(told, ": {}", part.says);
-        }
-        if let Some(opens) = &part.tier {
-            let _ = write!(told, "; opens the tier `{opens}`");
-        }
-        if !part.holds.is_empty() {
-            let _ = write!(told, "; holds {}", part.holds.join(", "));
-        }
-        if let Some(facts) = facts(id) {
-            if facts.changed.any() {
-                let _ = write!(
-                    told,
-                    "; +{} -{} in {} file{}",
-                    facts.changed.added,
-                    facts.changed.removed,
-                    facts.changed.files,
-                    if facts.changed.files == 1 { "" } else { "s" }
-                );
-            }
-            if !facts.stale.is_empty() {
-                let _ = write!(told, "; stale, gone: {}", facts.stale.join(", "));
-            }
-        }
-        if let Some(note) = &part.note {
-            let _ = write!(told, "; note: {note}");
-        }
-    }
-    if !others.is_empty() {
-        let _ = write!(told, "\nThe project's other maps, which `map` shows:");
-        for other in others {
-            let _ = write!(told, "\n`{}`", other.name);
-            if !other.says.is_empty() {
-                let _ = write!(told, ": {}", other.says);
-            }
-        }
-    }
-    told
 }
 
 /// Asks `request` of the chat's stage through `requests`, saying so in the
@@ -2266,6 +2019,7 @@ fn told(ran: &Ran) -> String {
 #[cfg(test)]
 mod tests {
 
+    use cox_git::changes;
     use tokio::sync::mpsc::unbounded_channel;
 
     use super::*;
@@ -2352,187 +2106,6 @@ mod tests {
             ]);
         }
         assert_eq!(names(tools(None, false)), expected);
-    }
-
-    /// A project with one map, `map`, of two tiers: the whole, and the
-    /// app, which holds a box of a file that is there and one of a file
-    /// that is gone.
-    fn project_with_a_map() -> TempDir {
-        let cwd = TempDir::new();
-        fs::create_dir_all(cwd.join(map::MAPS_FOLDER)).unwrap();
-        fs::create_dir_all(cwd.join("src")).unwrap();
-        fs::write(cwd.join("src/main.rs"), "fn main() {}\n").unwrap();
-        fs::write(
-            cwd.join(map::MAPS_FOLDER).join("map.json"),
-            r#"{
-              "tiers": [
-                { "id": "whole", "name": "Whole", "says": "The few things.",
-                  "rows": [{ "parts": ["user", "app"] }] },
-                { "id": "app", "name": "The app", "rows": [{ "parts": ["main", "gone"] }] }
-              ],
-              "parts": {
-                "user": { "name": "User", "says": "Who runs it.", "each": "one" },
-                "app": { "name": "App", "says": "The program.", "tier": "app", "holds": ["src"] },
-                "main": { "name": "main.rs", "holds": ["src/main.rs:1"] },
-                "gone": { "name": "Gone", "holds": ["src/gone.rs"], "note": "moved" }
-              }
-            }"#,
-        )
-        .unwrap();
-        cwd
-    }
-
-    /// [`project_with_a_map`] with a second map, `runtime`.
-    fn project_with_two_maps() -> TempDir {
-        let cwd = project_with_a_map();
-        fs::write(
-            cwd.join(map::MAPS_FOLDER).join("runtime.json"),
-            r#"{ "says": "Where it runs.",
-                 "tiers": [{ "id": "hosts", "name": "Hosts", "rows": [{ "parts": ["box"] }] }],
-                 "parts": { "box": { "name": "A box" } } }"#,
-        )
-        .unwrap();
-        cwd
-    }
-
-    #[test]
-    fn shows_the_map_at_its_top_tier_and_tells_what_is_there() {
-        let cwd = project_with_a_map();
-        let (sent, mut requests) = unbounded_channel();
-
-        let shown = call_now(SHOW_MAP, &json!({}), &cwd, &sent);
-
-        assert_eq!(shown["isError"], false, "{shown}");
-        let told = shown["content"][0]["text"].as_str().unwrap();
-        assert_eq!(
-            told,
-            "The map of the project is on the stage, open at the tier `whole`, for the human \
-             to see where things are:\nThe few things.\n`user` User (one): Who runs it.\n`app` \
-             App: The program.; opens the tier `app`; holds src"
-        );
-        match requests.try_recv() {
-            Ok(ToolRequest::ShowMap { map, at }) => {
-                assert_eq!(map, None);
-                assert_eq!(at, Vec::<String>::new());
-            }
-            _ => panic!("the stage was not asked to show the map"),
-        }
-    }
-
-    #[test]
-    fn shows_the_map_at_a_box_and_tells_it_is_stale() {
-        let cwd = project_with_a_map();
-        let (sent, mut requests) = unbounded_channel();
-
-        let shown = call_now(SHOW_MAP, &json!({ "at": ["app", "gone"] }), &cwd, &sent);
-
-        let told = shown["content"][0]["text"].as_str().unwrap();
-        assert_eq!(
-            told,
-            "The map of the project is on the stage, open at the tier `app`, at the box \
-             `gone`, for the human to see where things are:\n`gone` Gone; holds src/gone.rs; \
-             stale, gone: src/gone.rs; note: moved"
-        );
-        match requests.try_recv() {
-            Ok(ToolRequest::ShowMap { map, at }) => {
-                assert_eq!(map, None);
-                assert_eq!(at, ["app", "gone"]);
-            }
-            _ => panic!("the stage was not asked to show the map"),
-        }
-    }
-
-    #[test]
-    fn a_tier_the_map_has_not_is_an_error_naming_those_it_has() {
-        let cwd = project_with_a_map();
-        let (sent, mut requests) = unbounded_channel();
-
-        let shown = call_now(SHOW_MAP, &json!({ "at": ["nowhere"] }), &cwd, &sent);
-
-        assert_eq!(shown["isError"], true);
-        let told = shown["content"][0]["text"].as_str().unwrap();
-        assert_eq!(told, "the map has no tier `nowhere`; it has: whole, app");
-        assert!(requests.try_recv().is_err(), "the stage is asked nothing");
-    }
-
-    #[test]
-    fn a_box_the_tier_has_not_is_an_error_naming_those_it_has() {
-        let cwd = project_with_a_map();
-        let (sent, mut requests) = unbounded_channel();
-
-        let shown = call_now(SHOW_MAP, &json!({ "at": ["app", "nope"] }), &cwd, &sent);
-
-        assert_eq!(shown["isError"], true);
-        let told = shown["content"][0]["text"].as_str().unwrap();
-        assert_eq!(told, "the tier `app` has no box `nope`; it has: main, gone");
-        assert!(requests.try_recv().is_err(), "the stage is asked nothing");
-    }
-
-    #[test]
-    fn a_map_is_shown_by_its_name_and_names_the_projects_other_maps() {
-        let cwd = project_with_two_maps();
-        let (sent, mut requests) = unbounded_channel();
-
-        let shown = call_now(SHOW_MAP, &json!({ "map": "runtime" }), &cwd, &sent);
-
-        let told = shown["content"][0]["text"].as_str().unwrap();
-        assert_eq!(
-            told,
-            "The map `runtime` of the project is on the stage, open at the tier `hosts`, for \
-             the human to see where things are:\n`box` A box\nThe project's other maps, \
-             which `map` shows:\n`map`"
-        );
-        match requests.try_recv() {
-            Ok(ToolRequest::ShowMap { map, at }) => {
-                assert_eq!(map.as_deref(), Some("runtime"));
-                assert_eq!(at, Vec::<String>::new());
-            }
-            _ => panic!("the stage was not asked to show the map"),
-        }
-    }
-
-    #[test]
-    fn of_two_maps_the_first_is_shown_unless_named_and_says_what_the_other_is() {
-        let cwd = project_with_two_maps();
-        let (sent, _requests) = unbounded_channel();
-
-        let shown = call_now(SHOW_MAP, &json!({}), &cwd, &sent);
-
-        let told = shown["content"][0]["text"].as_str().unwrap();
-        assert!(told.starts_with("The map `map` of the project"), "{told}");
-        assert!(told.ends_with("\n`runtime`: Where it runs."), "{told}");
-    }
-
-    #[test]
-    fn a_map_the_project_has_not_is_an_error_naming_those_it_has() {
-        let cwd = project_with_two_maps();
-        let (sent, mut requests) = unbounded_channel();
-
-        let shown = call_now(SHOW_MAP, &json!({ "map": "gone" }), &cwd, &sent);
-
-        assert_eq!(shown["isError"], true);
-        let told = shown["content"][0]["text"].as_str().unwrap();
-        assert_eq!(told, "the project has no map `gone`; it has: map, runtime");
-        assert!(requests.try_recv().is_err(), "the stage is asked nothing");
-    }
-
-    #[test]
-    fn tells_how_to_write_the_map_when_the_project_has_none() {
-        let cwd = TempDir::new();
-        let (sent, mut requests) = unbounded_channel();
-
-        let shown = call_now(SHOW_MAP, &json!({}), &cwd, &sent);
-        assert_eq!(shown["isError"], false, "{shown}");
-        let told = shown["content"][0]["text"].as_str().unwrap();
-        assert!(told.starts_with("The project has no map yet"), "{told}");
-        assert!(told.contains("`maps/parts.json`"), "{told}");
-        match requests.try_recv() {
-            Ok(ToolRequest::ShowMap { map, at }) => {
-                assert_eq!(map, None);
-                assert_eq!(at, Vec::<String>::new());
-            }
-            _ => panic!("the stage was not asked to show the map"),
-        }
     }
 
     #[tokio::test]

@@ -246,6 +246,36 @@ fn a_map_is_drawn_from_the_index_of_the_commit_checked_out() {
 }
 
 #[test]
+fn what_changed_falls_on_the_boxes_and_types_whose_files_it_is_in() {
+    let fake = Fake::new();
+    let root = TempDir::new();
+    repository(&root);
+    assert_eq!(fake.settled(&root).changed, BTreeMap::new());
+
+    let lib = format!("{LIB}\n/// More.\npub fn more() {{}}\n");
+    std::fs::write(root.join("src/lib.rs"), lib).unwrap();
+    std::fs::write(root.join("README.md"), "Another\n").unwrap();
+    let told = fake.settled(&root);
+    let changed = Changed {
+        files: 1,
+        added: 3,
+        removed: 0,
+    };
+    // The box that owns the file, the box it is inside of, and the type
+    // the file has; the README no box owns falls on none.
+    assert_eq!(
+        told.changed,
+        BTreeMap::from([
+            ("cart".to_owned(), changed),
+            ("shop".to_owned(), changed),
+            ("shop/Cart".to_owned(), changed),
+        ])
+    );
+    // Not committed, the change is not indexed.
+    assert_eq!(fake.runs().len(), 1);
+}
+
+#[test]
 fn a_map_is_drawn_again_as_its_vocabulary_changes() {
     let fake = Fake::new();
     let root = TempDir::new();

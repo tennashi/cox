@@ -370,9 +370,10 @@ impl Stage {
     }
 
     /// Shows the map of the project named `map`, or its first unless
-    /// named, open `at`, a tier and a box in it by their ids, or at its
-    /// top, as the agent asks: on the Map page's tab, or a new one, with
-    /// the keyboard in it.
+    /// named, open `at`, the nodes it opens from the top down, by their
+    /// ids, and last a node or a function chosen there, or at its top, as
+    /// the agent asks: on the Map page's tab, or a new one, with the
+    /// keyboard in it.
     pub(super) fn show_map_at(
         &mut self,
         map: Option<&str>,
@@ -389,11 +390,16 @@ impl Stage {
 pub const ACTIVITY_URL: &str = "cox://activity/";
 
 /// The hash of the Map page open at the map `map`, or the project's
-/// first, `at`, a tier and a box in it by their ids: `#cox/stage`, or
-/// `#deploy:cox/stage` for the map `deploy`, and `#` alone at the top of
-/// the first.
+/// first, `at`, the nodes it opens from the top down and the one chosen
+/// last, by their ids, each written as [`percent_encoded`] says, as ids
+/// have `/` and `:` in them: `#app/server`, or `#deploy:app/server` for
+/// the map `deploy`, and `#` alone at the top of the first.
 fn map_fragment(map: Option<&str>, at: &[String]) -> String {
-    let at = at.join("/");
+    let at = at
+        .iter()
+        .map(|id| percent_encoded(id))
+        .collect::<Vec<_>>()
+        .join("/");
     match map {
         Some(map) => format!("#{}:{at}", percent_encoded(map)),
         None => format!("#{at}"),
@@ -512,6 +518,12 @@ mod tests {
         assert_eq!(map_fragment(None, &at), "#cox/stage");
         assert_eq!(map_fragment(Some("deploy"), &at), "#deploy:cox/stage");
         assert_eq!(map_fragment(Some("my map"), &[]), "#my%20map:");
+        // An id of the code keeps its `/` and `:` apart from the hash's.
+        let at = ["app".to_owned(), "app/server/Server::run".to_owned()];
+        assert_eq!(
+            map_fragment(Some("use"), &at),
+            "#use:app/app%2Fserver%2FServer%3A%3Arun"
+        );
     }
 
     #[test]

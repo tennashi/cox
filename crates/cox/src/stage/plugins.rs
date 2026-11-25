@@ -10,17 +10,13 @@
 //! What Cox knows, a plugin reads as JSON from `cox://api/<what>`:
 //!
 //! - `cox://api/map/<name>`: the map of the project named `<name>`, as
-//!   its file in `maps` has it, with what changed and what is stale
-//!   laid over its boxes, and the names of the project's other maps (see
-//!   [`crate::stage::map`]); `cox://api/map`, its first map.
-//! - `cox://api/generated-map/<name>`: the map of the project named
-//!   `<name>`, as coxd generates it from its vocabulary in `maps` and the
-//!   indexes of the project's code, which asking for it has coxd make
-//!   when they are not made yet, with how each stands (see
-//!   [`crate::stage::map::generated`]); `cox://api/generated-map`, its
-//!   first map; and `cox://api/generated-map/again/<name>`, the map,
-//!   making again the indexes that failed, which only a plugin's own
-//!   `fetch` has done.
+//!   coxd draws it from its vocabulary in `maps` and the indexes of the
+//!   project's code, which asking for it has coxd make when they are not
+//!   made yet, with how each stands, what changed in the code of its
+//!   boxes, and the names of the project's other maps (see
+//!   [`crate::stage::map::told`]); `cox://api/map`, its first map; and
+//!   `cox://api/map/again/<name>`, the map, making again the indexes that
+//!   failed, which only a plugin's own `fetch` has done.
 //! - `cox://api/file/<path>`: what the project's language server says of
 //!   the file at `<path>`, an absolute path in the project: the symbols
 //!   it defines and what uses them, once the server has answered, which
@@ -154,7 +150,12 @@ const BUILT_IN: &[(&str, Files)] = &[
                 include_bytes!("../../plugins/map/plugin.json"),
             ),
             ("index.html", include_bytes!("../../plugins/map/index.html")),
+            ("map.css", include_bytes!("../../plugins/map/map.css")),
             ("app.js", include_bytes!("../../plugins/map/app.js")),
+            ("canvas.js", include_bytes!("../../plugins/map/canvas.js")),
+            ("detail.js", include_bytes!("../../plugins/map/detail.js")),
+            ("drift.js", include_bytes!("../../plugins/map/drift.js")),
+            ("icons.js", include_bytes!("../../plugins/map/icons.js")),
         ],
     ),
     (
@@ -311,9 +312,7 @@ impl Plugins {
             });
         }
         let json = match what {
-            "map" if rest.is_empty() => map::told(&self.root, None),
-            "map" if !rest.contains('/') => map::told(&self.root, Some(&percent_decoded(rest))),
-            "generated-map" => return self.generated_map(rest),
+            "map" => return self.map(rest),
             "wiki" => {
                 let root = coxd::settings::wiki();
                 if rest.is_empty() {
@@ -396,9 +395,9 @@ impl Plugins {
         })
     }
 
-    /// The map `cox://api/generated-map/<rest>` asks for, as coxd draws
-    /// it (see [`map::generated`]).
-    fn generated_map(&self, rest: &str) -> Option<Resource> {
+    /// The map `cox://api/map/<rest>` asks for, as coxd draws it (see
+    /// [`map::told`]).
+    fn map(&self, rest: &str) -> Option<Resource> {
         let (again, name) = match rest.strip_prefix("again/") {
             Some(name) => (true, name),
             None if !rest.contains('/') => (false, rest),
@@ -407,7 +406,7 @@ impl Plugins {
         let name = (!name.is_empty()).then(|| percent_decoded(name));
         Some(Resource {
             mime: "application/json".to_owned(),
-            body: map::generated(&self.root, name.as_deref(), again).into_bytes(),
+            body: map::told(&self.root, name.as_deref(), again).into_bytes(),
         })
     }
 
@@ -601,7 +600,7 @@ fn acts(url: &str) -> bool {
         return false;
     };
     path.starts_with("activity/dismiss/")
-        || path.starts_with("generated-map/again/")
+        || path.starts_with("map/again/")
         || path
             .strip_prefix("triggers/")
             .is_some_and(|ask| !ask.starts_with("discussion/") && !ask.starts_with("tried/"))
@@ -777,7 +776,27 @@ mod tests {
     }
 
     #[test]
-    fn a_generated_map_is_asked_of_coxd_as_named() {
+    fn the_map_page_is_its_own_files_alone_as_the_phone_serves_it() {
+        let (_, files) = BUILT_IN.iter().find(|(name, _)| *name == "map").unwrap();
+        for (name, body) in *files {
+            let text = std::str::from_utf8(body).unwrap();
+            // Under `default-src 'self'`, nothing inline runs or styles.
+            assert!(!text.contains("<style"), "{name} has a style element");
+            assert!(!text.contains("style=\""), "{name} has a style attribute");
+            for handler in ["onclick=", "onload=", "onerror=", "href=\"javascript:"] {
+                assert!(!text.contains(handler), "{name} has {handler}");
+            }
+            if mime(name) == "text/html" {
+                assert!(!text.contains("<script>"), "{name} has an inline script");
+                for script in text.split("<script").skip(1) {
+                    assert!(script.contains("src=\"./"), "{name}: {script}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_map_is_asked_of_coxd_as_named() {
         let root = TempDir::new();
         let plugins = Plugins::new(root.to_path_buf(), Outlines::new().0, Calls::new().0);
         // In the window's place: answers what it was asked.
@@ -799,49 +818,19 @@ mod tests {
                 serde_json::from_slice::<serde_json::Value>(&resource.body).unwrap()
             })
         };
-        let json = asked("cox://api/generated-map", Asker::Anyone).unwrap();
+        let json = asked("cox://api/map", Asker::Anyone).unwrap();
         assert_eq!(json["folder"], root.display().to_string());
         assert_eq!(json["name"], serde_json::Value::Null);
         assert_eq!(json["again"], false);
-        let json = asked("cox://api/generated-map/use%20it", Asker::Anyone).unwrap();
+        let json = asked("cox://api/map/use%20it", Asker::Anyone).unwrap();
         assert_eq!(json["name"], "use it");
         assert_eq!(json["again"], false);
         // Making a failed index again is a plugin's to ask.
-        assert_eq!(
-            asked("cox://api/generated-map/again/use", Asker::Anyone),
-            None
-        );
-        let json = asked("cox://api/generated-map/again/use", Asker::Plugin).unwrap();
+        assert_eq!(asked("cox://api/map/again/use", Asker::Anyone), None);
+        let json = asked("cox://api/map/again/use", Asker::Plugin).unwrap();
         assert_eq!(json["name"], "use");
         assert_eq!(json["again"], true);
-        assert_eq!(asked("cox://api/generated-map/a/b", Asker::Plugin), None);
-    }
-
-    #[test]
-    fn the_map_is_told_as_json() {
-        let root = TempDir::new();
-        let maps = root.join(cox_editor::map::MAPS_FOLDER);
-        std::fs::create_dir_all(&maps).unwrap();
-        std::fs::write(
-            maps.join("map.json"),
-            r#"{ "tiers": [{ "id": "whole", "name": "Whole", "rows": [{ "parts": ["one"] }] }],
-                 "parts": { "one": { "name": "One", "holds": ["src"] } } }"#,
-        )
-        .unwrap();
-        let plugins = Plugins::new(root.to_path_buf(), Outlines::new().0, Calls::new().0);
-
-        let answer = plugins.resource("cox://api/map").unwrap();
-        let json: serde_json::Value = serde_json::from_slice(&answer.body).unwrap();
-        assert_eq!(json["map"]["tiers"][0]["id"], "whole");
-        assert_eq!(json["facts"]["one"]["stale"], serde_json::json!(["src"]));
-        let answer = plugins.resource("cox://api/map/map").unwrap();
-        let json: serde_json::Value = serde_json::from_slice(&answer.body).unwrap();
-        assert_eq!(json["name"], "map");
-        assert_eq!(json["map"]["tiers"][0]["id"], "whole");
-        let answer = plugins.resource("cox://api/map/no%20such").unwrap();
-        let json: serde_json::Value = serde_json::from_slice(&answer.body).unwrap();
-        assert!(json["error"].as_str().unwrap().contains("no map `no such`"));
-        assert_eq!(plugins.resource("cox://api/map/one/"), None);
+        assert_eq!(asked("cox://api/map/a/b", Asker::Plugin), None);
     }
 
     #[test]

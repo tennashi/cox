@@ -66,9 +66,9 @@
 //!   agent clicks and types into as the human watches, and [`windows`]
 //!   lists those windows, for the human to show one.
 //! - [`plugins`] are pages that draw what Cox knows, as a tab would, which
-//!   the stage serves its pages itself at `cox:` addresses: [`map`] tells
-//!   the project's map, as an agent wrote it, with what changed laid over
-//!   its boxes, for the human to see where things are.
+//!   the stage serves its pages itself at `cox:` addresses: [`map`] asks
+//!   coxd for a map of the project, drawn from its vocabulary and the
+//!   index of its code, for the human to see where things are.
 
 pub mod activity;
 pub mod android;
