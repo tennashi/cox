@@ -432,6 +432,15 @@ mod tests {
     }
 
     #[test]
+    fn coxs_own_map_reads() {
+        // Cox's map of itself, which its agents keep as they move its code.
+        let text = include_str!("../../../../maps/use.json");
+        let vocabulary = Vocabulary::parse(text)
+            .unwrap_or_else(|error| panic!("maps/use.json does not read: {error}"));
+        assert_eq!(vocabulary.top.center, "cox");
+    }
+
+    #[test]
     fn a_file_of_another_shape_says_what_it_does_not_know() {
         let error = Vocabulary::parse(r#"{ "tiers": [], "nodes": {} }"#).unwrap_err();
         assert!(error.to_string().starts_with("unknown field `tiers`"));

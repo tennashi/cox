@@ -1,0 +1,203 @@
+{
+  "says": "Using Cox",
+  "nodes": {
+    "cox": { "name": "Cox" },
+    "mac": { "name": "The person at the Mac", "icon": "person", "kind": "outside" },
+    "phone": { "name": "The person on the phone", "icon": "phone", "kind": "outside" },
+    "apps": { "name": "The Mac's other apps", "icon": "apps", "kind": "outside" },
+    "android": { "name": "Android devices", "icon": "android", "kind": "outside" },
+    "web": { "name": "Web pages", "icon": "globe", "kind": "outside" },
+    "github": { "name": "GitHub", "icon": "net", "kind": "outside" },
+    "proj": { "name": "Project folders", "icon": "folder", "kind": "outside" },
+    "agent": { "name": "Agents", "icon": "agent", "kind": "outside" },
+    "win": {
+      "name": "Cox app",
+      "icon": "window",
+      "code": "cox",
+      "claims": ["cox", "cox-android", "cox-browser", "cox-editor", "cox-mac"],
+      "lines": "hand",
+      "open": false
+    },
+    "helper": { "name": "Chromium helper", "icon": "layers", "code": "cox-helper" },
+    "coxd": { "name": "coxd", "icon": "cycle", "code": "cox --daemon" },
+    "mcp": { "name": "MCP bridge", "icon": "plug", "code": "cox --mcp" },
+    "phonepage": { "name": "PWA app", "icon": "phone", "code": "the phone's browser" },
+    "reader": {
+      "name": "Page reader",
+      "icon": "doc",
+      "code": "cox --read-page",
+      "many": true,
+      "claims": ["coxd/raw/page"],
+      "lines": "hand",
+      "open": false
+    },
+    "store": {
+      "name": "Data store",
+      "icon": "store",
+      "code": "files in state/",
+      "claims": [
+        "cox-core/store",
+        "cox-core/entry",
+        "coxd/storage",
+        "cox-core/tabs",
+        "coxd/wiki",
+        "coxd/raw",
+        "coxd/settings",
+        "cox-core/settings",
+        "cox-core/moved"
+      ],
+      "open": false
+    },
+    "sock": { "name": "Socket server", "icon": "socket", "claims": ["coxd/daemon/process"] },
+    "pwa": { "name": "PWA server", "icon": "server", "claims": ["coxd/daemon/phone"] },
+    "loop": { "name": "Event loop", "icon": "cycle", "claims": ["coxd/daemon", "coxd/process"] },
+    "sched": { "name": "Scheduler", "icon": "clock", "claims": ["coxd/trigger", "coxd/schedule"] },
+    "projm": {
+      "name": "Project manager",
+      "icon": "folder",
+      "claims": [
+        "coxd/daemon/project",
+        "coxd/daemon/pulls",
+        "coxd/daemon/tidy",
+        "coxd/github",
+        "coxd/repositories",
+        "coxd/worktrees",
+        "cox-git"
+      ]
+    },
+    "sketchm": {
+      "name": "Sketch manager",
+      "icon": "branch",
+      "claims": ["coxd/daemon/sketches", "coxd/chat/sketch", "coxd/workflow"]
+    },
+    "mapm": {
+      "name": "Map maker",
+      "icon": "braces",
+      "claims": ["coxd/map", "cox-editor/map", "cox-editor/scip"]
+    },
+    "runner": {
+      "name": "Chat runner",
+      "icon": "chat",
+      "claims": ["coxd/daemon/chat", "coxd/chat/conversation"],
+      "many": true
+    },
+    "acp": {
+      "name": "ACP client",
+      "icon": "agent",
+      "claims": ["cox-acp", "coxd/agent", "coxd/agents"],
+      "many": true
+    },
+    "judge": {
+      "name": "Goal judge",
+      "icon": "check",
+      "claims": ["coxd/chat/judge", "coxd/chat/conversation/checks", "cox-core/goal"],
+      "many": true
+    },
+    "push": { "name": "Web Push sender", "icon": "phone", "claims": ["coxd/daemon/push"] },
+    "mcps": { "name": "MCP server", "icon": "plug", "claims": ["coxd/agent/mcp"], "many": true }
+  },
+  "top": {
+    "center": "cox",
+    "left": ["mac", "phone"],
+    "right": ["apps", "android", "web", "github", "proj", "agent"],
+    "lines": [
+      { "from": "mac", "to": "cox", "both": true },
+      { "from": "phone", "to": "cox", "both": true },
+      { "from": "cox", "to": "apps", "sides": ["right", "left"] },
+      { "from": "cox", "to": "android", "both": true },
+      { "from": "cox", "to": "web" },
+      { "from": "cox", "to": "github" },
+      { "from": "cox", "to": "proj" },
+      { "from": "cox", "to": "agent", "both": true, "sides": ["right", "left"] }
+    ]
+  },
+  "levels": {
+    "cox": {
+      "box": [-360, -262, 800, 520],
+      "outer": {
+        "mac": ["left", -200],
+        "phone": ["left", 100],
+        "apps": ["top", -400],
+        "android": ["top", -120],
+        "web": ["top", 190],
+        "proj": ["right", -110],
+        "github": ["right", -5],
+        "agent": ["right", 100]
+      },
+      "parts": {
+        "win": [-330, -200],
+        "helper": [-80, -200],
+        "reader": [210, -200],
+        "coxd": [-215, -20],
+        "phonepage": [-330, 100],
+        "store": [-140, 172],
+        "mcp": [140, 150]
+      },
+      "lines": [
+        { "from": "mac", "to": "win", "both": true },
+        { "from": "phone", "to": "phonepage", "both": true },
+        { "from": "phonepage", "to": "coxd", "both": true },
+        { "from": "win", "to": "coxd", "both": true },
+        { "from": "win", "to": "helper" },
+        { "from": "helper", "to": "web" },
+        { "from": "coxd", "to": "store" },
+        { "from": "coxd", "to": "agent", "both": true },
+        { "from": "agent", "to": "mcp" },
+        { "from": "mcp", "to": "coxd", "both": true },
+        { "from": "coxd", "to": "proj" },
+        { "from": "coxd", "to": "github" },
+        { "from": "coxd", "to": "reader" },
+        { "from": "reader", "to": "web" },
+        { "from": "win", "to": "proj", "sides": ["bottom", "left"] },
+        { "from": "win", "to": "android", "both": true },
+        { "from": "win", "to": "apps" }
+      ]
+    },
+    "coxd": {
+      "box": [-380, -262, 792, 520],
+      "at": {
+        "win": [-350, -398],
+        "helper": [100, -398],
+        "phonepage": [-676, -25],
+        "store": [-100, 338],
+        "mcp": [492, -220],
+        "reader": [492, -398],
+        "mac": [-1040, -398],
+        "phone": [-1040, -25],
+        "apps": [-560, -602],
+        "android": [-240, -602],
+        "web": [560, -602],
+        "proj": [824, 20],
+        "github": [824, 165],
+        "agent": [824, -110]
+      },
+      "frames": { "cox": [-712, -462, 1456, 892] },
+      "parts": {
+        "sock": [-350, -220],
+        "pwa": [-350, -95],
+        "push": [-350, 40],
+        "judge": [-350, 165],
+        "mapm": [-100, -220],
+        "sched": [-100, -95],
+        "loop": [-100, 40],
+        "runner": [-100, 165],
+        "mcps": [150, -220],
+        "acp": [150, -95],
+        "sketchm": [150, 40],
+        "projm": [150, 165]
+      },
+      "lines": [
+        { "from": "win", "to": "sock", "both": true },
+        { "from": "phonepage", "to": "pwa", "both": true },
+        { "from": "projm", "to": "proj" },
+        { "from": "projm", "to": "github" },
+        { "from": "sketchm", "to": "proj" },
+        { "from": "push", "to": "phonepage" },
+        { "from": "acp", "to": "agent", "both": true },
+        { "from": "mcp", "to": "mcps", "both": true },
+        { "from": "mcps", "to": "reader", "sides": ["right", "bottom"] }
+      ]
+    }
+  },
+  "agreed": []
+}
