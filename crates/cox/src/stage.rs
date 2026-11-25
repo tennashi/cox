@@ -230,6 +230,9 @@ pub struct Stage {
     tab_menu: Option<(gpui::Point<gpui::Pixels>, usize)>,
     /// Whether the stage is in sight, in the middle of the window.
     panel: Entity<Panel>,
+    /// Tells the tabs of what changed whether they are in sight as the
+    /// stage comes into sight or leaves it.
+    _sighted: Subscription,
     /// What keeps the tabs as they change, if they are kept.
     keep: Option<Keep>,
     /// The tabs as they were last kept.
@@ -298,9 +301,11 @@ impl Stage {
         let chosen = cx.subscribe_in(&files, window, |stage, _, chosen: &Chosen, window, cx| {
             stage.open_chosen(chosen, window, cx);
         });
+        let sighted = cx.observe(&panel, |stage, _, cx| stage.tell_sight(cx));
         Self {
             files,
             _chosen: chosen,
+            _sighted: sighted,
             cef,
             plugins: Plugins::new(cwd.clone(), outlines, calls),
             menu: None,
@@ -518,6 +523,7 @@ impl Stage {
     /// kept, and draw them again.
     fn changed(&mut self, cx: &mut Context<Self>) {
         self.relock(cx);
+        self.tell_sight(cx);
         // The tree marks the file of the tab shown, if it is the tab of a
         // file.
         if let Some(tab) = self.tabs.shown()
@@ -535,6 +541,20 @@ impl Stage {
             }
         }
         cx.notify();
+    }
+
+    /// Tells each tab of what changed whether it is in the human's sight:
+    /// the tab shown, while the stage is in sight, for it to look at what
+    /// changed only then (see [`changes::Changes::set_in_sight`]).
+    fn tell_sight(&self, cx: &mut App) {
+        let open = self.panel.read(cx).is_open();
+        let shown = self.tabs.shown_index();
+        for (index, tab) in self.tabs.iter().enumerate() {
+            if let TabContent::Changes(changes) = &tab.content {
+                let in_sight = open && shown == Some(index);
+                changes.update(cx, |changes, cx| changes.set_in_sight(in_sight, cx));
+            }
+        }
     }
 
     /// A terminal the human opens, with the keyboard in it.

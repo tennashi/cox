@@ -39,8 +39,11 @@
 //! [`CompareWith`]).
 //!
 //! The tab looks again now and then, so that it shows what the agent
-//! changes as it works. It draws only the rows in sight, so a long list
-//! of changes scrolls as a short one does, and stays where the human
+//! changes as it works, but only while it is in the human's sight, the
+//! tab shown of a stage in sight (see [`Changes::set_in_sight`]): out of
+//! it, it reads nothing, as each look runs Git several times, and back
+//! in sight it looks at once. It draws only the rows in sight, so a long
+//! list of changes scrolls as a short one does, and stays where the human
 //! scrolled to as the changes do. The wheel scrolls a file's lines across
 //! too, each file's apart, their numbers staying in place, so that a line
 //! too long for the tab can be read to its end.
@@ -261,7 +264,11 @@ pub struct Changes {
     /// How wide the text of a line is in sight, as a line was last drawn.
     in_sight: Rc<Cell<Pixels>>,
     focus_handle: FocusHandle,
-    _follow: Task<()>,
+    /// Whether the tab is in the human's sight, which it looks again only
+    /// while it is.
+    visible: bool,
+    /// What looks at what changed now and then (see [`follow`]).
+    following: Task<()>,
     /// What reads what the human picked, while it does.
     picking: Option<Task<()>>,
 }
@@ -337,7 +344,8 @@ impl Changes {
             widest: HashMap::new(),
             in_sight: Rc::new(Cell::new(px(0.))),
             focus_handle: cx.focus_handle(),
-            _follow: follow(cx),
+            visible: true,
+            following: follow(cx),
             picking: None,
         }
     }
@@ -353,6 +361,20 @@ impl Changes {
         self.checkouts = checkouts;
         self.branches = branches;
         self
+    }
+
+    /// Tells the tab whether it is in the human's sight: the tab shown, of
+    /// a stage in sight. A tab looks at what changed at first wherever it
+    /// is, then again now and then only while it is in sight, and at once
+    /// as it comes back into sight.
+    pub fn set_in_sight(&mut self, in_sight: bool, cx: &mut Context<Self>) {
+        if self.visible == in_sight {
+            return;
+        }
+        self.visible = in_sight;
+        if in_sight {
+            self.following = follow(cx);
+        }
     }
 
     /// The folder whose changes the tab shows.
@@ -2068,11 +2090,18 @@ fn drawn(text: &str) -> String {
 }
 
 /// Reads what changed in the tab of `cx` at once, and again now and
-/// then, for as long as the tab is (see [`look`]).
+/// then, for as long as the tab is and is in the human's sight (see
+/// [`look`]).
 fn follow(cx: &mut Context<Changes>) -> Task<()> {
     cx.spawn(async move |this, cx| {
         while look(&this, cx).await {
             cx.background_executor().timer(LOOK_EVERY).await;
+            if !this
+                .read_with(cx, |changes, _| changes.visible)
+                .unwrap_or_default()
+            {
+                break;
+            }
         }
     })
 }

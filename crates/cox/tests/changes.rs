@@ -144,6 +144,53 @@ fn follows_what_changes_as_the_agent_works(cx: &mut TestAppContext) {
     assert_eq!(shown(&changes, cx), [("a.txt".to_owned(), 1, 0)]);
 }
 
+/// The subjects of the commits the tab lists, of the repository shown,
+/// newest first.
+fn subjects(changes: &Entity<Changes>, cx: &mut VisualTestContext) -> Vec<String> {
+    changes.read_with(cx, |changes, _| {
+        changes.history().map_or_default(|history| {
+            history
+                .commits
+                .iter()
+                .map(|commit| commit.subject.clone())
+                .collect()
+        })
+    })
+}
+
+#[gpui::test]
+fn looks_at_what_changes_only_while_in_sight(cx: &mut TestAppContext) {
+    let folder = repository("in-sight", "one\n");
+    let (changes, _, cx) = open(cx, &folder, &folder);
+    assert_eq!(shown(&changes, cx), []);
+    assert_eq!(subjects(&changes, cx), ["A"]);
+
+    // Behind another tab, or on a stage out of sight, it reads neither
+    // what the agent changes nor what it commits.
+    changes.update(cx, |changes, cx| changes.set_in_sight(false, cx));
+    std::fs::write(folder.join("a.txt"), "one\ntwo\n").unwrap();
+    std::fs::write(folder.join("b.txt"), "b\n").unwrap();
+    git(&folder, &["add", "b.txt"]);
+    git(&folder, &["commit", "--quiet", "-m", "B"]);
+    cx.executor().advance_clock(Duration::from_secs(10));
+    cx.run_until_parked();
+    assert_eq!(shown(&changes, cx), []);
+    assert_eq!(subjects(&changes, cx), ["A"]);
+
+    // Back in sight, it reads them at once, and follows them again.
+    changes.update(cx, |changes, cx| changes.set_in_sight(true, cx));
+    cx.run_until_parked();
+    assert_eq!(shown(&changes, cx), [("a.txt".to_owned(), 1, 0)]);
+    assert_eq!(subjects(&changes, cx), ["B", "A"]);
+    std::fs::write(folder.join("c.txt"), "c\n").unwrap();
+    cx.executor().advance_clock(Duration::from_secs(3));
+    cx.run_until_parked();
+    assert_eq!(
+        shown(&changes, cx),
+        [("a.txt".to_owned(), 1, 0), ("c.txt".to_owned(), 1, 0)]
+    );
+}
+
 #[gpui::test]
 fn shows_what_changed_in_each_repository_among_a_projects_directories(cx: &mut TestAppContext) {
     let project = scratch::folder("changes-project");
