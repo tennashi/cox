@@ -387,6 +387,17 @@ impl<'c, 'a> Map<'c, 'a> {
             levels.insert(owner.to_owned(), level);
         }
         let drift = drift::find(&self, &levels);
+        let files = self
+            .code
+            .documents
+            .iter()
+            .filter_map(|document| {
+                let owner = self
+                    .box_of_file(document.path)
+                    .or_else(|| self.box_of_module(&document.module))?;
+                Some((document.path.to_owned(), owner.to_owned()))
+            })
+            .collect();
         let mut types = BTreeMap::new();
         for ty in std::mem::take(&mut self.types) {
             nodes.insert(
@@ -424,6 +435,7 @@ impl<'c, 'a> Map<'c, 'a> {
                 })
                 .collect(),
             drift,
+            files,
         }
     }
 
