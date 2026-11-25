@@ -185,6 +185,47 @@ pub(super) fn module_parts(module: &str) -> impl Iterator<Item = &str> {
         .filter(|part| !part.is_empty())
 }
 
+impl Sym<'_> {
+    /// The names it is known by, from its package down, as a rule names
+    /// it: its module's parts, then those of what it is in, and its own,
+    /// a method of an `impl` block of rust-analyzer's being its type's.
+    pub fn names(&self) -> Vec<&str> {
+        let mut names: Vec<&str> = module_parts(&self.module).collect();
+        let Some(parsed) = &self.parsed else {
+            return names;
+        };
+        let inner = &parsed.descriptors[namespaces(parsed).len()..];
+        let Some((last, before)) = inner.split_last() else {
+            return names;
+        };
+        let before = match conventions::impl_block(before) {
+            Some((block, type_name, _)) => {
+                names.extend(named(&before[..block]));
+                names.push(type_name);
+                &[]
+            }
+            None => before,
+        };
+        names.extend(named(before));
+        names.extend(named(std::slice::from_ref(last)));
+        names
+    }
+}
+
+/// The names of `descriptors` a rule names a thing by: its types', its
+/// terms', its methods' and its macros'.
+fn named<'d>(descriptors: &'d [Descriptor<'_>]) -> impl Iterator<Item = &'d str> {
+    descriptors
+        .iter()
+        .filter(|descriptor| {
+            matches!(
+                descriptor.suffix,
+                Suffix::Type | Suffix::Term | Suffix::Method | Suffix::Macro
+            )
+        })
+        .map(|descriptor| descriptor.name.as_ref())
+}
+
 /// The namespaces a symbol's descriptors start with.
 fn namespaces<'s>(parsed: &'s Symbol<'_>) -> Vec<&'s str> {
     parsed
@@ -249,6 +290,15 @@ impl<'a> Code<'a> {
             for information in &document.symbols {
                 let id = code.intern(&information.symbol);
                 code.symbols[id].info.get_or_insert(information);
+            }
+        }
+        // What a type implements may be named nowhere else, as an
+        // interface of Go's a type satisfies.
+        for document in &documents {
+            for information in &document.symbols {
+                for relationship in &information.relationships {
+                    code.intern(&relationship.symbol);
+                }
             }
         }
         for document in &documents {

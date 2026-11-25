@@ -269,6 +269,8 @@ pub enum DriftKind {
     Unowned,
     /// The code of two boxes meets, but no level shows them together.
     Undrawn,
+    /// A line's end at a box is a rule that picks none of its types.
+    RuleEmpty,
     /// An agreement that no drift matches any longer.
     AgreedStale,
 }

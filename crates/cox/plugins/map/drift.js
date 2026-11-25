@@ -14,6 +14,7 @@ const KINDS = [
   ["unowned", "Code no box claims"],
   ["claim-gone", "Claims the code no longer has"],
   ["no-types", "Boxes that own no types"],
+  ["rule-empty", "Lines whose rule picks no type"],
   ["agreed-stale", "Agreements nothing matches"],
   ["agreed", "Agreed"],
 ];

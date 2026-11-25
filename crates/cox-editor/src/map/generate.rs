@@ -16,6 +16,10 @@
 //! - inside each box that opens, a line between two of its types where
 //!   a field of one names the other, and one to each box around, from
 //!   the type that names it most, or that it names most;
+//! - inside each box that opens, on its types or on boxes, the lines
+//!   whose end at it is a rule, to the types the rule picks, or to the
+//!   boxes that hold them, by what the index tells of what implements
+//!   what, and where each name is used;
 //! - inside each box that opens, on its types or on boxes, the lines it
 //!   has closed that go on to none of its parts, to its edge;
 //! - where the vocabulary and the code disagree, as drift.
@@ -33,6 +37,7 @@ mod kept;
 mod layout;
 mod members;
 mod references;
+mod rules;
 mod text;
 
 use std::collections::{BTreeMap, HashMap};
@@ -437,6 +442,7 @@ impl<'c, 'a> Map<'c, 'a> {
     /// The map, as generated: the vocabulary's levels with the lines the
     /// code gives, a level for each box that opens, and the drift.
     fn into_generated(mut self) -> Generated {
+        let reaches = self.reaches();
         let placed = layout::place(&self);
         let mut levels = placed.levels;
         let mut edges = self.edges.clone();
@@ -447,13 +453,14 @@ impl<'c, 'a> Map<'c, 'a> {
             .iter()
             .map(|(id, node)| (id.clone(), drawn(node)))
             .collect();
-        for (owner, level) in self.type_levels(&placed.slots, &levels) {
+        for (owner, level) in self.type_levels(&placed.slots, &levels, &reaches) {
             levels.insert(owner.to_owned(), level);
         }
         let top = &self.vocabulary.top;
         let top_lines: Vec<Line> = top.lines.iter().map(hand_line).collect();
+        self.reach(&reaches, &mut levels);
         kept::keep(self.vocabulary, &top_lines, &mut levels);
-        let drift = drift::find(&self, &levels);
+        let drift = drift::find(&self, &levels, &reaches);
         let files = self
             .code
             .documents

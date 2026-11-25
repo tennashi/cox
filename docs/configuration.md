@@ -554,7 +554,33 @@ code; drawn closed, it stands for them. A box opened keeps the lines it
 has closed: each goes on to the parts inside that the level inside joins
 to the line's other end, or else to the box's edge, as a line from a
 person does where no code ties it to one of the box's types. What
-changed in the code shows on the boxes it falls in. The agent's
+changed in the code shows on the boxes it falls in.
+
+A line's end at a box can instead be a rule, which picks the types
+inside the box the line goes on to as it opens, as
+`{"from": "user", "to": {"box": "window", "implements": "Render"}}`.
+`implements` picks the types that implement a trait or an interface, or
+subclass a class, as a language server finds a type's implementations;
+`uses` picks those whose declarations or functions name a type or a
+function, as it finds references. The names are your code's and your
+framework's, so the map names no type by hand that goes stale as the
+code moves, and the rule reads the same in any language: from the
+relationships and occurrences every index has, or, for Rust, from the
+trait each `impl` block names. In a level of boxes the line goes on to
+the boxes that hold the types picked; in a level of types, to the
+types, those named most drawn whole and the rest shown when one end is
+chosen. A rule that picks no type is drift. Write a name as it is
+declared, not as it is imported or exported under another, as
+`hono-base.ts/Hono` for the class `hono.ts` imports as `HonoBase`; and
+with as much of its module before it as tells it from others of its
+name, as `tui/Renderer`, whichever of `/`, `.` and `:` you part them
+with. rust-analyzer names the trait of an `impl` block by its name
+alone, so only a name's last part counts there. A rule sees only what
+was indexed: code a build leaves out, as a Go file behind a build tag
+or Rust behind a `cfg` the indexer did not set, is not there, nor are
+types a Rust macro makes, as Cox indexes Rust without its procedural
+macros. And it picks types only: a function that is no type's, as many
+a handler or middleware is, is not an end it can reach. The agent's
 `show_map` tool tells it how the vocabulary is written, opens the Map at
 a box or a type, and answers what is there, with the drift. The
 conversation keeps a row for each map the agent showed, which opens it
