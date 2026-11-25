@@ -419,7 +419,8 @@ fn the_lines_between_boxes_come_from_where_their_code_meets() {
         ]
     );
     // Inside each box, a line from the type that names the other box, and
-    // to the type the other box uses.
+    // to the type the other box uses; the user's line, which no code
+    // backs, goes on to the server's edge.
     let inside = |owner: &str| -> Vec<(String, String)> {
         map.levels[owner]
             .lines
@@ -429,7 +430,10 @@ fn the_lines_between_boxes_come_from_where_their_code_meets() {
     };
     assert_eq!(
         inside("server"),
-        [("app/server/Server".to_owned(), "store".to_owned())]
+        [
+            ("app/server/Server".to_owned(), "store".to_owned()),
+            ("user".to_owned(), "server".to_owned())
+        ]
     );
     assert_eq!(
         inside("store"),
@@ -592,6 +596,142 @@ fn a_box_that_keeps_its_lines_by_hand_keeps_those_of_the_boxes_inside_it() {
     );
     assert_eq!(map.levels["app"].lines.len(), 1);
     assert_eq!(open_drift(&map), Vec::<&str>::new());
+}
+
+/// [`app`]'s server, and its store in a box of its own, `group`, which
+/// keeps its lines by hand, among a user and an admin: the user's line
+/// goes to the server; the admin's to the app, and on as `admin` writes
+/// it; the group's level shows those around it that `at` places, and the
+/// lines `lines` writes.
+fn people(admin: &str, at: &str, lines: &str) -> String {
+    format!(
+        r#"{{
+          "nodes": {{
+            "app": {{ "name": "App" }},
+            "user": {{ "name": "User", "kind": "outside" }},
+            "admin": {{ "name": "Admin", "kind": "outside" }},
+            "server": {{ "name": "Server", "claims": ["app/server"] }},
+            "group": {{ "name": "Group", "lines": "hand" }},
+            "store": {{ "name": "Store", "claims": ["app/store"] }}
+          }},
+          "top": {{
+            "center": "app",
+            "left": ["user", "admin"],
+            "lines": [{{ "from": "user", "to": "app", "both": true }}, {{ "from": "admin", "to": "app" }}]
+          }},
+          "levels": {{
+            "app": {{
+              "box": [0, 0, 800, 500],
+              "outer": {{ "user": ["left", 0], "admin": ["left", 200] }},
+              "parts": {{ "server": [0, 0], "group": [300, 0] }},
+              "lines": [{{ "from": "user", "to": "server", "both": true }}{admin}]
+            }},
+            "group": {{
+              "box": [0, 0, 800, 500],
+              "at": {{ {at} }},
+              "parts": {{ "store": [300, 0] }},
+              "lines": [{lines}]
+            }}
+          }},
+          "agreed": [{{ "id": "unowned:app/util", "why": "Helpers." }}]
+        }}"#
+    )
+}
+
+/// The lines of `level`, as `from`, `to` and whether both ways.
+fn line_ways<'m>(map: &'m Generated, level: &str) -> Vec<(&'m str, &'m str, bool)> {
+    map.levels[level]
+        .lines
+        .iter()
+        .map(|line| (line.from.as_str(), line.to.as_str(), line.both))
+        .collect()
+}
+
+#[test]
+fn a_box_opened_keeps_the_lines_a_person_drew_to_it() {
+    let project = app();
+    let to_group = r#", { "from": "admin", "to": "group" }"#;
+    let around = r#""server": [0, 0], "admin": [-300, 200]"#;
+    let map = generated(&people(to_group, around, ""), &project);
+    // The level a person placed carries the top's lines on to its parts.
+    assert_eq!(
+        line_ways(&map, "app"),
+        [("user", "server", true), ("admin", "group", false)]
+    );
+    // The server opens on its types, which no code ties to the user: the
+    // user's line goes to its edge, beside the one the code gives.
+    assert_eq!(
+        line_ways(&map, "server"),
+        [
+            ("app/server/Server", "group", false),
+            ("user", "server", true)
+        ]
+    );
+    // The group opens on a level of boxes, whose person drew the admin's
+    // line to none of them: it goes to the group's edge.
+    assert_eq!(
+        line_ways(&map, "group"),
+        [("server", "store", false), ("admin", "group", false)]
+    );
+    assert_eq!(
+        line_ways(&map, "store"),
+        [("server", "app/store/Store", false)]
+    );
+    assert_eq!(open_drift(&map), Vec::<&str>::new());
+
+    // Drawn on to the store, it goes on to the store's edge as the store
+    // opens, and no longer to the group's.
+    let map = generated(
+        &people(to_group, around, r#"{ "from": "admin", "to": "store" }"#),
+        &project,
+    );
+    assert_eq!(
+        line_ways(&map, "group"),
+        [("admin", "store", false), ("server", "store", false)]
+    );
+    assert_eq!(
+        line_ways(&map, "store"),
+        [
+            ("server", "app/store/Store", false),
+            ("admin", "store", false)
+        ]
+    );
+
+    // A level that does not show the other end keeps no line to it.
+    let map = generated(&people(to_group, SERVER_AT, ""), &project);
+    assert_eq!(line_ways(&map, "group"), [("server", "store", false)]);
+
+    // Nor does the top's center lose the top's line its level does not
+    // carry on: it goes to the center's edge.
+    let map = generated(&people("", around, ""), &project);
+    assert_eq!(
+        line_ways(&map, "app"),
+        [("user", "server", true), ("admin", "app", false)]
+    );
+}
+
+#[test]
+fn a_box_opened_keeps_the_lines_of_its_code_its_types_do_not_draw() {
+    // `a`'s free function calls `b`'s, which neither box's types do.
+    let mut a = File::new("src/a.rs", "pub struct A {}\npub fn go() {\n    b::f();\n}");
+    a.define(&rust("a/A#"), kind::STRUCT, 0, "A", (0, 0));
+    a.define(&rust("a/go()."), kind::FUNCTION, 1, "go", (1, 3));
+    a.refer(&rust("b/f()."), 2, "f");
+    let mut b = File::new("src/b.rs", "pub struct B {}\npub fn f() {}");
+    b.define(&rust("b/B#"), kind::STRUCT, 0, "B", (0, 0));
+    b.define(&rust("b/f()."), kind::FUNCTION, 1, "f", (1, 1));
+    let vocabulary = r#"{
+      "nodes": { "app": { "name": "App" },
+                 "a": { "name": "A", "claims": ["app/a"] },
+                 "b": { "name": "B", "claims": ["app/b"] } },
+      "top": { "center": "app" },
+      "levels": { "app": { "box": [0, 0, 800, 500], "parts": { "a": [0, 0], "b": [300, 0] } } }
+    }"#;
+    let map = generated(vocabulary, &index(&[a, b]));
+    assert_eq!(line_ways(&map, "app"), [("a", "b", false)]);
+    // Inside either, the line goes to the edge of the box opened.
+    assert_eq!(line_ways(&map, "a"), [("a", "b", false)]);
+    assert_eq!(line_ways(&map, "b"), [("a", "b", false)]);
 }
 
 #[test]

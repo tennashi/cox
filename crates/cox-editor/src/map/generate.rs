@@ -16,6 +16,8 @@
 //! - inside each box that opens, a line between two of its types where
 //!   a field of one names the other, and one to each box around, from
 //!   the type that names it most, or that it names most;
+//! - inside each box that opens, on its types or on boxes, the lines it
+//!   has closed that go on to none of its parts, to its edge;
 //! - where the vocabulary and the code disagree, as drift.
 //!
 //! It reads the index as SCIP defines it, the same for every language,
@@ -27,6 +29,7 @@ mod code;
 mod conventions;
 mod drift;
 mod inside;
+mod kept;
 mod layout;
 mod members;
 mod references;
@@ -447,6 +450,9 @@ impl<'c, 'a> Map<'c, 'a> {
         for (owner, level) in self.type_levels(&placed.slots, &levels) {
             levels.insert(owner.to_owned(), level);
         }
+        let top = &self.vocabulary.top;
+        let top_lines: Vec<Line> = top.lines.iter().map(hand_line).collect();
+        kept::keep(self.vocabulary, &top_lines, &mut levels);
         let drift = drift::find(&self, &levels);
         let files = self
             .code
@@ -474,7 +480,6 @@ impl<'c, 'a> Map<'c, 'a> {
             let output = self.output_type(ty);
             types.insert(output.id.clone(), output);
         }
-        let top = &self.vocabulary.top;
         Generated {
             says: self.vocabulary.says.clone(),
             nodes,
@@ -482,7 +487,7 @@ impl<'c, 'a> Map<'c, 'a> {
                 center: top.center.clone(),
                 left: top.left.clone(),
                 right: top.right.clone(),
-                lines: top.lines.iter().map(hand_line).collect(),
+                lines: top_lines,
             },
             levels,
             types,
