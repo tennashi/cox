@@ -215,17 +215,18 @@ impl<'c> Map<'c, '_> {
     }
 
     /// The lines of the types a rule picks inside the box `owner`, to
-    /// the boxes `around` it, for its types to be placed toward them.
+    /// the boxes `shown` around it, for its types to be placed with those
+    /// wired, and toward them.
     pub(super) fn reached_types(
         &self,
         reaches: &[Reach<'_>],
         owner: &str,
-        around: &BTreeMap<&str, [i32; 2]>,
+        shown: &BTreeSet<&str>,
     ) -> BTreeSet<(String, String)> {
         let mut lines = BTreeSet::new();
         for reach in reaches {
             let other = reach.other();
-            if !around.contains_key(other)
+            if !shown.contains(other)
                 || !self.and_around(owner).contains(&reach.node())
                 || self.and_around(other).contains(&reach.node())
             {

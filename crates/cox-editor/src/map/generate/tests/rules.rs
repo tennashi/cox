@@ -287,9 +287,15 @@ fn a_rule_picks_the_types_scip_go_tells_satisfy_an_interface() {
             ("user", "example.com/m/tui/Light", false)
         ]
     );
-    // They are placed toward the user, on the left of the box.
-    let x = |name: &str| map.levels["tui"].parts[&format!("example.com/m/tui/{name}")][0];
-    assert!(x("Full") < x("Color") && x("Light") < x("Renderer"));
+    // They are placed toward the user, on the left of the box; `Color`,
+    // wired to nothing, below them all.
+    let at = |name: &str| map.levels["tui"].parts[&format!("example.com/m/tui/{name}")];
+    assert!(at("Full")[0] < at("Renderer")[0] && at("Light")[0] < at("Renderer")[0]);
+    assert!(
+        ["Full", "Light", "Renderer"]
+            .iter()
+            .all(|name| at(name)[1] < at("Color")[1])
+    );
     // The type whose field names the interface uses it.
     assert!(reached(&map, "core").contains(&("user", "example.com/m/core/Terminal", false)));
     assert_eq!(open_drift(&map), Vec::<&str>::new());
@@ -301,6 +307,41 @@ fn a_rule_picks_the_types_scip_go_tells_satisfy_an_interface() {
     assert_eq!(
         reached(&map, "app"),
         [("user", "core", false), ("core", "tui", false)]
+    );
+}
+
+#[test]
+fn a_rule_from_a_box_drawn_only_by_its_edge_wires_the_types_it_picks() {
+    // The user is outer to the level the box of types sits in: a line to
+    // it has no place to pull the types toward, but wires them still.
+    let vocabulary = r#"{
+      "nodes": {
+        "m": { "name": "M" },
+        "user": { "name": "User", "kind": "outside" },
+        "tui": { "name": "TUI", "claims": ["example.com/m/tui"] },
+        "core": { "name": "Core", "claims": ["example.com/m/core"] }
+      },
+      "top": { "center": "m", "left": ["user"] },
+      "levels": {
+        "m": {
+          "box": [0, 0, 900, 600],
+          "outer": { "user": ["left", 0] },
+          "parts": { "tui": [0, 0], "core": [300, 0] },
+          "lines": [{ "from": "user", "to": { "box": "tui", "implements": "tui/Renderer" } }]
+        }
+      }
+    }"#;
+    let map = generated(vocabulary, &terminal());
+    let level = &map.levels["tui"];
+    let type_of = |name: &str| format!("example.com/m/tui/{name}");
+    for name in ["Full", "Light"] {
+        assert!(reached(&map, "tui").contains(&("user", &type_of(name), false)));
+    }
+    let y = |name: &str| level.parts[&type_of(name)][1];
+    assert!(
+        ["Full", "Light", "Renderer"]
+            .iter()
+            .all(|name| y(name) < y("Color"))
     );
 }
 

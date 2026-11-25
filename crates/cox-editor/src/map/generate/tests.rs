@@ -1,7 +1,7 @@
 //! The map generated from small indexes, built here as an indexer would
 //! write them, of files whose text the tests give.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use prost::Message;
 
@@ -1190,9 +1190,118 @@ fn types_inside_a_box_sit_apart_and_toward_the_boxes_they_name() {
     let x = |id: &str| level.parts[id][0];
     let all: Vec<i32> = parts.iter().map(|&(_, [x, _])| x).collect();
     assert_eq!(x("app/mid/West"), *all.iter().min().unwrap());
-    assert_eq!(x("app/mid/East"), *all.iter().max().unwrap());
     assert!(x("app/mid/West") < x("app/mid/East"));
     assert_eq!(generated(vocabulary, &project), map);
+}
+
+/// A box `mid` of types: `Holder`, whose field names `Kept`, then, in
+/// the file, `loose` named nothing and naming nothing.
+fn holder_and(loose: &[&str]) -> (Index, BTreeMap<String, String>) {
+    let text: String =
+        std::iter::once("pub struct Holder {\n    kept: Kept,\n}\npub struct Kept {}\n".to_owned())
+            .chain(loose.iter().map(|name| format!("pub struct {name} {{}}\n")))
+            .collect();
+    let mut mid = File::new("src/mid.rs", &text);
+    mid.define(&rust("mid/Holder#"), kind::STRUCT, 0, "Holder", (0, 2));
+    mid.define(&rust("mid/Holder#kept."), kind::FIELD, 1, "kept", (1, 1));
+    mid.refer(&rust("mid/Kept#"), 1, "Kept");
+    mid.define(&rust("mid/Kept#"), kind::STRUCT, 3, "Kept", (3, 3));
+    for (index, name) in loose.iter().enumerate() {
+        let line = 4 + index;
+        mid.define(
+            &rust(&format!("mid/{name}#")),
+            kind::STRUCT,
+            line,
+            name,
+            (line, line),
+        );
+    }
+    index(&[mid])
+}
+
+const MID: &str = r#"{ "nodes": { "app": { "name": "App" }, "mid": { "name": "Mid", "claims": ["app/mid"] } },
+                       "top": { "center": "app" },
+                       "levels": { "app": { "box": [0, 0, 600, 400], "parts": { "mid": [0, 0] } } } }"#;
+
+#[test]
+fn types_wired_to_nothing_follow_the_others_apart_in_name_order() {
+    let map = generated(
+        MID,
+        &holder_and(&["Zebra", "Mango", "Apple", "Lime", "Fig"]),
+    );
+    let level = &map.levels["mid"];
+    let wired: BTreeSet<&str> = level
+        .lines
+        .iter()
+        .flat_map(|line| [line.from.as_str(), line.to.as_str()])
+        .collect();
+    assert_eq!(wired, BTreeSet::from(["app/mid/Holder", "app/mid/Kept"]));
+    let mut loose: Vec<(i32, i32, &str)> = level
+        .parts
+        .iter()
+        .filter(|(id, _)| !wired.contains(id.as_str()))
+        .map(|(id, &[x, y])| (y, x, map.types[id].name.as_str()))
+        .collect();
+    loose.sort_unstable();
+    // Read in rows, left to right, they are in name order, not the file's.
+    let names: Vec<&str> = loose.iter().map(|&(_, _, name)| name).collect();
+    assert_eq!(names, ["Apple", "Fig", "Lime", "Mango", "Zebra"]);
+    // They sit below those wired, further from them than their own rows
+    // are from each other.
+    let wired_bottom = wired.iter().map(|id| level.parts[*id][1]).max().unwrap();
+    let rows: BTreeSet<i32> = loose.iter().map(|&(y, _, _)| y).collect();
+    let rows: Vec<i32> = rows.into_iter().collect();
+    assert!(rows.len() >= 2);
+    assert!(rows[0] - wired_bottom > rows[1] - rows[0]);
+    assert_eq!(
+        generated(
+            MID,
+            &holder_and(&["Zebra", "Mango", "Apple", "Lime", "Fig"])
+        ),
+        map
+    );
+}
+
+#[test]
+fn a_type_wired_to_nothing_leaves_those_wired_where_they_were() {
+    use super::layout::{Card, types};
+    let card = |id: &'static str| Card {
+        id,
+        name: id,
+        code: "struct",
+    };
+    let wired = ["A", "B", "C", "D", "E", "F", "G"];
+    let lines: BTreeSet<(String, String)> = [
+        ("A", "B"),
+        ("B", "C"),
+        ("C", "west"),
+        ("D", "east"),
+        ("E", "D"),
+        ("F", "G"),
+        ("G", "west"),
+    ]
+    .into_iter()
+    .map(|(a, b)| (a.to_owned(), b.to_owned()))
+    .collect();
+    let around = BTreeMap::from([("west", [-800, 0]), ("mid", [0, 0]), ("east", [800, 0])]);
+    let cards: Vec<Card> = wired.into_iter().map(card).collect();
+    let (_, alone) = types(&cards, &lines, &around, [0, 0]);
+    // However many come, wherever their names sort, until the level is
+    // as wide as it grows.
+    let mut cards = cards;
+    for name in [
+        "0", "Ca", "Zz", "1", "Ab", "Y", "2", "Fa", "X", "3", "W", "4",
+    ] {
+        cards.push(card(name));
+        let (_, with) = types(&cards, &lines, &around, [0, 0]);
+        for id in wired {
+            assert_eq!(with[id], alone[id], "{id} with {name}");
+        }
+    }
+    // The cards' order does not matter.
+    let forth = types(&cards, &lines, &around, [0, 0]);
+    cards.reverse();
+    assert_eq!(types(&cards, &lines, &around, [0, 0]), forth);
 }
 
 #[test]
