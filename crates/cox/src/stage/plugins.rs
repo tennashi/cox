@@ -10,32 +10,13 @@
 //! What Cox knows, a plugin reads as JSON from `cox://api/<what>`:
 //!
 //! - `cox://api/map/<name>`: the map of the project named `<name>`, as
-//!   its file in `maps` has it, with what changed and what is stale
-//!   laid over its boxes, and the names of the project's other maps (see
-//!   [`crate::stage::map`]); `cox://api/map`, its first map.
-//! - `cox://api/generated-map/<name>`: the map of the project named
-//!   `<name>`, as coxd generates it from its vocabulary in `maps` and the
-//!   indexes of the project's code, which asking for it has coxd make
-//!   when they are not made yet, with how each stands (see
-//!   [`crate::stage::map::generated`]); `cox://api/generated-map`, its
-//!   first map; and `cox://api/generated-map/again/<name>`, the map,
-//!   making again the indexes that failed, which only a plugin's own
-//!   `fetch` has done.
-//! - `cox://api/file/<path>`: what the project's language server says of
-//!   the file at `<path>`, an absolute path in the project: the symbols
-//!   it defines and what uses them, once the server has answered, which
-//!   the page reads again for (see [`crate::stage::outline`]).
-//! - `cox://api/call/<path>:<line>`: what the server says a line of the
-//!   file at `<path>` calls, for a step of a flow made there: the
-//!   function the line is in and the functions it calls, once the server
-//!   has answered (see [`crate::stage::calls`]).
-//! - `cox://api/lines/<path>:<line>`: the lines of the file at `<path>`
-//!   around `<line>`, each as its stretches with what the syntax says
-//!   each is, for a page to show the code a step is made at, colored as
-//!   the code tabs color it, and before them the lines that open what
-//!   the line is within, as its function's `fn` line and its impl's
-//!   (see [`crate::stage::lines`]).
-//!
+//!   coxd draws it from its vocabulary in `maps` and the indexes of the
+//!   project's code, which asking for it has coxd make when they are not
+//!   made yet, with how each stands, what changed in the code of its
+//!   boxes, and the names of the project's other maps (see
+//!   [`crate::stage::map::told`]); `cox://api/map`, its first map; and
+//!   `cox://api/map/again/<name>`, the map, making again the indexes that
+//!   failed, which only a plugin's own `fetch` has done.
 //! - `cox://api/wiki`: the human's wiki, its pages, each with what it
 //!   links to, what links to it, where it was used, and what is wrong
 //!   with it; and `cox://api/wiki/<page>`, a page, with its text as HTML,
@@ -104,10 +85,7 @@ use std::sync::Arc;
 use cox_browser::scheme::{Asker, Resource, Serve};
 use cox_core::address::percent_decoded;
 
-use crate::stage::calls::Calls;
-use crate::stage::lines;
 use crate::stage::map;
-use crate::stage::outline::Outlines;
 use coxd::translate;
 use coxd::wiki::told as wiki;
 
@@ -154,7 +132,12 @@ const BUILT_IN: &[(&str, Files)] = &[
                 include_bytes!("../../plugins/map/plugin.json"),
             ),
             ("index.html", include_bytes!("../../plugins/map/index.html")),
+            ("map.css", include_bytes!("../../plugins/map/map.css")),
             ("app.js", include_bytes!("../../plugins/map/app.js")),
+            ("canvas.js", include_bytes!("../../plugins/map/canvas.js")),
+            ("detail.js", include_bytes!("../../plugins/map/detail.js")),
+            ("drift.js", include_bytes!("../../plugins/map/drift.js")),
+            ("icons.js", include_bytes!("../../plugins/map/icons.js")),
         ],
     ),
     (
@@ -209,21 +192,13 @@ impl Plugin {
 pub struct Plugins {
     /// The project's folder.
     root: PathBuf,
-    /// What the project's language server says of its files.
-    outlines: Outlines,
-    calls: Calls,
 }
 
 impl Plugins {
-    /// The plugins of a chat working in `root`, whose pages ask
-    /// `outlines` what the project's files define.
+    /// The plugins of a chat working in `root`.
     #[must_use]
-    pub fn new(root: PathBuf, outlines: Outlines, calls: Calls) -> Self {
-        Self {
-            root,
-            outlines,
-            calls,
-        }
+    pub fn new(root: PathBuf) -> Self {
+        Self { root }
     }
 
     /// The plugins there are: the built-in ones, then the project's, by
@@ -311,9 +286,7 @@ impl Plugins {
             });
         }
         let json = match what {
-            "map" if rest.is_empty() => map::told(&self.root, None),
-            "map" if !rest.contains('/') => map::told(&self.root, Some(&percent_decoded(rest))),
-            "generated-map" => return self.generated_map(rest),
+            "map" => return self.map(rest),
             "wiki" => {
                 let root = coxd::settings::wiki();
                 if rest.is_empty() {
@@ -373,21 +346,6 @@ impl Plugins {
                     coxd::raw::told_source(&root, &percent_decoded(rest), translate::page)?
                 }
             }
-            "file" if !rest.is_empty() => {
-                let path = PathBuf::from(format!("/{}", percent_decoded(rest)));
-                self.outlines.told(&self.root, &path)?
-            }
-            "call" | "lines" if !rest.is_empty() => {
-                let spec = percent_decoded(rest);
-                let (path, line) = spec.rsplit_once(':')?;
-                let line: usize = line.parse().ok()?;
-                let path = PathBuf::from(format!("/{path}"));
-                if what == "call" {
-                    self.calls.told(&self.root, &path, line)?
-                } else {
-                    lines::told(&self.root, &path, line)?
-                }
-            }
             _ => return None,
         };
         Some(Resource {
@@ -396,9 +354,9 @@ impl Plugins {
         })
     }
 
-    /// The map `cox://api/generated-map/<rest>` asks for, as coxd draws
-    /// it (see [`map::generated`]).
-    fn generated_map(&self, rest: &str) -> Option<Resource> {
+    /// The map `cox://api/map/<rest>` asks for, as coxd draws it (see
+    /// [`map::told`]).
+    fn map(&self, rest: &str) -> Option<Resource> {
         let (again, name) = match rest.strip_prefix("again/") {
             Some(name) => (true, name),
             None if !rest.contains('/') => (false, rest),
@@ -407,7 +365,7 @@ impl Plugins {
         let name = (!name.is_empty()).then(|| percent_decoded(name));
         Some(Resource {
             mime: "application/json".to_owned(),
-            body: map::generated(&self.root, name.as_deref(), again).into_bytes(),
+            body: map::told(&self.root, name.as_deref(), again).into_bytes(),
         })
     }
 
@@ -601,7 +559,7 @@ fn acts(url: &str) -> bool {
         return false;
     };
     path.starts_with("activity/dismiss/")
-        || path.starts_with("generated-map/again/")
+        || path.starts_with("map/again/")
         || path
             .strip_prefix("triggers/")
             .is_some_and(|ask| !ask.starts_with("discussion/") && !ask.starts_with("tried/"))
@@ -645,7 +603,7 @@ mod tests {
     #[test]
     fn the_built_in_plugin_is_served_with_its_files() {
         let root = TempDir::new();
-        let plugins = Plugins::new(root.to_path_buf(), Outlines::new().0, Calls::new().0);
+        let plugins = Plugins::new(root.to_path_buf());
 
         let page = plugins.resource("cox://map/").unwrap();
         assert_eq!(page.mime, "text/html");
@@ -694,7 +652,7 @@ mod tests {
     #[test]
     fn only_a_plugin_has_the_triggers_tab_do_what_it_asks() {
         let root = TempDir::new();
-        let plugins = Plugins::new(root.to_path_buf(), Outlines::new().0, Calls::new().0);
+        let plugins = Plugins::new(root.to_path_buf());
         let serve = plugins.serve();
         let body = |url: &str, asker| serve(url, asker).map(|resource| resource.body);
 
@@ -713,7 +671,7 @@ mod tests {
     fn a_chats_story_is_told_alone_for_the_chat_asked() {
         let root = TempDir::new();
         coxd::storage::keep_on_this_thread(Some(root.join("data")));
-        let plugins = Plugins::new(root.to_path_buf(), Outlines::new().0, Calls::new().0);
+        let plugins = Plugins::new(root.to_path_buf());
         let serve = plugins.serve();
         let body = |url: &str| serve(url, Asker::Plugin).map(|resource| resource.body);
 
@@ -751,7 +709,7 @@ mod tests {
                 },
             )
             .unwrap();
-        let plugins = Plugins::new(root.to_path_buf(), Outlines::new().0, Calls::new().0);
+        let plugins = Plugins::new(root.to_path_buf());
         let serve = plugins.serve();
         let body = |url: &str| {
             serve(url, Asker::Plugin).map(|resource| {
@@ -777,9 +735,29 @@ mod tests {
     }
 
     #[test]
-    fn a_generated_map_is_asked_of_coxd_as_named() {
+    fn the_map_page_is_its_own_files_alone_as_the_phone_serves_it() {
+        let (_, files) = BUILT_IN.iter().find(|(name, _)| *name == "map").unwrap();
+        for (name, body) in *files {
+            let text = std::str::from_utf8(body).unwrap();
+            // Under `default-src 'self'`, nothing inline runs or styles.
+            assert!(!text.contains("<style"), "{name} has a style element");
+            assert!(!text.contains("style=\""), "{name} has a style attribute");
+            for handler in ["onclick=", "onload=", "onerror=", "href=\"javascript:"] {
+                assert!(!text.contains(handler), "{name} has {handler}");
+            }
+            if mime(name) == "text/html" {
+                assert!(!text.contains("<script>"), "{name} has an inline script");
+                for script in text.split("<script").skip(1) {
+                    assert!(script.contains("src=\"./"), "{name}: {script}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_map_is_asked_of_coxd_as_named() {
         let root = TempDir::new();
-        let plugins = Plugins::new(root.to_path_buf(), Outlines::new().0, Calls::new().0);
+        let plugins = Plugins::new(root.to_path_buf());
         // In the window's place: answers what it was asked.
         let mut asks = map::listen();
         std::thread::spawn(move || {
@@ -799,49 +777,19 @@ mod tests {
                 serde_json::from_slice::<serde_json::Value>(&resource.body).unwrap()
             })
         };
-        let json = asked("cox://api/generated-map", Asker::Anyone).unwrap();
+        let json = asked("cox://api/map", Asker::Anyone).unwrap();
         assert_eq!(json["folder"], root.display().to_string());
         assert_eq!(json["name"], serde_json::Value::Null);
         assert_eq!(json["again"], false);
-        let json = asked("cox://api/generated-map/use%20it", Asker::Anyone).unwrap();
+        let json = asked("cox://api/map/use%20it", Asker::Anyone).unwrap();
         assert_eq!(json["name"], "use it");
         assert_eq!(json["again"], false);
         // Making a failed index again is a plugin's to ask.
-        assert_eq!(
-            asked("cox://api/generated-map/again/use", Asker::Anyone),
-            None
-        );
-        let json = asked("cox://api/generated-map/again/use", Asker::Plugin).unwrap();
+        assert_eq!(asked("cox://api/map/again/use", Asker::Anyone), None);
+        let json = asked("cox://api/map/again/use", Asker::Plugin).unwrap();
         assert_eq!(json["name"], "use");
         assert_eq!(json["again"], true);
-        assert_eq!(asked("cox://api/generated-map/a/b", Asker::Plugin), None);
-    }
-
-    #[test]
-    fn the_map_is_told_as_json() {
-        let root = TempDir::new();
-        let maps = root.join(cox_editor::map::MAPS_FOLDER);
-        std::fs::create_dir_all(&maps).unwrap();
-        std::fs::write(
-            maps.join("map.json"),
-            r#"{ "tiers": [{ "id": "whole", "name": "Whole", "rows": [{ "parts": ["one"] }] }],
-                 "parts": { "one": { "name": "One", "holds": ["src"] } } }"#,
-        )
-        .unwrap();
-        let plugins = Plugins::new(root.to_path_buf(), Outlines::new().0, Calls::new().0);
-
-        let answer = plugins.resource("cox://api/map").unwrap();
-        let json: serde_json::Value = serde_json::from_slice(&answer.body).unwrap();
-        assert_eq!(json["map"]["tiers"][0]["id"], "whole");
-        assert_eq!(json["facts"]["one"]["stale"], serde_json::json!(["src"]));
-        let answer = plugins.resource("cox://api/map/map").unwrap();
-        let json: serde_json::Value = serde_json::from_slice(&answer.body).unwrap();
-        assert_eq!(json["name"], "map");
-        assert_eq!(json["map"]["tiers"][0]["id"], "whole");
-        let answer = plugins.resource("cox://api/map/no%20such").unwrap();
-        let json: serde_json::Value = serde_json::from_slice(&answer.body).unwrap();
-        assert!(json["error"].as_str().unwrap().contains("no map `no such`"));
-        assert_eq!(plugins.resource("cox://api/map/one/"), None);
+        assert_eq!(asked("cox://api/map/a/b", Asker::Plugin), None);
     }
 
     #[test]
@@ -853,7 +801,7 @@ mod tests {
             "---\non: {schedule: {cron: \"0 */6 * * *\"}}\n---\n\nLook at what changed.\n",
         )
         .unwrap();
-        let plugins = Plugins::new(root.to_path_buf(), Outlines::new().0, Calls::new().0);
+        let plugins = Plugins::new(root.to_path_buf());
 
         let answer = plugins.resource("cox://api/triggers").unwrap();
         assert_eq!(answer.mime, "application/json");
@@ -873,7 +821,7 @@ mod tests {
             "---\nsource: \"chat 3\"\nkept: 2026-11-10\n---\n\n# Mock\n\nWhat it tried.\n",
         )
         .unwrap();
-        let plugins = Plugins::new(root.to_path_buf(), Outlines::new().0, Calls::new().0);
+        let plugins = Plugins::new(root.to_path_buf());
 
         let answer = plugins.resource("cox://api/project-raw").unwrap();
         let json: serde_json::Value = serde_json::from_slice(&answer.body).unwrap();
@@ -896,7 +844,7 @@ mod tests {
         let root = TempDir::new();
         std::fs::create_dir_all(root.join("wiki")).unwrap();
         std::fs::write(root.join("wiki/people.md"), "# People\n\nWho to ask.\n").unwrap();
-        let plugins = Plugins::new(root.to_path_buf(), Outlines::new().0, Calls::new().0);
+        let plugins = Plugins::new(root.to_path_buf());
 
         let answer = plugins.resource("cox://api/project-wiki").unwrap();
         let json: serde_json::Value = serde_json::from_slice(&answer.body).unwrap();
@@ -909,51 +857,9 @@ mod tests {
     }
 
     #[test]
-    fn a_file_is_told_as_json_within_the_project() {
-        let root = TempDir::new();
-        std::fs::create_dir_all(root.join("my src")).unwrap();
-        std::fs::write(root.join("my src/main.rs"), "fn main() {}\n").unwrap();
-        let plugins = Plugins::new(root.to_path_buf(), Outlines::new().0, Calls::new().0);
-        let url = format!("cox://api/file{}/my%20src/main.rs", root.display());
-        let answer = plugins.resource(&url).unwrap();
-        assert_eq!(answer.mime, "application/json");
-        let json: serde_json::Value = serde_json::from_slice(&answer.body).unwrap();
-        assert_eq!(json["name"], "my src/main.rs");
-        assert_eq!(json["lines"], 1);
-        assert_eq!(json["pending"], true);
-        assert_eq!(plugins.resource("cox://api/file"), None);
-        assert_eq!(plugins.resource("cox://api/file/etc/hostname"), None);
-
-        let url = format!("cox://api/call{}/my%20src/main.rs:1", root.display());
-        let answer = plugins.resource(&url).unwrap();
-        let json: serde_json::Value = serde_json::from_slice(&answer.body).unwrap();
-        assert_eq!(json["name"], "my src/main.rs");
-        assert_eq!(json["line"], 1);
-        assert_eq!(json["pending"], true);
-        let url = format!("cox://api/call{}/my%20src/main.rs", root.display());
-        assert_eq!(plugins.resource(&url), None);
-        assert_eq!(plugins.resource("cox://api/call/etc/hostname:1"), None);
-
-        let url = format!("cox://api/lines{}/my%20src/main.rs:1", root.display());
-        let answer = plugins.resource(&url).unwrap();
-        let json: serde_json::Value = serde_json::from_slice(&answer.body).unwrap();
-        assert_eq!(json["name"], "my src/main.rs");
-        assert_eq!(json["from"], 1);
-        let line: String = json["lines"][0]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|stretch| stretch[0].as_str().unwrap())
-            .collect();
-        assert_eq!(line, "fn main() {}");
-        assert_eq!(json["lines"][0][0], serde_json::json!(["fn", "keyword"]));
-        assert_eq!(plugins.resource("cox://api/lines/etc/hostname:1"), None);
-    }
-
-    #[test]
     fn the_pages_of_a_plugin_no_longer_built_in_are_gone() {
         let root = TempDir::new();
-        let plugins = Plugins::new(root.to_path_buf(), Outlines::new().0, Calls::new().0);
+        let plugins = Plugins::new(root.to_path_buf());
 
         assert!(gone("cox://commands/"));
         assert_eq!(plugins.resource("cox://commands/"), None);
@@ -969,7 +875,7 @@ mod tests {
         std::fs::write(folder.join("index.html"), "<h1>Tour</h1>").unwrap();
         std::fs::write(folder.join("plugin.json"), r#"{"title": "A tour"}"#).unwrap();
         std::fs::write(root.join("secret.txt"), "no").unwrap();
-        let plugins = Plugins::new(root.to_path_buf(), Outlines::new().0, Calls::new().0);
+        let plugins = Plugins::new(root.to_path_buf());
 
         let listed = plugins.list();
         let names: Vec<&str> = listed.iter().map(|plugin| plugin.name.as_str()).collect();

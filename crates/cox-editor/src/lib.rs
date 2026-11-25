@@ -10,8 +10,8 @@
 //! - [`fuzzy`] finds a path by a few of its letters.
 //! - [`words`] is what changed within the lines a change replaced, of
 //!   those [`cox_git::changes`] reads.
-//! - [`map`] is the project's map, in tiers, as an agent wrote it, with
-//!   what changed laid over it; or generated from an index of the code.
+//! - [`map`] is a map of the project: its vocabulary, which a person
+//!   keeps, and the rest, generated from an index of the code.
 //! - [`scip`] reads such an index, as an indexer of any language writes
 //!   it.
 //! - [`language`] is the languages the editor knows, and what in their

@@ -1,6 +1,6 @@
 //! Talking to a language server, which knows a project's code as its
-//! compiler does: what a name is, where it is defined, where it is used,
-//! and what a function calls. The editor starts the server that knows the
+//! compiler does: what a name is, where it is defined, and where it is
+//! used. The editor starts the server that knows the
 //! language of a file (see [`languages`] and [`servers`]), in the
 //! project's folder, and talks to it over the Language Server Protocol:
 //! JSON-RPC messages on the server's standard input and output. It asks
@@ -21,8 +21,8 @@
 //! - [`servers`] is the servers Cox knows, and those a project names.
 //! - [`position`] is a place in a file as the server counts it.
 //! - [`wire`] reads and writes the messages, and acts on the server's own.
-//! - [`answers`] is what the server answers about a name, and the symbols
-//!   of a file, read from its JSON.
+//! - [`answers`] is what the server answers about a name, read from its
+//!   JSON.
 
 mod answers;
 pub mod languages;
@@ -42,8 +42,8 @@ use serde_json::{Value, json};
 use tokio::sync::{oneshot, watch};
 use url::Url;
 
-pub use self::answers::{Call, Callable, Hover, Location, Symbol, Token};
-use self::answers::{callable, calls, hover, locations, symbols, tokens};
+pub use self::answers::{Hover, Location};
+use self::answers::{hover, locations};
 pub use self::position::{Encoding, Position};
 pub use self::servers::{Server, Servers};
 use self::wire::{Reader, write};
@@ -68,9 +68,6 @@ pub enum Feature {
     Hover,
     Definition,
     References,
-    Symbols,
-    Calls,
-    Tokens,
 }
 
 impl Feature {
@@ -80,19 +77,6 @@ impl Feature {
             Self::Hover => "textDocument/hover",
             Self::Definition => "textDocument/definition",
             Self::References => "textDocument/references",
-            Self::Symbols => "textDocument/documentSymbol",
-            Self::Calls => "textDocument/prepareCallHierarchy",
-            Self::Tokens => "textDocument/semanticTokens/full",
-        }
-    }
-
-    /// The method a server registers the feature by.
-    fn registration(self) -> &'static str {
-        match self {
-            Self::Tokens => "textDocument/semanticTokens",
-            Self::Hover | Self::Definition | Self::References | Self::Symbols | Self::Calls => {
-                self.method()
-            }
         }
     }
 
@@ -102,9 +86,6 @@ impl Feature {
             Self::Hover => "hoverProvider",
             Self::Definition => "definitionProvider",
             Self::References => "referencesProvider",
-            Self::Symbols => "documentSymbolProvider",
-            Self::Calls => "callHierarchyProvider",
-            Self::Tokens => "semanticTokensProvider",
         }
     }
 
@@ -114,9 +95,6 @@ impl Feature {
             Self::Hover => "what a name is",
             Self::Definition => "where a name is defined",
             Self::References => "where a name is used",
-            Self::Symbols => "the symbols of a file",
-            Self::Calls => "what a function calls",
-            Self::Tokens => "what each name in a file is",
         }
     }
 }
@@ -338,15 +316,6 @@ impl Client {
                         "hover": { "contentFormat": ["markdown", "plaintext"] },
                         "definition": { "linkSupport": true },
                         "references": {},
-                        "documentSymbol": { "hierarchicalDocumentSymbolSupport": true },
-                        "callHierarchy": { "dynamicRegistration": false },
-                        "semanticTokens": {
-                            "dynamicRegistration": false,
-                            "requests": { "full": true },
-                            "tokenTypes": TOKEN_TYPES,
-                            "tokenModifiers": TOKEN_MODIFIERS,
-                            "formats": ["relative"],
-                        },
                     },
                 },
             }),
@@ -384,9 +353,9 @@ impl Client {
     /// started or registered it since, if it answers it.
     fn options(&self, feature: Feature) -> Option<Value> {
         match self.capabilities.get(feature.provider()) {
-            None | Some(Value::Null | Value::Bool(false)) => lock(&self.shared.registered)
-                .get(feature.registration())
-                .cloned(),
+            None | Some(Value::Null | Value::Bool(false)) => {
+                lock(&self.shared.registered).get(feature.method()).cloned()
+            }
             Some(said) => Some(said.clone()),
         }
     }
@@ -501,122 +470,7 @@ impl Client {
         let answered = self.ask(Feature::References, &params);
         async move { Ok(locations(&answered.await?)) }
     }
-
-    /// The symbols `document` defines, such as its functions and types,
-    /// as the server lists them (see [`Symbol`]).
-    ///
-    /// # Errors
-    ///
-    /// When the server fails to answer, or stops, or does not answer
-    /// that.
-    pub fn symbols(
-        &self,
-        document: &OpenFile,
-    ) -> impl Future<Output = Result<Vec<Symbol>, Error>> + use<> {
-        let answered = self.ask(
-            Feature::Symbols,
-            &json!({ "textDocument": { "uri": document.uri } }),
-        );
-        async move { Ok(symbols(&answered.await?)) }
-    }
-
-    /// The function at `position` of `document`, as the server's call
-    /// hierarchy has it, and the functions it calls, with where it calls
-    /// each; `None` when no function is there. The server answers as it
-    /// knows the code: asked before it has read the project, it may know
-    /// of no calls yet.
-    ///
-    /// # Errors
-    ///
-    /// When the server fails to answer, or stops, or does not answer
-    /// that.
-    pub fn calls(
-        &self,
-        document: &OpenFile,
-        position: Position,
-    ) -> impl Future<Output = Result<Option<(Callable, Vec<Call>)>, Error>> + use<> {
-        let shared = Arc::clone(&self.shared);
-        let prepared = self.ask(Feature::Calls, &document.at(position));
-        async move {
-            let items = prepared.await?;
-            let Some(item) = items.as_array().and_then(|items| items.first()) else {
-                return Ok(None);
-            };
-            let Some(function) = callable(item) else {
-                return Ok(None);
-            };
-            let answered = shared
-                .request("callHierarchy/outgoingCalls", &json!({ "item": item }))
-                .await?;
-            Ok(Some((function, calls(&answered))))
-        }
-    }
 }
-
-impl Client {
-    /// The names `document` has, each with what the server says it is,
-    /// as a function or a type, in the order they come (see [`Token`]).
-    ///
-    /// # Errors
-    ///
-    /// When the server fails to answer, or stops, or does not answer
-    /// that.
-    pub fn tokens(
-        &self,
-        document: &OpenFile,
-    ) -> impl Future<Output = Result<Vec<Token>, Error>> + use<> {
-        let legend = self
-            .options(Feature::Tokens)
-            .and_then(|options| options.get("legend").cloned())
-            .unwrap_or_default();
-        let answered = self.ask(
-            Feature::Tokens,
-            &json!({ "textDocument": { "uri": document.uri } }),
-        );
-        async move { Ok(tokens(&answered.await?, &legend)) }
-    }
-}
-
-/// The kinds of names the protocol lists, which the client says it knows.
-const TOKEN_TYPES: &[&str] = &[
-    "namespace",
-    "type",
-    "class",
-    "enum",
-    "interface",
-    "struct",
-    "typeParameter",
-    "parameter",
-    "variable",
-    "property",
-    "enumMember",
-    "event",
-    "function",
-    "method",
-    "macro",
-    "keyword",
-    "modifier",
-    "comment",
-    "string",
-    "number",
-    "regexp",
-    "operator",
-    "decorator",
-];
-
-/// What the protocol lists a name can be besides its kind.
-const TOKEN_MODIFIERS: &[&str] = &[
-    "declaration",
-    "definition",
-    "readonly",
-    "static",
-    "deprecated",
-    "abstract",
-    "async",
-    "modification",
-    "documentation",
-    "defaultLibrary",
-];
 
 impl Drop for Client {
     /// Asks the server to stop, which it does once it has read that, and
@@ -745,14 +599,14 @@ mod tests {
                             "method": "workspace/configuration",
                             "params": { "items": [{ "section": "fake.on" }, { "section": "else" }] },
                         }));
-                        // It answers its call hierarchy after all.
+                        // It answers where a name is used after all.
                         write(json!({
                             "jsonrpc": "2.0",
                             "id": "register",
                             "method": "client/registerCapability",
                             "params": { "registrations": [{
-                                "id": "calls",
-                                "method": "textDocument/prepareCallHierarchy",
+                                "id": "references",
+                                "method": "textDocument/references",
                             }] },
                         }));
                         for value in [
@@ -780,32 +634,6 @@ mod tests {
                             },
                         })));
                     }
-                    Some("textDocument/documentSymbol") => {
-                        write(answer(json!([{
-                            "name": "main",
-                            "kind": 12,
-                            "detail": "fn main()",
-                            "range": {
-                                "start": { "line": 0, "character": 0 },
-                                "end": { "line": 0, "character": 12 },
-                            },
-                            "selectionRange": {
-                                "start": { "line": 0, "character": 3 },
-                                "end": { "line": 0, "character": 7 },
-                            },
-                        }])));
-                    }
-                    Some(
-                        method @ ("textDocument/prepareCallHierarchy"
-                        | "callHierarchy/outgoingCalls"),
-                    ) => {
-                        write(answer(hierarchy(method)));
-                    }
-                    // `main` declared at 0:3, `run` called at 0:12, and
-                    // `Store::new` at 2:4 and 2:11.
-                    Some("textDocument/semanticTokens/full") => write(answer(json!({
-                        "data": [0, 3, 4, 1, 1, 0, 9, 3, 1, 0, 2, 4, 5, 0, 0, 0, 7, 3, 2, 2],
-                    }))),
                     Some("textDocument/references") => write(json!({
                         "jsonrpc": "2.0",
                         "id": id,
@@ -819,56 +647,14 @@ mod tests {
         (output, input, server)
     }
 
-    /// What the fake server says it answers when it starts: all but its
-    /// call hierarchy, which it registers later.
+    /// What the fake server says it answers when it starts: all but where
+    /// a name is used, which it registers later.
     fn answering() -> Value {
         json!({
             "positionEncoding": "utf-8",
             "hoverProvider": true,
             "definitionProvider": { "workDoneProgress": false },
-            "referencesProvider": true,
-            "documentSymbolProvider": true,
-            "callHierarchyProvider": false,
-            "semanticTokensProvider": {
-                "legend": {
-                    "tokenTypes": ["variable", "function", "method"],
-                    "tokenModifiers": ["declaration", "static"],
-                },
-                "full": true,
-            },
         })
-    }
-
-    /// What the fake server answers of its call hierarchy: `main`, which
-    /// calls `run` in another file.
-    fn hierarchy(method: &str) -> Value {
-        let item = |name: &str, uri: &str, line: u64| {
-            json!({
-                "name": name,
-                "kind": 12,
-                "uri": uri,
-                "range": {
-                    "start": { "line": line, "character": 0 },
-                    "end": { "line": line + 2, "character": 1 },
-                },
-                "selectionRange": {
-                    "start": { "line": line, "character": 3 },
-                    "end": { "line": line, "character": 3 + name.len() },
-                },
-                "data": 7,
-            })
-        };
-        if method == "textDocument/prepareCallHierarchy" {
-            json!([item("main", "file:///src/main.rs", 0)])
-        } else {
-            json!([{
-                "to": item("run", "file:///src/lib.rs", 2),
-                "fromRanges": [{
-                    "start": { "line": 0, "character": 12 },
-                    "end": { "line": 0, "character": 15 },
-                }],
-            }])
-        }
     }
 
     /// What `heard` holds: each message's method, or `answer`.
@@ -901,8 +687,8 @@ mod tests {
             .unwrap_or_else(|| panic!("the client answers {id}: {heard:#?}"))
     }
 
-    /// A client of the fake server, which answers all but its call
-    /// hierarchy at first, started on the project `/src` with options and
+    /// A client of the fake server, which answers all but where a name is
+    /// used at first, started on the project `/src` with options and
     /// settings of its own; what the server hears; and the server's
     /// thread.
     async fn started() -> (Client, Arc<Mutex<Vec<Value>>>, std::thread::JoinHandle<()>) {
@@ -920,7 +706,7 @@ mod tests {
     }
 
     /// Waits until the client has heard all the fake server said as it
-    /// started: its settings asked, its call hierarchy registered, and
+    /// started: its settings asked, where a name is used registered, and
     /// its work begun.
     async fn settled(client: &Client) {
         client
@@ -966,7 +752,6 @@ mod tests {
         assert_eq!(client.encoding(), Encoding::Utf8);
         assert!(client.supports(Feature::Hover));
         assert!(client.supports(Feature::Definition));
-        assert!(client.supports(Feature::References));
     }
 
     #[tokio::test]
@@ -987,23 +772,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_server_that_registers_its_call_hierarchy_later_is_asked_for_calls() {
+    async fn a_server_that_registers_a_feature_later_is_asked_for_it() {
         let (client, heard, server) = started().await;
         settled(&client).await;
-        assert!(client.supports(Feature::Calls));
+        assert!(client.supports(Feature::References));
         let document = client.open(Path::new(MAIN), "rust", "").unwrap();
-        let (function, calls) = client.calls(&document, AT_MAIN).await.unwrap().unwrap();
-        assert_eq!(function.name, "main");
-        assert_eq!(calls[0].to.name, "run");
-        assert_eq!(calls[0].to.path, Path::new("/src/lib.rs"));
-        assert_eq!(calls[0].from[0].start.line, 0);
+        // The fake server answers it with an error, once asked.
+        assert!(client.references(&document, AT_MAIN).await.is_err());
         drop(document);
         let heard = ended(client, &heard, server);
-        assert_eq!(
-            of(&heard, "callHierarchy/outgoingCalls")[0]["params"]["item"]["data"],
-            7,
-            "the item the server prepared goes back to it as it was"
-        );
+        assert_eq!(of(&heard, "textDocument/references").len(), 1);
     }
 
     #[tokio::test]
@@ -1116,22 +894,12 @@ mod tests {
     #[tokio::test]
     async fn an_error_the_server_answers_is_the_requests_error() {
         let (client, _heard, _server) = started().await;
+        settled(&client).await;
         let document = client.open(Path::new(MAIN), "rust", "").unwrap();
         assert!(matches!(
             client.references(&document, AT_MAIN).await,
             Err(Error::Answered { code: -32801, message }) if message == "content modified"
         ));
-    }
-
-    #[tokio::test]
-    async fn the_symbols_of_a_file_are_named_with_their_kinds_and_places() {
-        let (client, _heard, _server) = started().await;
-        let document = client.open(Path::new(MAIN), "rust", "").unwrap();
-        let symbols = client.symbols(&document).await.unwrap();
-        assert_eq!(symbols.len(), 1);
-        assert_eq!(symbols[0].name, "main");
-        assert_eq!(symbols[0].kind, "function");
-        assert_eq!(symbols[0].selection.start.character, 3);
     }
 
     #[tokio::test]
@@ -1146,40 +914,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_server_tells_what_each_name_is() {
-        let heard = Arc::default();
-        let (output, input, server) = serve(Arc::clone(&heard), "", answering());
-        let client = Client::over(output, input, Path::new("/src"), &Server::default())
-            .await
-            .unwrap();
-        let document = client.open(Path::new("/src/main.rs"), "rust", "").unwrap();
-        let tokens = client.tokens(&document).await.unwrap();
-        let told: Vec<_> = tokens
-            .iter()
-            .map(|token| {
-                (
-                    token.start.line,
-                    token.start.character,
-                    token.kind.as_str(),
-                    token.modifiers.join(" "),
-                )
-            })
-            .collect();
-        assert_eq!(
-            told,
-            [
-                (0, 3, "function", "declaration".to_owned()),
-                (0, 12, "function", String::new()),
-                (2, 4, "variable", String::new()),
-                (2, 11, "method", "static".to_owned()),
-            ]
-        );
-        drop(document);
-        drop(client);
-        server.join().unwrap();
-    }
-
-    #[tokio::test]
     async fn a_server_is_asked_only_what_it_answers() {
         let heard = Arc::default();
         let (output, input, server) =
@@ -1191,16 +925,16 @@ mod tests {
         let document = client.open(Path::new("/src/main.rs"), "rust", "").unwrap();
         let at = Position::default();
         assert!(client.hover(&document, at).await.unwrap().is_some());
-        let error = client.references(&document, at).await.unwrap_err();
-        assert!(matches!(error, Error::Unsupported(Feature::References)));
+        let error = client.definition(&document, at).await.unwrap_err();
+        assert!(matches!(error, Error::Unsupported(Feature::Definition)));
         assert_eq!(
             error.to_string(),
-            "the server does not tell where a name is used"
+            "the server does not tell where a name is defined"
         );
         drop(document);
         drop(client);
         server.join().unwrap();
-        assert!(!methods(&heard).contains(&"textDocument/references".to_owned()));
+        assert!(!methods(&heard).contains(&"textDocument/definition".to_owned()));
     }
 
     #[tokio::test]

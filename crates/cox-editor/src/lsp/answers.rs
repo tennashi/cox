@@ -1,6 +1,5 @@
 //! What the server answers, read from the JSON it says it in: what it
-//! says of a name, where the name is defined and used, the symbols a
-//! file defines, and the functions a function calls.
+//! says of a name, and where the name is defined and used.
 
 use std::ops::Range;
 use std::path::PathBuf;
@@ -24,46 +23,6 @@ pub struct Location {
     /// The file, as an absolute path.
     pub path: PathBuf,
     pub range: Range<Position>,
-}
-
-/// A symbol a file defines, such as a function or a type, as the server
-/// lists them: its name and kind, what the server adds of it, such as a
-/// signature, where it is, where its name is within that, and the
-/// symbols within it, such as the methods of an `impl`.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct Symbol {
-    pub name: String,
-    /// The kind's name, in lower case, as `function`, `struct` or `module`.
-    pub kind: String,
-    pub detail: Option<String>,
-    /// The whole of it.
-    pub range: Range<Position>,
-    /// Its name, within `range`.
-    pub selection: Range<Position>,
-    pub children: Vec<Symbol>,
-}
-
-/// A function, as the server has it in a call hierarchy: its name and
-/// kind, what the server adds of it, such as its signature, the file it
-/// is in, the whole of it, and where its name is within that.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Callable {
-    pub name: String,
-    /// The kind's name, in lower case, as `function` or `method`.
-    pub kind: String,
-    pub detail: Option<String>,
-    /// The file, as an absolute path.
-    pub path: PathBuf,
-    pub range: Range<Position>,
-    pub selection: Range<Position>,
-}
-
-/// A call a function makes: the function it calls, and where in the
-/// caller it calls it, each place a stretch of a line.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Call {
-    pub to: Callable,
-    pub from: Vec<Range<Position>>,
 }
 
 /// The position `value` says.
@@ -146,194 +105,13 @@ pub(super) fn locations(value: &Value) -> Vec<Location> {
     }
 }
 
-/// The symbols `value` says a file defines: in a tree, as a server that
-/// supports that lists them, or else as a flat list, each with the file
-/// it is in, which is then read as flat, leaving out those in another
-/// file.
-pub(super) fn symbols(value: &Value) -> Vec<Symbol> {
-    let Value::Array(values) = value else {
-        return Vec::new();
-    };
-    values
-        .iter()
-        .filter_map(|value| {
-            let name = value.get("name")?.as_str()?.to_owned();
-            let kind = kind_name(value.get("kind").and_then(Value::as_u64).unwrap_or(0));
-            let detail = value
-                .get("detail")
-                .and_then(Value::as_str)
-                .map(str::trim)
-                .filter(|detail| !detail.is_empty())
-                .map(str::to_owned);
-            let (range, selection) = if let Some(location) = value.get("location") {
-                // The flat form: a location, and nothing within it.
-                let whole = range(location.get("range")?)?;
-                (whole.clone(), whole)
-            } else {
-                let whole = range(value.get("range")?)?;
-                let selection = value
-                    .get("selectionRange")
-                    .and_then(range)
-                    .unwrap_or_else(|| whole.clone());
-                (whole, selection)
-            };
-            Some(Symbol {
-                name,
-                kind,
-                detail,
-                range,
-                selection,
-                children: value.get("children").map_or_default(symbols),
-            })
-        })
-        .collect()
-}
-
-/// The function `value`, an item of a call hierarchy, says, when it is
-/// one in a file.
-pub(super) fn callable(value: &Value) -> Option<Callable> {
-    let whole = range(value.get("range")?)?;
-    Some(Callable {
-        name: value.get("name")?.as_str()?.to_owned(),
-        kind: kind_name(value.get("kind").and_then(Value::as_u64).unwrap_or(0)),
-        detail: value
-            .get("detail")
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|detail| !detail.is_empty())
-            .map(str::to_owned),
-        path: Url::parse(value.get("uri")?.as_str()?)
-            .ok()?
-            .to_file_path()
-            .ok()?,
-        selection: value
-            .get("selectionRange")
-            .and_then(range)
-            .unwrap_or_else(|| whole.clone()),
-        range: whole,
-    })
-}
-
-/// The calls `value`, the outgoing calls of a function, says, leaving out
-/// those to no function in a file.
-pub(super) fn calls(value: &Value) -> Vec<Call> {
-    let Value::Array(values) = value else {
-        return Vec::new();
-    };
-    values
-        .iter()
-        .filter_map(|value| {
-            Some(Call {
-                to: callable(value.get("to")?)?,
-                from: value
-                    .get("fromRanges")
-                    .and_then(Value::as_array)
-                    .map_or_default(|ranges| ranges.iter().filter_map(range).collect()),
-            })
-        })
-        .collect()
-}
-
-/// A name in a file, as the server tells what each is: where it starts,
-/// as the server counts a line, how long it is, so counted, its kind, as
-/// `function` or `method`, and what else it is, as `declaration`.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Token {
-    pub start: Position,
-    pub length: u32,
-    pub kind: String,
-    pub modifiers: Vec<String>,
-}
-
-/// The tokens `value`, the semantic tokens of a file, says, as the
-/// server's `legend` names their kinds and modifiers: five numbers each,
-/// the line and the start counted from the token before, its length, its
-/// kind, and its modifiers as bits.
-pub(super) fn tokens(value: &Value, legend: &Value) -> Vec<Token> {
-    let names = |key: &str| -> Vec<&str> {
-        legend
-            .get(key)
-            .and_then(Value::as_array)
-            .map_or_default(|names| names.iter().filter_map(Value::as_str).collect())
-    };
-    let (kinds, modifiers) = (names("tokenTypes"), names("tokenModifiers"));
-    let data: Vec<u32> = value
-        .get("data")
-        .and_then(Value::as_array)
-        .map_or_default(|data| {
-            data.iter()
-                .filter_map(|number| u32::try_from(number.as_u64()?).ok())
-                .collect()
-        });
-    let mut found = Vec::new();
-    let (mut line, mut character) = (0, 0);
-    for &[line_delta, start, length, kind, bits] in data.as_chunks::<5>().0 {
-        if line_delta > 0 {
-            line += line_delta;
-            character = start;
-        } else {
-            character += start;
-        }
-        found.push(Token {
-            start: Position { line, character },
-            length,
-            kind: kinds
-                .get(kind as usize)
-                .copied()
-                .unwrap_or_default()
-                .to_owned(),
-            modifiers: modifiers
-                .iter()
-                .enumerate()
-                .filter(|(index, _)| bits >> index & 1 == 1)
-                .map(|(_, name)| (*name).to_owned())
-                .collect(),
-        });
-    }
-    found
-}
-
-/// The name of the kind of symbol the protocol numbers `kind`.
-fn kind_name(kind: u64) -> String {
-    let name = match kind {
-        1 => "file",
-        2 => "module",
-        3 => "namespace",
-        4 => "package",
-        5 => "class",
-        6 => "method",
-        7 => "property",
-        8 => "field",
-        9 => "constructor",
-        10 => "enum",
-        11 => "interface",
-        12 => "function",
-        13 => "variable",
-        14 => "constant",
-        15 => "string",
-        16 => "number",
-        17 => "boolean",
-        18 => "array",
-        19 => "object",
-        20 => "key",
-        21 => "null",
-        22 => "enum member",
-        23 => "struct",
-        24 => "event",
-        25 => "operator",
-        26 => "type parameter",
-        _ => "symbol",
-    };
-    name.to_owned()
-}
-
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
 
     use serde_json::{Value, json};
 
-    use super::{Hover, Location, calls, hover, locations, symbols};
+    use super::{Hover, Location, hover, locations};
     use crate::lsp::Position;
 
     #[test]
@@ -399,70 +177,5 @@ mod tests {
         ]);
         assert_eq!(locations(&links), [expected]);
         assert_eq!(locations(&Value::Null), []);
-    }
-
-    #[test]
-    fn reads_symbols_as_a_tree_or_flat() {
-        let at = |line: u32, from: u32, to: u32| {
-            json!({
-                "start": { "line": line, "character": from },
-                "end": { "line": line, "character": to },
-            })
-        };
-        let tree = json!([
-            {
-                "name": "Stage", "kind": 23, "detail": "pub struct Stage",
-                "range": at(10, 0, 40), "selectionRange": at(10, 11, 16),
-                "children": [
-                    { "name": "cwd", "kind": 8, "range": at(12, 4, 16), "selectionRange": at(12, 4, 7) },
-                ],
-            },
-            { "name": "new", "kind": 12, "detail": "  ", "range": at(50, 0, 1) },
-            { "kind": 12, "range": at(60, 0, 1) },
-        ]);
-        let read = symbols(&tree);
-        assert_eq!(read.len(), 2);
-        assert_eq!(read[0].name, "Stage");
-        assert_eq!(read[0].kind, "struct");
-        assert_eq!(read[0].detail.as_deref(), Some("pub struct Stage"));
-        let outgoing = json!([{
-            "to": {
-                "name": "show_file", "kind": 6, "detail": "fn show_file(&mut self)",
-                "uri": "file:///src/stage.rs",
-                "range": { "start": { "line": 40, "character": 4 }, "end": { "line": 60, "character": 5 } },
-                "selectionRange": { "start": { "line": 40, "character": 11 }, "end": { "line": 40, "character": 20 } },
-            },
-            "fromRanges": [{ "start": { "line": 12, "character": 8 }, "end": { "line": 12, "character": 17 } }],
-        }, { "to": { "name": "nowhere", "kind": 12 }, "fromRanges": [] }]);
-        let called = calls(&outgoing);
-        assert_eq!(called.len(), 1);
-        assert_eq!(called[0].to.name, "show_file");
-        assert_eq!(called[0].to.kind, "method");
-        assert_eq!(called[0].to.path, PathBuf::from("/src/stage.rs"));
-        assert_eq!(called[0].to.selection.start.line, 40);
-        assert_eq!(called[0].from[0].start.line, 12);
-        assert_eq!(read[0].selection.start.line, 10);
-        assert_eq!(read[0].selection.start.character, 11);
-        assert_eq!(read[0].children[0].name, "cwd");
-        assert_eq!(read[0].children[0].kind, "field");
-        assert_eq!(read[1].name, "new");
-        assert_eq!(read[1].kind, "function");
-        assert_eq!(read[1].detail, None);
-        // Without a name of its own, the selection is the whole.
-        assert_eq!(read[1].selection, read[1].range);
-
-        let flat = json!([
-            {
-                "name": "main", "kind": 12,
-                "location": { "uri": "file:///src/main.rs", "range": at(0, 0, 12) },
-            },
-            { "name": "odd", "kind": 99, "location": { "uri": "file:///src/main.rs", "range": at(3, 0, 1) } },
-        ]);
-        let read = symbols(&flat);
-        assert_eq!(read[0].name, "main");
-        assert_eq!(read[0].range.start.line, 0);
-        assert_eq!(read[0].children, Vec::<super::Symbol>::new());
-        assert_eq!(read[1].kind, "symbol");
-        assert_eq!(symbols(&Value::Null), []);
     }
 }

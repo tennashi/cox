@@ -312,6 +312,25 @@ fn each_box_owns_the_types_of_the_modules_it_claims() {
 }
 
 #[test]
+fn each_file_a_box_owns_names_the_box() {
+    let map = generated(APP, &app());
+    let files: Vec<(&str, &str)> = map
+        .files
+        .iter()
+        .map(|(file, owner)| (file.as_str(), owner.as_str()))
+        .collect();
+    // The helper's file no box owns.
+    assert_eq!(
+        files,
+        [
+            ("src/server.rs", "server"),
+            ("src/server/glue.rs", "glue"),
+            ("src/store.rs", "store"),
+        ]
+    );
+}
+
+#[test]
 fn uses_and_calls_tell_where_a_member_is_named_and_written() {
     let map = generated(APP, &app());
     let server = &map.types["app/server/Server"];
@@ -642,6 +661,8 @@ fn a_box_can_own_files_where_a_package_is_the_smallest_module() {
         ("bee", "pkg")
     );
     assert_eq!(map.nodes["bee"].code.as_deref(), Some("pkg/b.go"));
+    assert_eq!(map.files["pkg/a.go"], "pkg");
+    assert_eq!(map.files["pkg/b.go"], "bee");
     assert_eq!(drift_ids(&map), ["claim-gone:web/"]);
 }
 

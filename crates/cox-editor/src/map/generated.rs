@@ -33,6 +33,12 @@ pub struct Generated {
     pub edges: Vec<Edge>,
     /// Where the vocabulary and the code disagree.
     pub drift: Vec<Drift>,
+    /// The box that owns each file of the code, by its path from the
+    /// project's folder, of the files some box owns: for what changed in
+    /// a file to fall on its box. It stays with whoever drew the map, not
+    /// in the JSON a page draws from.
+    #[serde(skip)]
+    pub files: BTreeMap<String, String>,
 }
 
 /// A node, as drawn.

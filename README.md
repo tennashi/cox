@@ -23,6 +23,10 @@ things change often.
   and you see its pointer as it works. The stage also holds terminals,
   code with syntax colors and language-server support, a file tree, the
   project's changes, an Android emulator, and windows of other Mac apps.
+- **A map of the project.** You and the agents name the project's parts
+  and the code each owns; Cox reads the rest from an index of the code,
+  down to each type's fields and functions and where each is used, and
+  shows where the names and the code disagree, to talk through.
 - **Goals.** Give a chat a command that has to pass, such as
   `cargo xtask ci`, or a goal in words that another agent judges. The
   chat keeps working until the goal is met.

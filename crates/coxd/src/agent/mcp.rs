@@ -95,8 +95,9 @@ pub enum ToolRequest {
     /// `folder`, an absolute path, on a tab of the stage.
     ShowChanges { folder: PathBuf },
     /// Show the human a map of the project on a tab of the stage: the
-    /// map named `map`, or its first unless named, open `at`, a tier and
-    /// a box in it by their ids, or at its top when empty.
+    /// map named `map`, or its first unless named, open `at`, the nodes it
+    /// opens from the top down and the one chosen last, by their ids, or
+    /// at its top when empty.
     ShowMap {
         map: Option<String>,
         at: Vec<String>,
@@ -317,6 +318,14 @@ pub enum ChatRequest {
     /// to say where it was used.
     Whereabouts {
         answer: oneshot::Sender<Whereabouts>,
+    },
+    /// Answer the map of the project in `folder` named `name`, or its
+    /// first, as it can be drawn now (see [`crate::map::Maps::told`]), or
+    /// why none can be.
+    Map {
+        folder: PathBuf,
+        name: Option<String>,
+        answer: oneshot::Sender<Result<Box<crate::map::Told>, String>>,
     },
     /// Ask the agent of the chat, or of the chat kept as `chat`, such as
     /// a sketch that ended beside it, to keep what it learned in the wiki,
