@@ -31,45 +31,66 @@ const ROUNDS: usize = 12;
 const HAND_WEIGHT: f64 = 6.0;
 
 /// The levels of the vocabulary, with the lines the code gives, and
-/// where each box of them sits now, by the level it is in.
+/// where each box of them sits now, by the level it is in; and how often
+/// the code of each two boxes meets that a level draws a line between
+/// for boxes inside them.
 pub(super) struct Placed<'c> {
     pub levels: BTreeMap<String, Level>,
     pub slots: HashMap<&'c str, (&'c str, [i32; 2])>,
+    pub standing: BTreeMap<(&'c str, &'c str), usize>,
 }
 
 /// Places the vocabulary's levels: each with its hand lines and, between
 /// its boxes whose lines come from the code, a line for each two that
 /// meet in it, all but each box's two heaviest weak; then swaps boxes
-/// while that shortens the lines.
+/// while that shortens the lines. A box drawn closed stands for the
+/// boxes inside it, its lines for theirs.
 pub(super) fn place<'c>(map: &Map<'c, '_>) -> Placed<'c> {
     let vocabulary = map.vocabulary;
     let mut levels = BTreeMap::new();
     let mut slots = HashMap::new();
+    let mut standing = BTreeMap::new();
     for (opened, level) in &vocabulary.levels {
         let mut lines: Vec<Line> = level.lines.iter().map(super::hand_line).collect();
         let mut parts = level.parts.clone();
-        let generates = |id: &str| {
-            vocabulary
-                .nodes
-                .get(id)
-                .is_some_and(super::vocabulary::Node::generates_lines)
-        };
-        if level.parts.keys().any(|id| generates(id)) {
-            let placed: BTreeSet<&str> = level
+        if level.parts.keys().any(|id| vocabulary.generates(id)) {
+            let shown: BTreeSet<&str> = level
                 .parts
                 .keys()
                 .chain(level.at.keys())
                 .map(String::as_str)
-                .filter(|&id| generates(id))
                 .collect();
-            let edges: Vec<((&str, &str), usize)> = map
-                .edges
-                .iter()
-                .filter(|((a, b), _)| placed.contains(a) && placed.contains(b))
-                .map(|(&pair, &count)| (pair, count))
-                .collect();
+            let drawn = |id: &'c str| {
+                map.shown_as(id, |at| shown.contains(at))
+                    .filter(|&at| vocabulary.generates(at))
+            };
+            let mut counts: BTreeMap<(&'c str, &'c str), usize> = BTreeMap::new();
+            for (&(a, b), &count) in &map.edges {
+                if let (Some(x), Some(y)) = (drawn(a), drawn(b))
+                    && x != y
+                {
+                    *counts
+                        .entry(if x < y { (x, y) } else { (y, x) })
+                        .or_default() += count;
+                }
+            }
+            let mut directed: HashMap<(&str, &str), usize> = HashMap::new();
+            for (&(a, b), &count) in &map.directed {
+                if let (Some(x), Some(y)) = (drawn(a), drawn(b))
+                    && x != y
+                {
+                    *directed.entry((x, y)).or_default() += count;
+                }
+            }
+            for (&pair, &count) in &counts {
+                if !map.edges.contains_key(&pair) {
+                    standing.entry(pair).or_insert(count);
+                }
+            }
+            let edges: Vec<((&str, &str), usize)> =
+                counts.iter().map(|(&pair, &count)| (pair, count)).collect();
             let mut strong = BTreeSet::new();
-            for &node in &placed {
+            for &node in &shown {
                 let mut own: Vec<&((&str, &str), usize)> = edges
                     .iter()
                     .filter(|((a, b), _)| *a == node || *b == node)
@@ -78,8 +99,8 @@ pub(super) fn place<'c>(map: &Map<'c, '_>) -> Placed<'c> {
                 strong.extend(own.iter().take(2).map(|(pair, _)| *pair));
             }
             for &((a, b), _) in &edges {
-                let forth = map.directed.get(&(a, b)).copied().unwrap_or(0);
-                let back = map.directed.get(&(b, a)).copied().unwrap_or(0);
+                let forth = directed.get(&(a, b)).copied().unwrap_or(0);
+                let back = directed.get(&(b, a)).copied().unwrap_or(0);
                 let (from, to) = if forth >= back { (a, b) } else { (b, a) };
                 lines.push(Line {
                     from: from.to_owned(),
@@ -89,7 +110,7 @@ pub(super) fn place<'c>(map: &Map<'c, '_>) -> Placed<'c> {
                     weak: !strong.contains(&(a, b)),
                 });
             }
-            parts = swapped(&parts, &level.at, &lines, map);
+            parts = swapped(&parts, &level.at, &lines, &counts, map);
         }
         for (part, &at) in &parts {
             if let Some((part, _)) = vocabulary.nodes.get_key_value(part) {
@@ -109,25 +130,32 @@ pub(super) fn place<'c>(map: &Map<'c, '_>) -> Placed<'c> {
             },
         );
     }
-    Placed { levels, slots }
+    Placed {
+        levels,
+        slots,
+        standing,
+    }
 }
 
 /// `parts`, with their places swapped, two at a time, the swap that
 /// shortens the weighted length of the lines most each time, while one
-/// does; `fixed` are the boxes around, which stay.
+/// does; `fixed` are the boxes around, which stay. A line weighs as often
+/// as the code of its ends meets, as `counts` has it for the level, or
+/// else as their own code does.
 fn swapped(
     parts: &BTreeMap<String, [i32; 2]>,
     fixed: &BTreeMap<String, [i32; 2]>,
     lines: &[Line],
+    counts: &BTreeMap<(&str, &str), usize>,
     map: &Map<'_, '_>,
 ) -> BTreeMap<String, [i32; 2]> {
     let mut weights: BTreeMap<&str, Vec<(&str, f64)>> = BTreeMap::new();
     for line in lines.iter().filter(|line| !line.weak) {
         let (a, b) = (line.from.as_str(), line.to.as_str());
         let pair = if a < b { (a, b) } else { (b, a) };
-        let weight = map
-            .edges
+        let weight = counts
             .get(&pair)
+            .or_else(|| map.edges.get(&pair))
             .map_or(HAND_WEIGHT, |&count| 1.0 + float(count).log10());
         weights.entry(a).or_default().push((b, weight));
         weights.entry(b).or_default().push((a, weight));

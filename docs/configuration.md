@@ -548,11 +548,14 @@ fields and functions, where each is used and what each calls, the lines
 between boxes whose code meets, and the drift, where the vocabulary and
 the code disagree, for you and the agent to talk through, then fix the
 vocabulary, change the code, or agree to leave it in the vocabulary's
-`agreed`. What changed in the code shows on the boxes it falls in. The
-agent's `show_map` tool tells it how the vocabulary is written, opens
-the Map at a box or a type, and answers what is there, with the drift.
-The conversation keeps a row for each map the agent showed, which opens
-it there again: on the stage, or on the phone, over the chat.
+`agreed`. A box too big to read on one level of its types opens on a
+level of boxes of its own instead, which you place, and which own its
+code; drawn closed, it stands for them. What changed in the code shows
+on the boxes it falls in. The agent's `show_map` tool tells it how the
+vocabulary is written, opens the Map at a box or a type, and answers
+what is there, with the drift. The conversation keeps a row for each map
+the agent showed, which opens it there again: on the stage, or on the
+phone, over the chat.
 
 The project's own maps are in `maps` in its folder. To keep a map with
 the code it shows, versioned in the same commits, put it in `maps` in

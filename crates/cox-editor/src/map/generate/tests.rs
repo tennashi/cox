@@ -503,6 +503,97 @@ fn code_that_meets_where_no_level_shows_both_boxes_is_drift() {
     assert!(map.types.contains_key("app/store/Store"));
 }
 
+/// [`app`]'s server, and its store in a box of its own, `group`, which
+/// keeps its lines as `lines` says, and holds a line as `line` writes it;
+/// the group's level shows the server around it, as `at` writes it.
+fn grouped(lines: &str, line: &str, at: &str) -> String {
+    format!(
+        r#"{{
+          "nodes": {{
+            "app": {{ "name": "App" }},
+            "server": {{ "name": "Server", "claims": ["app/server"] }},
+            "group": {{ "name": "Group", "lines": "{lines}" }},
+            "store": {{ "name": "Store", "claims": ["app/store"] }}
+          }},
+          "top": {{ "center": "app" }},
+          "levels": {{
+            "app": {{
+              "box": [0, 0, 800, 500],
+              "parts": {{ "server": [0, 0], "group": [300, 0] }},
+              "lines": [{line}]
+            }},
+            "group": {{
+              "box": [0, 0, 800, 500],
+              "at": {{ {at} }},
+              "parts": {{ "store": [300, 0] }}
+            }}
+          }},
+          "agreed": [{{ "id": "unowned:app/util", "why": "Helpers." }}]
+        }}"#
+    )
+}
+
+const SERVER_AT: &str = r#""server": [0, 0]"#;
+
+/// The drift of `map` not agreed on.
+fn open_drift(map: &Generated) -> Vec<&str> {
+    map.drift
+        .iter()
+        .filter(|drift| drift.agreed.is_none())
+        .map(|drift| drift.id.as_str())
+        .collect()
+}
+
+fn line_ends(map: &Generated, level: &str) -> Vec<(String, String, bool)> {
+    map.levels[level]
+        .lines
+        .iter()
+        .map(|line| (line.from.clone(), line.to.clone(), line.weak))
+        .collect()
+}
+
+#[test]
+fn a_box_drawn_closed_stands_for_the_boxes_inside_it() {
+    let map = generated(&grouped("generated", "", SERVER_AT), &app());
+    let line = |from: &str, to: &str| (from.to_owned(), to.to_owned(), false);
+    // Where the group is closed, its line is the store's, as often.
+    assert_eq!(line_ends(&map, "app"), [line("server", "group")]);
+    assert_eq!(line_ends(&map, "group"), [line("server", "store")]);
+    let edges: Vec<(&str, &str, usize)> = map
+        .edges
+        .iter()
+        .map(|edge| (edge.a.as_str(), edge.b.as_str(), edge.count))
+        .collect();
+    assert_eq!(edges, [("group", "server", 2), ("server", "store", 2)]);
+    // Inside the server, the field that names the store names the group.
+    assert_eq!(
+        line_ends(&map, "server"),
+        [line("app/server/Server", "group")]
+    );
+    assert!(map.levels["store"].parts.contains_key("app/store/Store"));
+    assert_eq!(open_drift(&map), Vec::<&str>::new());
+}
+
+#[test]
+fn a_box_that_keeps_its_lines_by_hand_keeps_those_of_the_boxes_inside_it() {
+    // Inside the group, where the server is around, the code gives the
+    // line; where the group is closed, a person does.
+    let map = generated(&grouped("hand", "", SERVER_AT), &app());
+    assert_eq!(map.levels["app"].lines, []);
+    assert_eq!(line_ends(&map, "group")[0].1, "store");
+    assert_eq!(open_drift(&map), Vec::<&str>::new());
+    // With the server nowhere around the store, only a line a person
+    // draws to the group stands for the code inside it.
+    let map = generated(&grouped("hand", "", ""), &app());
+    assert_eq!(open_drift(&map), ["undrawn:server|store"]);
+    let map = generated(
+        &grouped("hand", r#"{ "from": "server", "to": "group" }"#, ""),
+        &app(),
+    );
+    assert_eq!(map.levels["app"].lines.len(), 1);
+    assert_eq!(open_drift(&map), Vec::<&str>::new());
+}
+
 #[test]
 fn a_box_that_stays_closed_shows_no_types_but_keeps_its_lines() {
     let vocabulary = APP.replace(

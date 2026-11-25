@@ -3,7 +3,7 @@
 //!
 //! The agent starts its MCP servers itself, as programs that speak MCP on
 //! their standard input and output. So the server Cox hands the agent is
-//! Cox itself, run as `cox --mcp <socket>`: a [`bridge`] that only carries
+//! Cox itself, run as `cox --mcp <socket>`: a [`bridge()`] that only carries
 //! what the agent says to the chat's [`ToolServer`], on a Unix socket, and the
 //! answers back. Each chat has a socket of its own, in a directory that
 //! only the human's user can enter, so that an agent reaches its own chat
@@ -26,10 +26,9 @@ use std::collections::HashMap;
 use std::fmt;
 use std::fs;
 use std::future::Future;
-use std::io::{self, Read, Write};
-use std::net::Shutdown;
+use std::io;
 use std::os::unix::fs::DirBuilderExt as _;
-use std::os::unix::net::{UnixListener as StdUnixListener, UnixStream as StdUnixStream};
+use std::os::unix::net::UnixListener as StdUnixListener;
 use std::path::{Path, PathBuf};
 use std::pin::{Pin, pin};
 use std::sync::Arc;
@@ -50,10 +49,10 @@ use tokio::task::AbortHandle;
 use crate::agent::setup::Setup;
 use crate::chat::sketch::Sketch;
 
+mod bridge;
 mod calls;
 
-/// The option that runs `cox` as the bridge, followed by the socket.
-pub const OPTION: &str = "--mcp";
+pub use bridge::{OPTION, bridge, bridge_to};
 
 /// The tool that runs a subagent in a chat of its own, in the place of the
 /// agent's own tool for subagents.
@@ -1072,54 +1071,6 @@ fn initialize(params: &Value) -> Value {
     })
 }
 
-/// Runs `cox` as the bridge between the agent, on standard input and
-/// output, and the chat's server on `socket`, until either hangs up.
-///
-/// # Errors
-///
-/// When the server cannot be reached, or the bridge cannot write to the
-/// agent.
-pub fn bridge(socket: &Path) -> anyhow::Result<()> {
-    let server = StdUnixStream::connect(socket)
-        .with_context(|| format!("cannot reach Cox at {}", socket.display()))?;
-    let mut to_server = server.try_clone()?;
-    thread::spawn(move || {
-        let _ = pass(&mut io::stdin().lock(), &mut to_server);
-        // The server hears that the agent is done, and hangs up too.
-        let _ = to_server.shutdown(Shutdown::Write);
-    });
-    pass(&mut &server, &mut io::stdout().lock())
-}
-
-/// Passes on what `from` says to `to` as it comes, until `from` ends.
-///
-/// Not with `io::copy`, which on Linux has the kernel splice the agent's
-/// pipe into the socket, where a line then waited for more to come.
-fn pass(from: &mut impl Read, to: &mut impl Write) -> anyhow::Result<()> {
-    let mut buffer = [0; 8192];
-    loop {
-        match from.read(&mut buffer) {
-            Ok(0) => return Ok(()),
-            Ok(read) => {
-                to.write_all(&buffer[..read])?;
-                to.flush()?;
-            }
-            Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
-            Err(error) => return Err(error.into()),
-        }
-    }
-}
-
-/// The socket to bridge to, if `args`, those after the program's name, ask
-/// `cox` to run as the bridge.
-#[must_use]
-pub fn bridge_to(args: &[String]) -> Option<PathBuf> {
-    match args {
-        [option, socket] if option == OPTION => Some(PathBuf::from(socket)),
-        _ => None,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1229,21 +1180,5 @@ mod tests {
         assert!(text.ends_with("… (19000 bytes)"), "{text}");
         assert_eq!(in_brief(&said), said);
         assert_eq!(brief(&"x".repeat(1000)).chars().count(), STRING_CUT_TO + 14);
-    }
-
-    #[test]
-    fn runs_as_the_bridge_only_when_asked_to() {
-        let args = |words: &[&str]| {
-            words
-                .iter()
-                .map(|&word| word.to_owned())
-                .collect::<Vec<_>>()
-        };
-        assert_eq!(
-            bridge_to(&args(&["--mcp", "/tmp/cox-1-0/mcp"])),
-            Some(PathBuf::from("/tmp/cox-1-0/mcp"))
-        );
-        assert_eq!(bridge_to(&args(&["claude-code-acp"])), None);
-        assert_eq!(bridge_to(&args(&["--mcp"])), None);
     }
 }

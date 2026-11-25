@@ -55,12 +55,14 @@ picture, `y` down: `{\"box\": [x, y, width, height], \"outer\": {id: [side, alon
 opens on, by the side of `box` (`left`, `right`, `top` or `bottom`) and how far along it; `at` \
 places the nodes of the levels above around a level further down; `frames` are the edges of \
 the nodes above that it is inside of; `parts` are the boxes inside it, each 216 by 56. Inside a \
-box that owns code, Cox lays out its types.\n\
+box that owns code, Cox lays out its types. A box with too many types to read on one level \
+owns no code itself, and opens on a level of boxes that own it; drawn closed, it stands for \
+them, its lines for theirs.\n\
 - A line is `{\"from\", \"to\", \"both\", \"sides\"}`: `both: true` for one that goes both \
 ways, as a request and its answer; `sides` the sides of `from` and of `to` it leaves and \
 meets, unless the nearest. Write only the lines no code backs, as between processes, or to the \
-people and systems around: those between boxes that own code come from the code, and writing \
-one is a mistake the map reports.\n\
+people and systems around: those between boxes that own code, or hold boxes that do, come from \
+the code, and writing one is a mistake the map reports.\n\
 - `agreed`: the drift talked through and left as it is, each `{\"id\", \"why\"}`, by the id \
 the map gives it.\n\
 Change the vocabulary as you move the code it claims.";

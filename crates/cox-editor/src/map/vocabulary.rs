@@ -8,6 +8,11 @@
 //! boxes that own code is generated from the code's index (see
 //! [`super::generate`]).
 //!
+//! A box too big to read on one level opens on a level of boxes of its
+//! own, which a person places, as the project does, and owns no code
+//! itself: the boxes inside it own it. Where it is drawn closed, it
+//! stands for them, its lines for theirs.
+//!
 //! A map is told from one viewpoint, as "using it" or "building it": a
 //! project with several keeps a file for each.
 //!
@@ -90,7 +95,7 @@ pub struct Node {
     /// stays closed still owns its code, for the lines to it.
     #[serde(default = "opens")]
     pub open: bool,
-    /// Where its lines come from, when it owns code.
+    /// Where its lines come from, when it, or a box inside it, owns code.
     #[serde(default)]
     pub lines: Lines,
 }
@@ -110,7 +115,8 @@ pub enum Kind {
     Outside,
 }
 
-/// Where the lines of a box that owns code come from.
+/// Where the lines of a box that owns code, or holds boxes that do, come
+/// from.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Lines {
@@ -118,7 +124,9 @@ pub enum Lines {
     #[default]
     Generated,
     /// From the vocabulary, as for the code of a window, which talks to
-    /// the rest over a socket rather than in code.
+    /// the rest over a socket rather than in code. The lines of the boxes
+    /// inside it to those outside it are then a person's too, where it is
+    /// drawn closed; inside it, they come from the code.
     Hand,
 }
 
@@ -220,11 +228,10 @@ impl fmt::Display for Error {
 impl std::error::Error for Error {}
 
 impl Node {
-    /// Whether its lines come from the code: it owns code, and does not
-    /// keep its lines by hand.
+    /// Whether it owns code: claims a module or a file.
     #[must_use]
-    pub fn generates_lines(&self) -> bool {
-        (!self.claims.is_empty() || !self.files.is_empty()) && self.lines == Lines::Generated
+    pub fn owns_code(&self) -> bool {
+        !self.claims.is_empty() || !self.files.is_empty()
     }
 }
 
@@ -247,6 +254,47 @@ impl Vocabulary {
         } else {
             Err(Error { problems })
         }
+    }
+
+    /// The node each node a level places is inside of: the node the level
+    /// is of.
+    #[must_use]
+    pub fn inside_of(&self) -> BTreeMap<&str, &str> {
+        self.levels
+            .iter()
+            .flat_map(|(opened, level)| {
+                level
+                    .parts
+                    .keys()
+                    .map(move |part| (part.as_str(), opened.as_str()))
+            })
+            .collect()
+    }
+
+    /// Whether the lines of the node `id` come from the code: it does not
+    /// keep its lines by hand, and owns code, or a box inside it does
+    /// whose lines come from the code, for which it stands in the levels
+    /// above, where it is drawn closed. Not the top's center, whose lines
+    /// to what is around the project a person draws.
+    #[must_use]
+    pub fn generates(&self, id: &str) -> bool {
+        id != self.top.center && self.generates_within(id, &mut BTreeSet::new())
+    }
+
+    fn generates_within<'v>(&'v self, id: &'v str, seen: &mut BTreeSet<&'v str>) -> bool {
+        let Some(node) = self.nodes.get(id) else {
+            return false;
+        };
+        if node.lines == Lines::Hand || !seen.insert(id) {
+            return false;
+        }
+        node.owns_code()
+            || self.levels.get(id).is_some_and(|level| {
+                level
+                    .parts
+                    .keys()
+                    .any(|part| self.generates_within(part, seen))
+            })
     }
 
     /// What does not hold together in it, each with where.
@@ -293,6 +341,12 @@ impl Vocabulary {
         for (opened, level) in &self.levels {
             let at = format!("levels.{opened}");
             known(opened, &at, &mut problems);
+            if self.nodes.get(opened).is_some_and(Node::owns_code) {
+                problems.push(format!(
+                    "{at}: `{opened}` owns code, so it opens on its types; \
+                     give its code to the boxes inside it"
+                ));
+            }
             if !level.outer.is_empty() && !level.at.is_empty() {
                 problems.push(format!(
                     "{at}: places those around it by `outer` or by `at`, not both"
@@ -317,6 +371,19 @@ impl Vocabulary {
             }
             self.check_lines(&format!("{at}.lines"), &level.lines, &mut problems);
         }
+        for &opened in inside.values().collect::<BTreeSet<_>>() {
+            let mut at = opened;
+            for _ in 0..inside.len() {
+                match inside.get(at) {
+                    Some(&outer) if outer == opened => {
+                        problems.push(format!("levels.{opened}: `{opened}` is inside itself"));
+                        break;
+                    }
+                    Some(&outer) => at = outer,
+                    None => break,
+                }
+            }
+        }
         let mut agreed = BTreeSet::new();
         for (at, agreement) in self.agreed.iter().enumerate() {
             if agreement.id.is_empty() {
@@ -332,9 +399,10 @@ impl Vocabulary {
         for (index, line) in lines.iter().enumerate() {
             let mut both_generate = true;
             for end in [&line.from, &line.to] {
-                match self.nodes.get(end) {
-                    None => problems.push(format!("{at}[{index}]: no node `{end}`")),
-                    Some(node) => both_generate &= node.generates_lines(),
+                if self.nodes.contains_key(end) {
+                    both_generate &= self.generates(end);
+                } else {
+                    problems.push(format!("{at}[{index}]: no node `{end}`"));
                 }
             }
             if both_generate {
@@ -382,9 +450,10 @@ mod tests {
         assert!(vocabulary.nodes["server"].open);
         assert!(vocabulary.nodes["server"].many);
         assert!(!vocabulary.nodes["store"].open);
-        assert!(vocabulary.nodes["server"].generates_lines());
-        assert!(!vocabulary.nodes["window"].generates_lines());
-        assert!(!vocabulary.nodes["app"].generates_lines());
+        assert!(vocabulary.generates("server"));
+        assert!(!vocabulary.generates("window"));
+        assert!(!vocabulary.generates("app"));
+        assert!(!vocabulary.generates("user"));
         assert_eq!(vocabulary.top.center, "app");
         let level = &vocabulary.levels["app"];
         assert_eq!(level.area, [-360, -260, 800, 520]);
@@ -423,11 +492,87 @@ mod tests {
                 "nodes.store.claims: `app/server` is `server`'s already",
                 "nodes.user.files: a node outside the project owns none of its code",
                 "top.center: no node `ap`",
+                // With no center, `app` is a box whose level holds code.
+                "top.lines[0]: the lines between `user` and `app` come from the code; \
+                 drop this one, or keep one's lines by hand with `\"lines\": \"hand\"`",
                 "levels.app: places those around it by `outer` or by `at`, not both",
                 "levels.app.parts: no node `nobody`",
                 "levels.app.lines[0]: the lines between `store` and `server` come from the code; \
                  drop this one, or keep one's lines by hand with `\"lines\": \"hand\"`",
                 "agreed[1]: `unowned:app/util` again",
+            ]
+        );
+    }
+
+    /// A vocabulary whose box `group` opens on a level of its own, of
+    /// `inner`, which owns code; `group` keeps its lines as `lines` says.
+    fn nested(lines: &str) -> String {
+        format!(
+            r#"{{
+              "nodes": {{
+                "app": {{ "name": "App" }},
+                "server": {{ "name": "Server", "claims": ["app/server"] }},
+                "group": {{ "name": "Group", "lines": "{lines}" }},
+                "inner": {{ "name": "Inner", "claims": ["app/inner"] }}
+              }},
+              "top": {{ "center": "app" }},
+              "levels": {{
+                "app": {{
+                  "box": [0, 0, 800, 500],
+                  "parts": {{ "server": [0, 0], "group": [300, 0] }},
+                  "lines": [{{ "from": "server", "to": "group" }}]
+                }},
+                "group": {{
+                  "box": [0, 0, 800, 500],
+                  "at": {{ "server": [0, 0] }},
+                  "parts": {{ "inner": [300, 0] }}
+                }}
+              }}
+            }}"#
+        )
+    }
+
+    #[test]
+    fn a_box_that_opens_on_a_level_of_its_own_stands_for_the_boxes_inside_it() {
+        let vocabulary = Vocabulary::parse(&nested("hand")).unwrap();
+        assert_eq!(
+            vocabulary.inside_of(),
+            BTreeMap::from([("group", "app"), ("inner", "group"), ("server", "app")])
+        );
+        // Kept by hand, its lines are a person's, as to the server.
+        assert!(!vocabulary.generates("group"));
+        assert!(vocabulary.generates("inner"));
+        // Otherwise they are the code's, of the box inside it.
+        let error = Vocabulary::parse(&nested("generated")).unwrap_err();
+        assert_eq!(
+            error.problems,
+            [
+                "levels.app.lines[0]: the lines between `server` and `group` come from the code; \
+              drop this one, or keep one's lines by hand with `\"lines\": \"hand\"`"
+            ]
+        );
+        // A box that owns code opens on its types, not on a level of boxes.
+        let text = nested("hand").replace(
+            r#""lines": "hand" }"#,
+            r#""lines": "hand", "claims": ["app/group"] }"#,
+        );
+        assert_eq!(
+            Vocabulary::parse(&text).unwrap_err().problems,
+            [
+                "levels.group: `group` owns code, so it opens on its types; \
+              give its code to the boxes inside it"
+            ]
+        );
+        // Nor is a box inside itself, through another.
+        let text = r#"{ "nodes": { "app": { "name": "App" }, "a": { "name": "A" }, "b": { "name": "B" } },
+                        "top": { "center": "app" },
+                        "levels": { "a": { "box": [0, 0, 9, 9], "parts": { "b": [0, 0] } },
+                                    "b": { "box": [0, 0, 9, 9], "parts": { "a": [0, 0] } } } }"#;
+        assert_eq!(
+            Vocabulary::parse(text).unwrap_err().problems,
+            [
+                "levels.a: `a` is inside itself",
+                "levels.b: `b` is inside itself"
             ]
         );
     }

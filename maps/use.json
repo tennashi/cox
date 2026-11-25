@@ -10,17 +10,135 @@
     "github": { "name": "GitHub", "icon": "net", "kind": "outside" },
     "proj": { "name": "Project folders", "icon": "folder", "kind": "outside" },
     "agent": { "name": "Agents", "icon": "agent", "kind": "outside" },
-    "win": {
-      "name": "Cox app",
-      "icon": "window",
-      "code": "cox",
-      "claims": ["cox", "cox-android", "cox-browser", "cox-editor", "cox-mac"],
-      "lines": "hand",
-      "open": false
+    "win": { "name": "Cox app", "icon": "window", "code": "cox", "lines": "hand" },
+    "vim": { "name": "Vim keys", "icon": "braces", "code": "cox/vim" },
+    "vimline": {
+      "name": "Command line",
+      "icon": "terminal",
+      "claims": ["cox/vim/line", "cox/vim/ex"]
     },
-    "helper": { "name": "Chromium helper", "icon": "layers", "code": "cox-helper" },
-    "coxd": { "name": "coxd", "icon": "cycle", "code": "cox --daemon" },
-    "mcp": { "name": "MCP bridge", "icon": "plug", "code": "cox --mcp" },
+    "vimkeys": { "name": "Modes and motions", "icon": "run", "claims": ["cox/vim"] },
+    "hints": { "name": "Hints", "icon": "search", "claims": ["cox/vim/hints"] },
+    "keymap": { "name": "Key table", "icon": "braces", "claims": ["cox/vim/keymap"] },
+    "editor": { "name": "Editor", "icon": "doc", "claims": ["cox-editor"] },
+    "macwin": {
+      "name": "Mac windows",
+      "icon": "apps",
+      "claims": [
+        "cox-mac",
+        "cox/stage/mac_window",
+        "cox/stage/windows",
+        "cox/stage/mirror",
+        "cox/stage/asked/mac"
+      ]
+    },
+    "emulator": {
+      "name": "Android emulator",
+      "icon": "android",
+      "claims": ["cox-android", "cox/stage/android", "cox/stage/devices", "cox/stage/asked/android"]
+    },
+    "window": {
+      "name": "Window",
+      "icon": "window",
+      "claims": ["cox/workspace", "cox/notices", "cox-core/list"]
+    },
+    "ui": { "name": "Widgets", "icon": "box", "code": "cox/ui" },
+    "input": { "name": "Text input", "icon": "doc", "claims": ["cox/ui/input"] },
+    "text": {
+      "name": "Text",
+      "icon": "doc",
+      "claims": [
+        "cox/ui/text",
+        "cox/ui/markdown",
+        "cox/ui/selection",
+        "cox/ui/selected",
+        "cox/ui/snippet",
+        "cox/ui/drag"
+      ]
+    },
+    "translation": {
+      "name": "Translation",
+      "icon": "globe",
+      "claims": ["cox/ui/translation", "coxd/translate"]
+    },
+    "looks": { "name": "Looks", "icon": "box", "claims": ["cox/ui", "coxd/theme", "coxd/paths"] },
+    "stage": { "name": "Stage", "icon": "layers", "code": "cox/stage" },
+    "terminal": {
+      "name": "Terminal tab",
+      "icon": "terminal",
+      "claims": ["cox/stage/terminal", "cox/stage/playground", "coxd/terminal"]
+    },
+    "tabs": { "name": "Tabs", "icon": "window", "claims": ["cox/stage"] },
+    "pagetab": { "name": "Page tab", "icon": "globe", "claims": ["cox/stage/page"] },
+    "activity": {
+      "name": "Activity page",
+      "icon": "cycle",
+      "claims": ["cox/stage/activity", "cox/stage/commands", "cox/stage/flow", "coxd/logs/flow"]
+    },
+    "codetab": {
+      "name": "Code tab",
+      "icon": "braces",
+      "claims": ["cox/stage/code", "cox/stage/servers", "cox/stage/tree"]
+    },
+    "changestab": { "name": "Changes tab", "icon": "branch", "claims": ["cox/stage/changes"] },
+    "browser": { "name": "Browser", "icon": "globe", "code": "cox-browser" },
+    "cefside": {
+      "name": "CEF's side",
+      "icon": "layers",
+      "claims": [
+        "cox-browser/handlers",
+        "cox-browser/events",
+        "cox-browser/cursor",
+        "cox-browser/frames",
+        "cox-browser/viewport",
+        "cox-browser/timeline"
+      ]
+    },
+    "cef": {
+      "name": "Browsers",
+      "icon": "globe",
+      "claims": [
+        "cox-browser",
+        "cox-browser/keyboard",
+        "cox-browser/favicon",
+        "cox-browser/profile",
+        "cox-browser/scheme"
+      ]
+    },
+    "relay": {
+      "name": "Agent's relay",
+      "icon": "plug",
+      "claims": ["cox-browser/relay", "cox-browser/pointer"],
+      "many": true
+    },
+    "inspect": {
+      "name": "Inspector",
+      "icon": "search",
+      "code": "cox --inspect",
+      "claims": ["cox/inspect", "cox/busy", "cox/hang"]
+    },
+    "chatview": { "name": "Chat view", "icon": "chat", "claims": ["cox/chat"] },
+    "start": {
+      "name": "Starting Cox",
+      "icon": "run",
+      "code": "cox/app",
+      "claims": ["cox/app", "cox/bin/cox", "cox/restart", "cox/waiting", "cox/login_item"]
+    },
+    "settingsview": { "name": "Settings screen", "icon": "gear", "claims": ["cox/settings"] },
+    "helper": {
+      "name": "Chromium helper",
+      "icon": "layers",
+      "code": "cox-helper",
+      "claims": ["cox/bin/cox_helper"]
+    },
+    "coxd": { "name": "coxd", "icon": "cycle", "code": "cox --daemon", "lines": "hand" },
+    "mcp": {
+      "name": "MCP bridge",
+      "icon": "plug",
+      "code": "cox --mcp",
+      "claims": ["coxd/agent/mcp/bridge"],
+      "lines": "hand"
+    },
     "phonepage": { "name": "PWA app", "icon": "phone", "code": "the phone's browser" },
     "reader": {
       "name": "Page reader",
@@ -28,25 +146,24 @@
       "code": "cox --read-page",
       "many": true,
       "claims": ["coxd/raw/page"],
-      "lines": "hand",
-      "open": false
+      "lines": "hand"
     },
-    "store": {
-      "name": "Data store",
-      "icon": "store",
-      "code": "files in state/",
-      "claims": [
-        "cox-core/store",
-        "cox-core/entry",
-        "coxd/storage",
-        "cox-core/tabs",
-        "coxd/wiki",
-        "coxd/raw",
-        "coxd/settings",
-        "cox-core/settings",
-        "cox-core/moved"
-      ],
-      "open": false
+    "store": { "name": "Data store", "icon": "store", "code": "files in state/" },
+    "wiki": { "name": "Wiki and sources", "icon": "doc", "claims": ["coxd/wiki", "coxd/raw"] },
+    "entries": {
+      "name": "Conversations",
+      "icon": "chat",
+      "claims": ["cox-core/entry", "cox-core/diff"]
+    },
+    "settingsfile": {
+      "name": "Settings",
+      "icon": "gear",
+      "claims": ["coxd/settings", "cox-core/settings"]
+    },
+    "chats": {
+      "name": "Projects and chats",
+      "icon": "folder",
+      "claims": ["cox-core/store", "cox-core/moved", "cox-core/tabs", "coxd/storage"]
     },
     "sock": { "name": "Socket server", "icon": "socket", "claims": ["coxd/daemon/process"] },
     "pwa": { "name": "PWA server", "icon": "server", "claims": ["coxd/daemon/phone"] },
@@ -78,7 +195,7 @@
     "runner": {
       "name": "Chat runner",
       "icon": "chat",
-      "claims": ["coxd/daemon/chat", "coxd/chat/conversation"],
+      "claims": ["coxd/daemon/chat", "coxd/chat/conversation", "coxd/chat/spent"],
       "many": true
     },
     "acp": {
@@ -196,6 +313,230 @@
         { "from": "acp", "to": "agent", "both": true },
         { "from": "mcp", "to": "mcps", "both": true },
         { "from": "mcps", "to": "reader", "sides": ["right", "bottom"] }
+      ]
+    },
+    "win": {
+      "box": [-743, -370, 1042, 395],
+      "at": {
+        "mac": [-1171, -200],
+        "phone": [-1171, 270],
+        "apps": [-400, -582],
+        "android": [-120, -582],
+        "web": [603, -582],
+        "proj": [1003, 60],
+        "github": [1003, 164],
+        "agent": [1003, 270],
+        "helper": [333, -200],
+        "reader": [623, -200],
+        "coxd": [-215, 150],
+        "phonepage": [-330, 270],
+        "store": [-140, 342],
+        "mcp": [553, 320]
+      },
+      "frames": { "cox": [-773, -432, 1626, 859] },
+      "parts": {
+        "vim": [-713, -328],
+        "editor": [-463, -328],
+        "macwin": [-213, -328],
+        "emulator": [37, -328],
+        "window": [-713, -202],
+        "ui": [-463, -202],
+        "stage": [-213, -202],
+        "browser": [37, -202],
+        "inspect": [-713, -78],
+        "chatview": [-463, -78],
+        "start": [-213, -78],
+        "settingsview": [37, -78]
+      },
+      "lines": [
+        { "from": "mac", "to": "window", "both": true },
+        { "from": "window", "to": "coxd", "both": true },
+        { "from": "start", "to": "coxd" },
+        { "from": "emulator", "to": "android", "both": true },
+        { "from": "macwin", "to": "apps" },
+        { "from": "stage", "to": "proj" },
+        { "from": "agent", "to": "browser" }
+      ]
+    },
+    "stage": {
+      "box": [-501, -309, 792, 270],
+      "at": {
+        "mac": [-1459, -200],
+        "phone": [-1459, 377],
+        "apps": [-400, -689],
+        "android": [-120, -689],
+        "web": [891, -689],
+        "proj": [1291, 167],
+        "github": [1291, 271],
+        "agent": [1291, 377],
+        "helper": [621, -200],
+        "reader": [911, -200],
+        "coxd": [-215, 257],
+        "phonepage": [-330, 377],
+        "store": [-140, 449],
+        "mcp": [841, 427],
+        "vim": [-1001, -435],
+        "editor": [-751, -435],
+        "macwin": [-213, -435],
+        "emulator": [325, -435],
+        "window": [-1001, -202],
+        "ui": [-751, -202],
+        "browser": [325, -202],
+        "inspect": [-1001, 29],
+        "chatview": [-751, 29],
+        "start": [-213, 29],
+        "settingsview": [325, 29]
+      },
+      "frames": { "cox": [-1061, -539, 2202, 1073], "win": [-1031, -477, 1618, 609] },
+      "parts": {
+        "terminal": [-471, -267],
+        "tabs": [-221, -267],
+        "pagetab": [29, -267],
+        "activity": [-471, -142],
+        "codetab": [-221, -142],
+        "changestab": [29, -142]
+      },
+      "lines": [{ "from": "codetab", "to": "proj" }, { "from": "changestab", "to": "proj" }]
+    },
+    "browser": {
+      "box": [-251, -246, 792, 145],
+      "at": {
+        "mac": [-1459, -200],
+        "phone": [-1459, 314],
+        "apps": [-688, -626],
+        "android": [-120, -626],
+        "web": [891, -626],
+        "proj": [1291, 104],
+        "github": [1291, 208],
+        "agent": [1291, 314],
+        "helper": [621, -200],
+        "reader": [911, -200],
+        "coxd": [-503, 194],
+        "phonepage": [-618, 314],
+        "store": [-140, 386],
+        "mcp": [841, 364],
+        "vim": [-1001, -372],
+        "editor": [-751, -372],
+        "macwin": [-501, -372],
+        "emulator": [37, -372],
+        "window": [-1001, -202],
+        "ui": [-751, -202],
+        "stage": [-501, -202],
+        "inspect": [-1001, -34],
+        "chatview": [-751, -34],
+        "start": [-501, -34],
+        "settingsview": [37, -34]
+      },
+      "frames": { "cox": [-1061, -476, 2202, 948], "win": [-1031, -414, 1618, 484] },
+      "parts": { "cefside": [-221, -204], "cef": [29, -204], "relay": [279, -204] },
+      "lines": [{ "from": "agent", "to": "relay" }]
+    },
+    "vim": {
+      "box": [-876, -435, 542, 270],
+      "at": {
+        "mac": [-1334, -93],
+        "phone": [-1334, 377],
+        "apps": [-237, -689],
+        "android": [43, -689],
+        "web": [766, -689],
+        "proj": [1166, 167],
+        "github": [1166, 271],
+        "agent": [1166, 377],
+        "helper": [496, -93],
+        "reader": [786, -93],
+        "coxd": [-52, 257],
+        "phonepage": [-167, 377],
+        "store": [23, 449],
+        "mcp": [716, 427],
+        "editor": [-300, -328],
+        "macwin": [-50, -328],
+        "emulator": [200, -328],
+        "window": [-713, -95],
+        "ui": [-300, -95],
+        "stage": [-50, -95],
+        "browser": [200, -95],
+        "inspect": [-713, 29],
+        "chatview": [-300, 29],
+        "start": [-50, 29],
+        "settingsview": [200, 29]
+      },
+      "frames": { "cox": [-936, -539, 1952, 1073], "win": [-906, -477, 1368, 609] },
+      "parts": {
+        "vimline": [-846, -393],
+        "vimkeys": [-596, -393],
+        "hints": [-846, -268],
+        "keymap": [-596, -268]
+      },
+      "lines": []
+    },
+    "ui": {
+      "box": [-626, -309, 542, 270],
+      "at": {
+        "mac": [-1334, -200],
+        "phone": [-1334, 377],
+        "apps": [-400, -689],
+        "android": [43, -689],
+        "web": [766, -689],
+        "proj": [1166, 167],
+        "github": [1166, 271],
+        "agent": [1166, 377],
+        "helper": [496, -200],
+        "reader": [786, -200],
+        "coxd": [-52, 257],
+        "phonepage": [-330, 377],
+        "store": [23, 449],
+        "mcp": [716, 427],
+        "vim": [-876, -435],
+        "editor": [-463, -435],
+        "macwin": [-50, -435],
+        "emulator": [200, -435],
+        "window": [-876, -202],
+        "stage": [-50, -202],
+        "browser": [200, -202],
+        "inspect": [-876, 29],
+        "chatview": [-463, 29],
+        "start": [-50, 29],
+        "settingsview": [200, 29]
+      },
+      "frames": { "cox": [-936, -539, 1952, 1073], "win": [-906, -477, 1368, 609] },
+      "parts": {
+        "input": [-596, -267],
+        "text": [-346, -267],
+        "translation": [-596, -142],
+        "looks": [-346, -142]
+      },
+      "lines": []
+    },
+    "store": {
+      "box": [-303, 65, 542, 270],
+      "at": {
+        "mac": [-921, -307],
+        "phone": [-921, -7],
+        "apps": [-563, -519],
+        "android": [-120, -519],
+        "web": [353, -519],
+        "proj": [753, -217],
+        "github": [753, -112],
+        "agent": [753, -7],
+        "win": [-330, -307],
+        "helper": [-80, -307],
+        "reader": [373, -307],
+        "coxd": [-215, -127],
+        "phonepage": [-330, -7],
+        "mcp": [303, 150]
+      },
+      "frames": { "cox": [-523, -369, 1126, 734] },
+      "parts": {
+        "wiki": [-273, 107],
+        "entries": [-23, 107],
+        "settingsfile": [-273, 232],
+        "chats": [-23, 232]
+      },
+      "lines": [
+        { "from": "coxd", "to": "chats" },
+        { "from": "coxd", "to": "entries" },
+        { "from": "coxd", "to": "settingsfile" },
+        { "from": "coxd", "to": "wiki" }
       ]
     }
   },
