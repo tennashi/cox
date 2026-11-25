@@ -449,7 +449,7 @@ more, so move them up out of it.
 | `triggers/*.md` | The project's [triggers](#triggers). |
 | `wiki/` | The project's own wiki, for what holds only of it. Only its chats see it. |
 | `raw/` | The project's own sources, what its chats read (`raw_keep`), as they read it. Only its chats see them. |
-| `maps/<name>.json` | The project's maps, one for each viewpoint of it. See [Maps](#maps). |
+| `maps/<name>.json` | The project's maps, one for each viewpoint of it; a repository of the project keeps its own the same way. See [Maps](#maps). |
 | `plugins/<name>/` | A [plugin](#plugins): a view of the project's own on the stage. |
 | `servers.json` | Language servers for the project. See [Language servers](#language-servers). |
 
@@ -553,6 +553,17 @@ agent's `show_map` tool tells it how the vocabulary is written, opens
 the Map at a box or a type, and answers what is there, with the drift.
 The conversation keeps a row for each map the agent showed, which opens
 it there again: on the stage, or on the phone, over the chat.
+
+The project's own maps are in `maps` in its folder. To keep a map with
+the code it shows, versioned in the same commits, put it in `maps` in
+the folder of one of the project's repositories: the project has it as
+`<repository>/<name>`, as `app/use` for
+`directories/app/maps/use.json`, after the project's own, and a chat that
+works in a checkout of the repository, as a worktree, has it as `use`.
+The `files` a map claims are from the folder its `maps` is in, as
+`src/lib.rs` for `directories/app/src/lib.rs`; the modules it claims are
+named as the index names them, wherever the map is. Cox reads a map's
+vocabulary as the checkout has it, saved but not committed too.
 
 `coxd` indexes the commit each of the project's repositories has checked
 out, not what is not committed, by the files at the repository's top:

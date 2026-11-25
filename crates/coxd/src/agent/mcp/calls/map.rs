@@ -25,7 +25,10 @@ pub(super) const SHOW_MAP: &str = "show_map";
 pub(super) const MAP_FORMAT: &str = "\
 A project has a map for each viewpoint of it, as one of what runs when someone uses it and one \
 of how it is built, each a file in `maps` in the project's folder, named after the map, as \
-`maps/use.json` for the map `use`. The file is the map's vocabulary: what the code cannot say. \
+`maps/use.json` for the map `use`; or in `maps` in the folder of one of the project's \
+repositories, to keep it with the repository's code, as `directories/app/maps/use.json` for \
+the map `app/use`, whose `files` are from the repository's folder. A chat working in a checkout \
+of the repository has it as `use`. The file is the map's vocabulary: what the code cannot say. \
 Cox reads the rest from an index of the code of each commit, which it makes itself, and marks \
 drift where the two disagree. The vocabulary is a JSON object:\n\
 - `says`: one line on what the map shows, as against the project's other maps.\n\
@@ -37,10 +40,11 @@ search, doc, server, clock, chat, check, socket. `code` is what it is to the cod
 its name: its first claim unless given. `many: true` says there are several of it, as one per \
 chat. `claims` are the modules it owns, as the index names them: the package, then the \
 namespaces, joined by `/`, as `app/server` or `httpx._client`; a module belongs to the box with \
-the longest claim it is in. `files` are the files or folders it owns, from the project's \
-folder, for code whose smallest module holds several files, as a package of Go does; they win \
-over `claims`. `open: false` keeps a box that owns code closed. `lines: \"hand\"` takes its \
-lines from the vocabulary rather than from the code.\n\
+the longest claim it is in. `files` are the files or folders it owns, from the folder that \
+holds the map's `maps`, the project's or its repository's, for code whose smallest module \
+holds several files, as a package of Go does; they win over `claims`. `open: false` keeps a \
+box that owns code closed. `lines: \"hand\"` takes its lines from the vocabulary rather than \
+from the code.\n\
 - `top`: `{\"center\", \"left\", \"right\", \"lines\"}`: the node of the project in the \
 middle, which opens on the level inside it, the nodes in a column on its left and on its \
 right, from the top, and the lines between them.\n\
@@ -86,22 +90,25 @@ pub(super) fn tool() -> Value {
             their fields and functions, where each is used and what each calls, and what \
             changed since the last commit on the boxes it falls in. A person keeps the map's \
             vocabulary, the boxes, where they sit and the code each owns, in `maps` in the \
-            project's folder; Cox reads the rest from an index of the code of each commit, \
-            and marks drift where the vocabulary and the code disagree. Use it to show the \
-            human where what you talk of is in the project, before you talk it through or \
-            show the diff: open it at the box or the type you talk of. Answers what the map \
-            shows there, how the indexes of the code stand, and the drift, each by its id, to \
-            talk through with the human: to fix the vocabulary, change the code, or agree to \
-            leave it. Write a vocabulary when the project has none, or when the human wants \
-            another viewpoint of it, deciding with the human what it is to show; shown with \
-            none, or with one that does not read, the tool says how it is written.",
+            project's folder, or in that of one of its repositories; Cox reads the rest from \
+            an index of the code of each commit, and marks drift where the vocabulary and the \
+            code disagree. Use it to show the human where what you talk of is in the project, \
+            before you talk it through or show the diff: open it at the box or the type you \
+            talk of. Answers what the map shows there, how the indexes of the code stand, and \
+            the drift, each by its id, to talk through with the human: to fix the vocabulary, \
+            change the code, or agree to leave it. Write a vocabulary when the project has \
+            none, or when the human wants another viewpoint of it, deciding with the human \
+            what it is to show; shown with none, or with one that does not read, the tool says \
+            how it is written.",
         "inputSchema": {
             "type": "object",
             "properties": {
                 "map": {
                     "type": "string",
                     "description": "Which map to open, by its name, its vocabulary's file \
-                        in `maps` without `.json`; the project's first when not given.",
+                        in `maps` without `.json`, after its repository's name and `/` when a \
+                        repository of the project keeps it, as `app/use`; the project's first \
+                        when not given.",
                 },
                 "at": {
                     "type": "array",

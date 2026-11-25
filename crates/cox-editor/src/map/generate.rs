@@ -69,14 +69,19 @@ impl Sources for BTreeMap<String, String> {
 
 /// The map of the code `index` has, as `vocabulary` tells it, with the
 /// text of its files from `sources` where the index does not hold it.
+/// The files `vocabulary` claims are from the folder `files_from` of the
+/// index's paths, with a `/` after it, as `directories/cox/` for a map a
+/// repository of the project keeps, or empty: a file outside it is none
+/// of theirs.
 #[must_use]
 pub fn generate(
     index: &Index,
     vocabulary: &Vocabulary,
+    files_from: &str,
     sources: &(impl Sources + ?Sized),
 ) -> Generated {
     let code = Code::read(index, sources);
-    let mut map = Map::new(&code, vocabulary);
+    let mut map = Map::new(&code, vocabulary, files_from);
     map.find_types();
     map.attach_members();
     map.read_references();
@@ -135,6 +140,8 @@ struct Map<'c, 'a> {
     /// The modules claimed, and the files, each with the box that owns it.
     module_claims: Vec<(&'c str, &'c str)>,
     file_claims: Vec<(&'c str, &'c str)>,
+    /// The folder the files claimed are from (see [`generate`]).
+    files_from: &'c str,
     /// The box that owns each module the code has, if one does.
     module_boxes: HashMap<&'c str, Option<&'c str>>,
     types: Vec<TypeRec<'c>>,
@@ -160,7 +167,7 @@ struct Map<'c, 'a> {
 }
 
 impl<'c, 'a> Map<'c, 'a> {
-    fn new(code: &'c Code<'a>, vocabulary: &'c Vocabulary) -> Self {
+    fn new(code: &'c Code<'a>, vocabulary: &'c Vocabulary, files_from: &'c str) -> Self {
         let mut module_claims = Vec::new();
         let mut file_claims = Vec::new();
         for (id, node) in &vocabulary.nodes {
@@ -176,6 +183,7 @@ impl<'c, 'a> Map<'c, 'a> {
             vocabulary,
             module_claims,
             file_claims,
+            files_from,
             module_boxes: HashMap::new(),
             types: Vec::new(),
             type_ids: HashMap::new(),
@@ -225,13 +233,21 @@ impl<'c, 'a> Map<'c, 'a> {
     fn box_of_file(&self, path: &str) -> Option<&'c str> {
         self.file_claims
             .iter()
-            .filter(|(file, _)| {
-                path == *file
-                    || (path.starts_with(file)
-                        && (file.ends_with('/') || path.as_bytes()[file.len()] == b'/'))
-            })
+            .filter(|(file, _)| self.claims_file(file, path))
             .max_by_key(|(file, _)| file.len())
             .map(|&(_, owner)| owner)
+    }
+
+    /// Whether the claim of the file or folder `file` is of the file at
+    /// `path`, from the index's folder: whether, from the folder the
+    /// claims are from, it is the file, or is in the folder.
+    fn claims_file(&self, file: &str, path: &str) -> bool {
+        let Some(path) = path.strip_prefix(self.files_from) else {
+            return false;
+        };
+        path == file
+            || (path.starts_with(file)
+                && (file.ends_with('/') || path.as_bytes()[file.len()] == b'/'))
     }
 
     /// The box that owns code in `document`, in `module`.

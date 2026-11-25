@@ -147,9 +147,15 @@ impl Fake {
     /// The map named `shop` of `root`, as soon as no index of it is
     /// being made.
     fn settled(&self, root: &Path) -> Told {
+        self.settled_as(root, "shop")
+    }
+
+    /// The map named `name` of `root`, as soon as no index of it is
+    /// being made.
+    fn settled_as(&self, root: &Path, name: &str) -> Told {
         let mut told = None;
         waits::until("the indexes are made", || {
-            let now = self.maps.told(root, Some("shop"), false);
+            let now = self.maps.told(root, Some(name), false);
             let settled = now.state != State::Indexing;
             told = Some(now);
             settled
@@ -494,6 +500,53 @@ fn a_project_of_several_repositories_is_drawn_from_each() {
         "{file}"
     );
     assert_eq!(fake.runs().len(), 2);
+}
+
+#[test]
+fn a_map_a_repository_keeps_is_the_projects_its_files_from_the_repositorys() {
+    let fake = Fake::new();
+    let root = TempDir::new();
+    let app = root.join(crate::settings::DIRECTORIES).join("app");
+    repository(&app);
+    // A map whose box owns its file, as the repository has it; the
+    // project's own map is the same file.
+    let by_file = VOCABULARY.replace(r#""claims": ["shop"]"#, r#""files": ["src/lib.rs"]"#);
+    std::fs::write(app.join("maps/shop.json"), &by_file).unwrap();
+    commit(&app, "by file");
+    std::fs::create_dir_all(root.join("maps")).unwrap();
+    std::fs::write(root.join("maps/shop.json"), &by_file).unwrap();
+
+    let told = fake.settled_as(&root, "app/shop");
+    assert_eq!(told.state, State::Ready);
+    let names: Vec<&str> = told.maps.iter().map(|map| map.name.as_str()).collect();
+    assert_eq!(names, ["shop", "app/shop"]);
+    // As the stage's bar finds them, to show the Map.
+    assert_eq!(list(&root), told.maps);
+    assert_eq!(told.name.as_deref(), Some("app/shop"));
+    assert_eq!(told.file, Some(app.join("maps/shop.json")));
+    let map = told.map.unwrap();
+    assert_eq!(map.types["shop/Cart"].owner, "cart");
+    assert_eq!(map.types["shop/Cart"].file, "directories/app/src/lib.rs");
+    let drift: Vec<&str> = map.drift.iter().map(|drift| drift.id.as_str()).collect();
+    assert_eq!(drift, ["claim-gone:shop/gone"]);
+
+    // The project's own, of the same name, is its first: its file is
+    // claimed from the project's folder, which has no `src/lib.rs`.
+    for name in [None, Some("shop")] {
+        let told = fake.maps.told(&root, name, false);
+        assert_eq!(told.name.as_deref(), Some("shop"));
+        assert_eq!(told.file, Some(root.join("maps/shop.json")));
+        let map = told.map.unwrap();
+        assert!(map.types.is_empty());
+        let drift: Vec<&str> = map.drift.iter().map(|drift| drift.id.as_str()).collect();
+        assert_eq!(drift, ["claim-gone:shop/gone", "claim-gone:src/lib.rs"]);
+    }
+
+    // A chat that works in the repository has its map by its own name.
+    let told = fake.maps.told(&app, Some("shop"), false);
+    assert_eq!(told.file, Some(app.join("maps/shop.json")));
+    assert_eq!(told.map.unwrap().types["shop/Cart"].owner, "cart");
+    assert_eq!(fake.runs().len(), 1);
 }
 
 #[test]

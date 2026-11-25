@@ -2648,6 +2648,7 @@ mod tests {
             map_asked("/map/api/map/use"),
             Some((Some("use".to_owned()), false))
         );
+        // A repository's map, named after it, has its `/` encoded.
         assert_eq!(
             map_asked("/map/api/map/again/a%2Fb"),
             Some((Some("a/b".to_owned()), true))

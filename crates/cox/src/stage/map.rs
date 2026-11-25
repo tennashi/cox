@@ -1,10 +1,10 @@
 //! A map of the chat's project, as a page of the stage draws it: coxd
 //! draws it from the map's vocabulary, a file of the project's `maps`,
-//! and the indexes of the project's code (see [`coxd::map`]), and the Map
-//! page reads it as JSON from `cox://api/map/<name>` (see
-//! [`crate::stage::plugins`]), which asks coxd for it through the window
-//! (see [`told`]). The agent's `show_map` tool opens the page where it
-//! talks of.
+//! or of one of its repositories', and the indexes of the project's code
+//! (see [`coxd::map`]), and the Map page reads it as JSON from
+//! `cox://api/map/<name>` (see [`crate::stage::plugins`]), which asks
+//! coxd for it through the window (see [`told`]). The agent's `show_map`
+//! tool opens the page where it talks of.
 
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
