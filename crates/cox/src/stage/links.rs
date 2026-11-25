@@ -541,6 +541,8 @@ mod tests {
         assert_eq!(map_fragment(None, &at), "#cox/stage");
         assert_eq!(map_fragment(Some("deploy"), &at), "#deploy:cox/stage");
         assert_eq!(map_fragment(Some("my map"), &[]), "#my%20map:");
+        // A repository's map is named after it, as `app/use`.
+        assert_eq!(map_fragment(Some("app/use"), &at), "#app%2Fuse:cox/stage");
         // An id of the code keeps its `/` and `:` apart from the hash's.
         let at = ["app".to_owned(), "app/server/Server::run".to_owned()];
         assert_eq!(

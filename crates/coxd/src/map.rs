@@ -1,10 +1,13 @@
 //! The maps of a project as generated from its code (see
 //! [`cox_editor::map::generate`]): for a map's vocabulary, a file of the
-//! project's `maps`, coxd indexes the code of each language of each of
-//! the project's repositories, as the commit each has checked out has
-//! it, keeps each index by that commit, and draws the map from the
-//! vocabulary and the indexes whenever a page asks, as the Map page of
-//! the window's stage does, telling how each index stands.
+//! project's `maps`, or of one of its repositories' (see [`list`]),
+//! coxd indexes the code of each language of each of the project's
+//! repositories, as the commit each has checked out has it, keeps each
+//! index by that commit, and draws the map from the vocabulary and the
+//! indexes whenever a page asks, as the Map page of the window's stage
+//! does, telling how each index stands. The vocabulary is read as it is
+//! in the working tree, saved or not committed yet, so that the map
+//! follows it as it is written.
 //!
 //! An index is made once a page asks for a map whose code has no index
 //! yet, as when the repository's head moved to a commit not indexed yet,
@@ -218,13 +221,15 @@ struct Inner {
     drawn: Mutex<Vec<(Drawing, Generated)>>,
 }
 
-/// What a map is drawn from: its vocabulary's text, and the indexes
+/// What a map is drawn from: its vocabulary's text, and the folder the
+/// files it claims are from (see [`Named::files_from`]); the indexes
 /// kept, each with the folder its paths are from, from the project's, as
 /// `directories/cox/`, or empty; and whether some code is not in them,
 /// which leaves out the drift.
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Drawing {
     vocabulary: String,
+    files_from: String,
     indexes: Vec<(String, Key)>,
     partly: bool,
 }
@@ -260,11 +265,12 @@ impl Maps {
     /// The map of the project in `root` named `name`, or its first unless
     /// named, as it can be drawn now, starting to make each index of the
     /// code checked out that is not made yet, and again one that failed,
-    /// when `again`.
+    /// when `again`. The project's maps are those of [`list`].
     #[must_use]
     pub fn told(&self, root: &Path, name: Option<&str>, again: bool) -> Told {
         crate::storage::keep_on_this_thread(self.0.data.clone());
-        let maps = maps::list(root);
+        let repositories = crate::repositories::of(root);
+        let maps = listed(root, &repositories);
         let named = match name {
             None => maps.first().cloned(),
             Some(name) => maps.iter().find(|named| named.name == name).cloned(),
@@ -306,11 +312,12 @@ impl Maps {
             }
         };
         let mut indexes = Vec::new();
-        for (_, folder) in crate::repositories::of(root) {
-            self.index_all(root, &folder, again, &mut told.indexes, &mut indexes);
+        for (_, folder) in &repositories {
+            self.index_all(root, folder, again, &mut told.indexes, &mut indexes);
         }
         let drawing = Drawing {
             vocabulary: text,
+            files_from: named.files_from,
             indexes,
             partly: told.indexes.iter().any(|indexed| indexed.drawn.is_none()),
         };
@@ -356,8 +363,12 @@ impl Maps {
             }));
         }
         // The text of each file is in its index.
-        let mut map =
-            cox_editor::map::generate::generate(&Index { documents }, vocabulary, &BTreeMap::new());
+        let mut map = cox_editor::map::generate::generate(
+            &Index { documents },
+            vocabulary,
+            &drawing.files_from,
+            &BTreeMap::new(),
+        );
         if drawing.partly || !lost.is_empty() {
             // Drift against code that is not in the map is no drift.
             map.drift.clear();
@@ -636,6 +647,27 @@ impl Maps {
     fn jobs(&self) -> MutexGuard<'_, Jobs> {
         self.0.jobs.lock().unwrap_or_else(PoisonError::into_inner)
     }
+}
+
+/// The maps of the project in `root`: those of its folder, then those
+/// its repositories keep, each named after its repository, as `cox/use`
+/// (see [`maps::list`]).
+#[must_use]
+pub fn list(root: &Path) -> Vec<Named> {
+    listed(root, &crate::repositories::of(root))
+}
+
+/// The maps of the project in `root`, whose repositories are
+/// `repositories` (see [`crate::repositories::of`]).
+fn listed(root: &Path, repositories: &[(Option<String>, PathBuf)]) -> Vec<Named> {
+    let named: Vec<(String, String)> = repositories
+        .iter()
+        .filter_map(|(name, folder)| {
+            let within = folder.strip_prefix(root).ok()?.to_str()?;
+            Some((name.clone()?, within.to_owned()))
+        })
+        .collect();
+    maps::list(root, &named)
 }
 
 /// A job that makes an index, which says how it ended as it goes, even

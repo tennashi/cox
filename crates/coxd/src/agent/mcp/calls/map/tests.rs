@@ -50,12 +50,13 @@ fn told(others: &[&str]) -> Told {
     let index = Index::decode(FIXTURE).unwrap();
     let vocabulary = Vocabulary::parse(VOCABULARY).unwrap();
     let sources = BTreeMap::from([("src/lib.rs".to_owned(), LIB.to_owned())]);
-    let map = generate(&index, &vocabulary, &sources);
+    let map = generate(&index, &vocabulary, "", &sources);
     let mut maps: Vec<Named> = others
         .iter()
         .map(|name| Named {
             name: (*name).to_owned(),
             file: format!("maps/{name}.json"),
+            files_from: String::new(),
             says: format!("The {name}"),
         })
         .collect();
@@ -64,6 +65,7 @@ fn told(others: &[&str]) -> Told {
         Named {
             name: "shop".to_owned(),
             file: "maps/shop.json".to_owned(),
+            files_from: String::new(),
             says: "The shop".to_owned(),
         },
     );

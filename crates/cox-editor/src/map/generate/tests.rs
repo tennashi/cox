@@ -224,7 +224,7 @@ const APP: &str = r#"{
 }"#;
 
 fn generated(vocabulary: &str, (index, texts): &(Index, BTreeMap<String, String>)) -> Generated {
-    generate(index, &Vocabulary::parse(vocabulary).unwrap(), texts)
+    generate(index, &Vocabulary::parse(vocabulary).unwrap(), "", texts)
 }
 
 fn drift_ids(map: &Generated) -> Vec<&str> {
@@ -624,33 +624,45 @@ fn boxes_swap_places_only_to_shorten_their_lines() {
     assert_eq!((parts["y"], parts["z"]), ([300, 0], [600, 0]));
 }
 
-#[test]
-fn a_box_can_own_files_where_a_package_is_the_smallest_module() {
+/// A package of Go, `example.com/m/pkg`, whose files are in `pkg` in
+/// the folder `within` of the index's, with a `/` after it, or empty: in
+/// `a.go`, a type that names the type of `b.go`.
+fn go_package(within: &str) -> (Index, BTreeMap<String, String>) {
     let go = |path: &str| format!("scip-go gomod example.com/m v1 `example.com/m/pkg`/{path}");
-    let mut a = File::new("pkg/a.go", "package pkg\ntype A struct {\n\tb *B\n}");
+    let mut a = File::new(
+        &format!("{within}pkg/a.go"),
+        "package pkg\ntype A struct {\n\tb *B\n}",
+    );
     a.define(&go("A#"), kind::STRUCT, 1, "A", (1, 3));
     a.define(&go("A#b."), kind::FIELD, 2, "b", (2, 2));
     a.refer(&go("B#"), 2, "B");
     let mut b = File::new(
-        "pkg/b.go",
+        &format!("{within}pkg/b.go"),
         "package pkg\ntype B struct {\n\tn int\n}\nfunc (b *B) Up() {\n\tb.n++\n}",
     );
     b.define(&go("B#"), kind::STRUCT, 1, "B", (1, 3));
     b.define(&go("B#n."), kind::FIELD, 2, "n", (2, 2));
     b.define(&go("B#Up()."), kind::METHOD, 4, "Up", (4, 6));
     b.refer(&go("B#n."), 5, "n");
-    let project = index(&[a, b]);
-    let vocabulary = r#"{
-      "nodes": {
-        "m": { "name": "M" },
-        "pkg": { "name": "Package", "claims": ["example.com/m/pkg"] },
-        "bee": { "name": "B's file", "files": ["pkg/b.go"] },
-        "web": { "name": "Web", "files": ["web/"] }
-      },
-      "top": { "center": "m" },
-      "levels": { "m": { "box": [0, 0, 600, 400], "parts": { "pkg": [0, 0], "bee": [300, 0], "web": [0, 200] } } }
-    }"#;
-    let map = generated(vocabulary, &project);
+    index(&[a, b])
+}
+
+/// A vocabulary of [`go_package`] whose box `bee` owns `pkg/b.go`, and
+/// `web` a folder the code does not have.
+const GO_FILES: &str = r#"{
+  "nodes": {
+    "m": { "name": "M" },
+    "pkg": { "name": "Package", "claims": ["example.com/m/pkg"] },
+    "bee": { "name": "B's file", "files": ["pkg/b.go"] },
+    "web": { "name": "Web", "files": ["web/"] }
+  },
+  "top": { "center": "m" },
+  "levels": { "m": { "box": [0, 0, 600, 400], "parts": { "pkg": [0, 0], "bee": [300, 0], "web": [0, 200] } } }
+}"#;
+
+#[test]
+fn a_box_can_own_files_where_a_package_is_the_smallest_module() {
+    let map = generated(GO_FILES, &go_package(""));
     assert_eq!(map.types["example.com/m/pkg/A"].owner, "pkg");
     assert_eq!(map.types["example.com/m/pkg/B"].owner, "bee");
     assert!(map.types["example.com/m/pkg/B"].fields[0].uses[0].writes);
@@ -664,6 +676,34 @@ fn a_box_can_own_files_where_a_package_is_the_smallest_module() {
     assert_eq!(map.files["pkg/a.go"], "pkg");
     assert_eq!(map.files["pkg/b.go"], "bee");
     assert_eq!(drift_ids(&map), ["claim-gone:web/"]);
+}
+
+#[test]
+fn a_repositorys_map_claims_files_from_the_repositorys_folder() {
+    // The project's index has the repository's files under its folder;
+    // the repository's map names them from the repository's.
+    let (index, texts) = go_package("directories/m/");
+    let vocabulary = Vocabulary::parse(GO_FILES).unwrap();
+    let map = generate(&index, &vocabulary, "directories/m/", &texts);
+    assert_eq!(map.types["example.com/m/pkg/B"].owner, "bee");
+    assert_eq!(
+        map.types["example.com/m/pkg/B"].file,
+        "directories/m/pkg/b.go"
+    );
+    // The files the map tells of are the project's, by their paths from
+    // its folder, as what changed in them is; a claim, as it is written.
+    assert_eq!(map.files["directories/m/pkg/a.go"], "pkg");
+    assert_eq!(map.files["directories/m/pkg/b.go"], "bee");
+    assert_eq!(map.nodes["bee"].code.as_deref(), Some("pkg/b.go"));
+    assert_eq!(drift_ids(&map), ["claim-gone:web/"]);
+    // From the project's folder, the claim is of no file there is.
+    let map = generate(&index, &vocabulary, "", &texts);
+    assert_eq!(map.types["example.com/m/pkg/B"].owner, "pkg");
+    assert_eq!(drift_ids(&map), ["claim-gone:pkg/b.go", "claim-gone:web/"]);
+    // Nor is a file of another folder claimed from the repository's.
+    let (index, texts) = go_package("directories/other/");
+    let map = generate(&index, &vocabulary, "directories/m/", &texts);
+    assert_eq!(map.types["example.com/m/pkg/B"].owner, "pkg");
 }
 
 #[test]

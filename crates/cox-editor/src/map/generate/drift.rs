@@ -86,12 +86,10 @@ fn claims(map: &Map<'_, '_>) -> Vec<Drift> {
         .into_iter()
         .filter(|&(claim, _, file)| {
             if file {
-                !code.documents.iter().any(|document| {
-                    let path = document.path;
-                    path == claim
-                        || (path.starts_with(claim)
-                            && (claim.ends_with('/') || path.as_bytes()[claim.len()] == b'/'))
-                })
+                !code
+                    .documents
+                    .iter()
+                    .any(|document| map.claims_file(claim, document.path))
             } else {
                 !modules.iter().any(|module| under(module, claim))
             }

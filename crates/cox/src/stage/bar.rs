@@ -576,7 +576,7 @@ pub(super) fn count_changes(cx: &mut Context<Stage>) -> Task<()> {
                 let (changed, mapped, waiting) = cx
                     .background_executor()
                     .spawn(async move {
-                        let mapped = !cox_editor::map::list(&cwd).is_empty();
+                        let mapped = !coxd::map::list(&cwd).is_empty();
                         let waiting = super::activity::waiting(&cwd);
                         let compared = |name: Option<&str>| {
                             let (_, base) = seen

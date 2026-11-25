@@ -6,10 +6,11 @@
 // code falls on its boxes as it changes, and the map is drawn anew once
 // an index of the code checked out is made.
 //
-// Where the page is open is its hash: the map's name and `:`, unless it
-// is the project's first, then the nodes opened from the top down, and
-// last the node or the function chosen, each by its id, encoded, between
-// `/`s, as `#use:cox/coxd` or `#cox/coxd/runner/cox%2Fdaemon%2Fchat%2FChat`.
+// Where the page is open is its hash: the map's name, encoded, and `:`,
+// unless it is the project's first, then the nodes opened from the top
+// down, and last the node or the function chosen, each by its id,
+// encoded, between `/`s, as `#use:cox/coxd`, `#cox%2Fuse:cox/coxd` for a
+// repository's map, or `#cox/coxd/runner/cox%2Fdaemon%2Fchat%2FChat`.
 // The last alone will do: the boxes above it open for it. A box that
 // opens is opened, one that does not is chosen.
 //
@@ -217,7 +218,7 @@ function why() {
   if (told.state === "none" && told.maps?.length)
     return `<div class="card"><h2>No such map</h2><p>The project has ${told.maps.map((m) => `<code>${esc(m.name)}</code>`).join(", ")}.</p><ul>${problems}</ul></div>`;
   if (told.state === "none")
-    return `<div class="card"><h2>The project has no map yet</h2><p>A map is a file of the project, <code>maps/&lt;name&gt;.json</code>, which names its parts and the code each owns; Cox reads the rest from the code. Ask the agent to make one with you: its <code>show_map</code> tool tells it how.</p></div>`;
+    return `<div class="card"><h2>The project has no map yet</h2><p>A map is a file of the project, <code>maps/&lt;name&gt;.json</code> in its folder or in one of its repositories', which names its parts and the code each owns; Cox reads the rest from the code. Ask the agent to make one with you: its <code>show_map</code> tool tells it how.</p></div>`;
   return `<div class="card"><h2>The map could not be drawn</h2><ul>${problems}</ul></div>`;
 }
 const relative = (file) => (file && told.root && file.startsWith(`${told.root}/`) ? file.slice(told.root.length + 1) : (file ?? ""));

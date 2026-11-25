@@ -10,7 +10,8 @@
 //! What Cox knows, a plugin reads as JSON from `cox://api/<what>`:
 //!
 //! - `cox://api/map/<name>`: the map of the project named `<name>`, as
-//!   coxd draws it from its vocabulary in `maps` and the indexes of the
+//!   coxd draws it from its vocabulary in `maps`, the project's or one
+//!   of its repositories' (as `app/use`), and the indexes of the
 //!   project's code, which asking for it has coxd make when they are not
 //!   made yet, with how each stands, what changed in the code of its
 //!   boxes, and the names of the project's other maps (see
@@ -797,6 +798,9 @@ mod tests {
         let json = asked("cox://api/map/use%20it", Asker::Anyone).unwrap();
         assert_eq!(json["name"], "use it");
         assert_eq!(json["again"], false);
+        // A repository's map, named after it, has its `/` encoded.
+        let json = asked("cox://api/map/app%2Fuse", Asker::Anyone).unwrap();
+        assert_eq!(json["name"], "app/use");
         // Making a failed index again is a plugin's to ask.
         assert_eq!(asked("cox://api/map/again/use", Asker::Anyone), None);
         let json = asked("cox://api/map/again/use", Asker::Plugin).unwrap();
