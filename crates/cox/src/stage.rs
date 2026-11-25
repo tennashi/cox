@@ -51,8 +51,7 @@
 //! - [`document`] shows a Markdown file, and [`code`] a file as it is
 //!   written, such as code: both [`follow`] the file as it changes.
 //! - [`servers`] holds the language servers a tab of code asks what the
-//!   code means, and [`outline`] asks them what a file defines, and
-//!   [`calls`] what a line of it calls, for the map.
+//!   code means.
 //! - [`tree`] shows the project's files beside the tab of a file, for the
 //!   human to read another there.
 //! - [`changes`] shows what changed in them, for the human to read, and
@@ -74,7 +73,6 @@ pub mod activity;
 pub mod android;
 mod asked;
 pub(crate) mod bar;
-pub mod calls;
 pub mod changes;
 pub mod code;
 mod column;
@@ -85,12 +83,10 @@ pub mod document;
 pub mod flow;
 pub mod follow;
 pub mod heading;
-pub mod lines;
 pub mod links;
 pub mod mac_window;
 pub mod map;
 mod mirror;
-pub mod outline;
 pub mod owners;
 pub mod page;
 pub mod playground;
@@ -121,13 +117,11 @@ use coxd::agent::mcp::ToolRequest;
 use cox_android::device::Boot;
 
 use crate::stage::android::Android;
-use crate::stage::calls::Calls;
 use crate::stage::code::Code;
 use crate::stage::devices::{Devices, OpenDevice};
 use crate::stage::diagram::Diagram;
 use crate::stage::document::Document;
 use crate::stage::mac_window::MacWindow;
-use crate::stage::outline::Outlines;
 use crate::stage::page::{Opens, Page};
 use crate::stage::playground::Playground;
 use crate::stage::plugins::Plugins;
@@ -281,8 +275,7 @@ impl Stage {
         stage
     }
 
-    /// A stage with no tab yet, whose pages can ask what the project's
-    /// files define (see [`outline`]) and call (see [`calls`]).
+    /// A stage with no tab yet.
     fn empty(
         cef: Cef,
         cwd: PathBuf,
@@ -290,10 +283,6 @@ impl Stage {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let (outlines, asked) = Outlines::new();
-        let answering = outline::answer(asked, outlines.clone(), cwd.clone(), cx);
-        let (calls, asked_calls) = Calls::new();
-        let answering_calls = calls::answer(asked_calls, calls.clone(), cwd.clone(), cx);
         let files = cx.new(|cx| Tree::new(cwd.clone(), Vec::new(), cx));
         let chosen = cx.subscribe_in(&files, window, |stage, _, chosen: &Chosen, window, cx| {
             stage.open_chosen(chosen, window, cx);
@@ -302,7 +291,7 @@ impl Stage {
             files,
             _chosen: chosen,
             cef,
-            plugins: Plugins::new(cwd.clone(), outlines, calls),
+            plugins: Plugins::new(cwd.clone()),
             menu: None,
             changed: None,
             mapped: false,
@@ -321,7 +310,7 @@ impl Stage {
             panel,
             keep: None,
             kept: None,
-            heard: vec![answering, answering_calls],
+            heard: Vec::new(),
         }
     }
 

@@ -17,21 +17,6 @@
 //!   [`crate::stage::map::told`]); `cox://api/map`, its first map; and
 //!   `cox://api/map/again/<name>`, the map, making again the indexes that
 //!   failed, which only a plugin's own `fetch` has done.
-//! - `cox://api/file/<path>`: what the project's language server says of
-//!   the file at `<path>`, an absolute path in the project: the symbols
-//!   it defines and what uses them, once the server has answered, which
-//!   the page reads again for (see [`crate::stage::outline`]).
-//! - `cox://api/call/<path>:<line>`: what the server says a line of the
-//!   file at `<path>` calls, for a step of a flow made there: the
-//!   function the line is in and the functions it calls, once the server
-//!   has answered (see [`crate::stage::calls`]).
-//! - `cox://api/lines/<path>:<line>`: the lines of the file at `<path>`
-//!   around `<line>`, each as its stretches with what the syntax says
-//!   each is, for a page to show the code a step is made at, colored as
-//!   the code tabs color it, and before them the lines that open what
-//!   the line is within, as its function's `fn` line and its impl's
-//!   (see [`crate::stage::lines`]).
-//!
 //! - `cox://api/wiki`: the human's wiki, its pages, each with what it
 //!   links to, what links to it, where it was used, and what is wrong
 //!   with it; and `cox://api/wiki/<page>`, a page, with its text as HTML,
@@ -100,10 +85,7 @@ use std::sync::Arc;
 use cox_browser::scheme::{Asker, Resource, Serve};
 use cox_core::address::percent_decoded;
 
-use crate::stage::calls::Calls;
-use crate::stage::lines;
 use crate::stage::map;
-use crate::stage::outline::Outlines;
 use coxd::translate;
 use coxd::wiki::told as wiki;
 
@@ -210,21 +192,13 @@ impl Plugin {
 pub struct Plugins {
     /// The project's folder.
     root: PathBuf,
-    /// What the project's language server says of its files.
-    outlines: Outlines,
-    calls: Calls,
 }
 
 impl Plugins {
-    /// The plugins of a chat working in `root`, whose pages ask
-    /// `outlines` what the project's files define.
+    /// The plugins of a chat working in `root`.
     #[must_use]
-    pub fn new(root: PathBuf, outlines: Outlines, calls: Calls) -> Self {
-        Self {
-            root,
-            outlines,
-            calls,
-        }
+    pub fn new(root: PathBuf) -> Self {
+        Self { root }
     }
 
     /// The plugins there are: the built-in ones, then the project's, by
@@ -370,21 +344,6 @@ impl Plugins {
                     told
                 } else {
                     coxd::raw::told_source(&root, &percent_decoded(rest), translate::page)?
-                }
-            }
-            "file" if !rest.is_empty() => {
-                let path = PathBuf::from(format!("/{}", percent_decoded(rest)));
-                self.outlines.told(&self.root, &path)?
-            }
-            "call" | "lines" if !rest.is_empty() => {
-                let spec = percent_decoded(rest);
-                let (path, line) = spec.rsplit_once(':')?;
-                let line: usize = line.parse().ok()?;
-                let path = PathBuf::from(format!("/{path}"));
-                if what == "call" {
-                    self.calls.told(&self.root, &path, line)?
-                } else {
-                    lines::told(&self.root, &path, line)?
                 }
             }
             _ => return None,
@@ -644,7 +603,7 @@ mod tests {
     #[test]
     fn the_built_in_plugin_is_served_with_its_files() {
         let root = TempDir::new();
-        let plugins = Plugins::new(root.to_path_buf(), Outlines::new().0, Calls::new().0);
+        let plugins = Plugins::new(root.to_path_buf());
 
         let page = plugins.resource("cox://map/").unwrap();
         assert_eq!(page.mime, "text/html");
@@ -693,7 +652,7 @@ mod tests {
     #[test]
     fn only_a_plugin_has_the_triggers_tab_do_what_it_asks() {
         let root = TempDir::new();
-        let plugins = Plugins::new(root.to_path_buf(), Outlines::new().0, Calls::new().0);
+        let plugins = Plugins::new(root.to_path_buf());
         let serve = plugins.serve();
         let body = |url: &str, asker| serve(url, asker).map(|resource| resource.body);
 
@@ -712,7 +671,7 @@ mod tests {
     fn a_chats_story_is_told_alone_for_the_chat_asked() {
         let root = TempDir::new();
         coxd::storage::keep_on_this_thread(Some(root.join("data")));
-        let plugins = Plugins::new(root.to_path_buf(), Outlines::new().0, Calls::new().0);
+        let plugins = Plugins::new(root.to_path_buf());
         let serve = plugins.serve();
         let body = |url: &str| serve(url, Asker::Plugin).map(|resource| resource.body);
 
@@ -750,7 +709,7 @@ mod tests {
                 },
             )
             .unwrap();
-        let plugins = Plugins::new(root.to_path_buf(), Outlines::new().0, Calls::new().0);
+        let plugins = Plugins::new(root.to_path_buf());
         let serve = plugins.serve();
         let body = |url: &str| {
             serve(url, Asker::Plugin).map(|resource| {
@@ -798,7 +757,7 @@ mod tests {
     #[test]
     fn a_map_is_asked_of_coxd_as_named() {
         let root = TempDir::new();
-        let plugins = Plugins::new(root.to_path_buf(), Outlines::new().0, Calls::new().0);
+        let plugins = Plugins::new(root.to_path_buf());
         // In the window's place: answers what it was asked.
         let mut asks = map::listen();
         std::thread::spawn(move || {
@@ -842,7 +801,7 @@ mod tests {
             "---\non: {schedule: {cron: \"0 */6 * * *\"}}\n---\n\nLook at what changed.\n",
         )
         .unwrap();
-        let plugins = Plugins::new(root.to_path_buf(), Outlines::new().0, Calls::new().0);
+        let plugins = Plugins::new(root.to_path_buf());
 
         let answer = plugins.resource("cox://api/triggers").unwrap();
         assert_eq!(answer.mime, "application/json");
@@ -862,7 +821,7 @@ mod tests {
             "---\nsource: \"chat 3\"\nkept: 2026-11-10\n---\n\n# Mock\n\nWhat it tried.\n",
         )
         .unwrap();
-        let plugins = Plugins::new(root.to_path_buf(), Outlines::new().0, Calls::new().0);
+        let plugins = Plugins::new(root.to_path_buf());
 
         let answer = plugins.resource("cox://api/project-raw").unwrap();
         let json: serde_json::Value = serde_json::from_slice(&answer.body).unwrap();
@@ -885,7 +844,7 @@ mod tests {
         let root = TempDir::new();
         std::fs::create_dir_all(root.join("wiki")).unwrap();
         std::fs::write(root.join("wiki/people.md"), "# People\n\nWho to ask.\n").unwrap();
-        let plugins = Plugins::new(root.to_path_buf(), Outlines::new().0, Calls::new().0);
+        let plugins = Plugins::new(root.to_path_buf());
 
         let answer = plugins.resource("cox://api/project-wiki").unwrap();
         let json: serde_json::Value = serde_json::from_slice(&answer.body).unwrap();
@@ -898,51 +857,9 @@ mod tests {
     }
 
     #[test]
-    fn a_file_is_told_as_json_within_the_project() {
-        let root = TempDir::new();
-        std::fs::create_dir_all(root.join("my src")).unwrap();
-        std::fs::write(root.join("my src/main.rs"), "fn main() {}\n").unwrap();
-        let plugins = Plugins::new(root.to_path_buf(), Outlines::new().0, Calls::new().0);
-        let url = format!("cox://api/file{}/my%20src/main.rs", root.display());
-        let answer = plugins.resource(&url).unwrap();
-        assert_eq!(answer.mime, "application/json");
-        let json: serde_json::Value = serde_json::from_slice(&answer.body).unwrap();
-        assert_eq!(json["name"], "my src/main.rs");
-        assert_eq!(json["lines"], 1);
-        assert_eq!(json["pending"], true);
-        assert_eq!(plugins.resource("cox://api/file"), None);
-        assert_eq!(plugins.resource("cox://api/file/etc/hostname"), None);
-
-        let url = format!("cox://api/call{}/my%20src/main.rs:1", root.display());
-        let answer = plugins.resource(&url).unwrap();
-        let json: serde_json::Value = serde_json::from_slice(&answer.body).unwrap();
-        assert_eq!(json["name"], "my src/main.rs");
-        assert_eq!(json["line"], 1);
-        assert_eq!(json["pending"], true);
-        let url = format!("cox://api/call{}/my%20src/main.rs", root.display());
-        assert_eq!(plugins.resource(&url), None);
-        assert_eq!(plugins.resource("cox://api/call/etc/hostname:1"), None);
-
-        let url = format!("cox://api/lines{}/my%20src/main.rs:1", root.display());
-        let answer = plugins.resource(&url).unwrap();
-        let json: serde_json::Value = serde_json::from_slice(&answer.body).unwrap();
-        assert_eq!(json["name"], "my src/main.rs");
-        assert_eq!(json["from"], 1);
-        let line: String = json["lines"][0]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|stretch| stretch[0].as_str().unwrap())
-            .collect();
-        assert_eq!(line, "fn main() {}");
-        assert_eq!(json["lines"][0][0], serde_json::json!(["fn", "keyword"]));
-        assert_eq!(plugins.resource("cox://api/lines/etc/hostname:1"), None);
-    }
-
-    #[test]
     fn the_pages_of_a_plugin_no_longer_built_in_are_gone() {
         let root = TempDir::new();
-        let plugins = Plugins::new(root.to_path_buf(), Outlines::new().0, Calls::new().0);
+        let plugins = Plugins::new(root.to_path_buf());
 
         assert!(gone("cox://commands/"));
         assert_eq!(plugins.resource("cox://commands/"), None);
@@ -958,7 +875,7 @@ mod tests {
         std::fs::write(folder.join("index.html"), "<h1>Tour</h1>").unwrap();
         std::fs::write(folder.join("plugin.json"), r#"{"title": "A tour"}"#).unwrap();
         std::fs::write(root.join("secret.txt"), "no").unwrap();
-        let plugins = Plugins::new(root.to_path_buf(), Outlines::new().0, Calls::new().0);
+        let plugins = Plugins::new(root.to_path_buf());
 
         let listed = plugins.list();
         let names: Vec<&str> = listed.iter().map(|plugin| plugin.name.as_str()).collect();

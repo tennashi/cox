@@ -156,26 +156,6 @@ pub struct Language {
     /// Where code in another language is within code in this one, as a
     /// Rust macro's arguments are Rust, if anywhere.
     pub(crate) injections: Option<Query>,
-    /// What the code names where, as its grammar's tags query says, if it
-    /// has one.
-    pub(crate) tags: Option<Tags>,
-}
-
-/// A grammar's tags query, which says what the code names where: the
-/// names it defines, and those it calls, each captured as `name`, within
-/// a capture of what it is, as `definition.function` or
-/// `reference.call`, the same in every grammar's.
-pub(crate) struct Tags {
-    pub(crate) query: Query,
-    /// The index of the `name` capture.
-    pub(crate) name: u32,
-    /// The index of the `reference.call` capture.
-    pub(crate) call: u32,
-    /// The indices of the captures of what a line of code is said to be
-    /// within: what defines a name, as a function or a class
-    /// (`definition.` and its kind), and what implements one, as an
-    /// `impl` in Rust (`reference.implementation`).
-    pub(crate) scopes: Vec<u32>,
 }
 
 impl std::fmt::Debug for Language {
@@ -192,8 +172,7 @@ impl PartialEq for Language {
 
 impl Language {
     /// `grammar` with the queries `highlights`, in order, as later
-    /// patterns win, `injections`, and `tags`, in order, none for a
-    /// grammar with no tags query.
+    /// patterns win, and `injections`.
     ///
     /// # Panics
     ///
@@ -203,7 +182,6 @@ impl Language {
         grammar: impl Into<tree_sitter::Language>,
         highlights: &[&str],
         injections: Option<&str>,
-        tags: &[&str],
     ) -> Self {
         let grammar = grammar.into();
         let highlights = Query::new(&grammar, &highlights.concat())
@@ -217,35 +195,12 @@ impl Language {
             Query::new(&grammar, injections)
                 .unwrap_or_else(|error| panic!("the {name} injections: {error}"))
         });
-        let tags = (!tags.is_empty()).then(|| {
-            let query = Query::new(&grammar, &tags.concat())
-                .unwrap_or_else(|error| panic!("the {name} tags: {error}"));
-            let index = |capture: &str| {
-                query
-                    .capture_index_for_name(capture)
-                    .unwrap_or_else(|| panic!("the {name} tags capture no {capture}"))
-            };
-            let scopes = (0..)
-                .zip(query.capture_names())
-                .filter(|(_, capture)| {
-                    capture.starts_with("definition.") || **capture == "reference.implementation"
-                })
-                .map(|(index, _)| index)
-                .collect();
-            Tags {
-                name: index("name"),
-                call: index("reference.call"),
-                scopes,
-                query,
-            }
-        });
         Self {
             name,
             grammar,
             highlights,
             captures,
             injections,
-            tags,
         }
     }
 
@@ -253,23 +208,6 @@ impl Language {
     #[must_use]
     pub fn name(&self) -> &'static str {
         self.name
-    }
-
-    /// The kinds of the language's syntax nodes that a line of code is
-    /// said to be within, and whose first line says what, for a language
-    /// whose grammar has no tags query to say so (see
-    /// [`crate::syntax::Syntax::within`]): a table in TOML, a section in
-    /// Markdown, and so on.
-    #[must_use]
-    pub fn scopes(&self) -> &'static [&'static str] {
-        match self.name {
-            "bash" => &["function_definition"],
-            "toml" => &["table", "table_array_element"],
-            "markdown" => &["section"],
-            "yaml" => &["block_mapping_pair"],
-            "json" => &["pair"],
-            _ => &[],
-        }
     }
 
     /// The language of the file at `path`, by its name, if the editor
@@ -321,38 +259,12 @@ impl Language {
     }
 }
 
-/// What the Rust grammar's tags leave out: calls of a path, as
-/// `Store::new()`, and with a turbofish, as `parse::<u8>()`, and the
-/// `impl`s of a generic type, or of a generic trait, as `impl<T> Store<T>`
-/// or `impl From<u8> for Store`.
-const RUST_TAGS: &str = "
-(call_expression
-    function: (scoped_identifier
-        name: (identifier) @name)) @reference.call
-
-(call_expression
-    function: (generic_function
-        function: [
-            (identifier) @name
-            (scoped_identifier name: (identifier) @name)
-            (field_expression field: (field_identifier) @name)
-        ])) @reference.call
-
-(impl_item
-    type: [
-        (type_identifier) @name
-        (generic_type type: (type_identifier) @name)
-        (scoped_type_identifier name: (type_identifier) @name)
-    ]) @reference.implementation
-";
-
 static RUST: LazyLock<Language> = LazyLock::new(|| {
     Language::new(
         "rust",
         tree_sitter_rust::LANGUAGE,
         &[tree_sitter_rust::HIGHLIGHTS_QUERY],
         Some(tree_sitter_rust::INJECTIONS_QUERY),
-        &[tree_sitter_rust::TAGS_QUERY, RUST_TAGS],
     )
 });
 
@@ -363,13 +275,7 @@ static TOML: LazyLock<Language> = LazyLock::new(|| {
         "(pair\n  (bare_key)) @property",
         "(pair\n  (bare_key) @property)",
     );
-    Language::new(
-        "toml",
-        tree_sitter_toml_ng::LANGUAGE,
-        &[&highlights],
-        None,
-        &[],
-    )
+    Language::new("toml", tree_sitter_toml_ng::LANGUAGE, &[&highlights], None)
 });
 
 /// Markdown's blocks: what is within them, such as a paragraph's text, is
@@ -380,7 +286,6 @@ static MARKDOWN: LazyLock<Language> = LazyLock::new(|| {
         tree_sitter_md::LANGUAGE,
         &[tree_sitter_md::HIGHLIGHT_QUERY_BLOCK],
         Some(tree_sitter_md::INJECTION_QUERY_BLOCK),
-        &[],
     )
 });
 
@@ -390,7 +295,6 @@ static MARKDOWN_INLINE: LazyLock<Language> = LazyLock::new(|| {
         tree_sitter_md::INLINE_LANGUAGE,
         &[tree_sitter_md::HIGHLIGHT_QUERY_INLINE],
         None,
-        &[],
     )
 });
 
@@ -400,7 +304,6 @@ static JSON: LazyLock<Language> = LazyLock::new(|| {
         tree_sitter_json::LANGUAGE,
         &[tree_sitter_json::HIGHLIGHTS_QUERY],
         None,
-        &[],
     )
 });
 
@@ -410,7 +313,6 @@ static YAML: LazyLock<Language> = LazyLock::new(|| {
         tree_sitter_yaml::LANGUAGE,
         &[tree_sitter_yaml::HIGHLIGHTS_QUERY],
         None,
-        &[],
     )
 });
 
@@ -420,7 +322,6 @@ static BASH: LazyLock<Language> = LazyLock::new(|| {
         tree_sitter_bash::LANGUAGE,
         &[tree_sitter_bash::HIGHLIGHT_QUERY],
         None,
-        &[],
     )
 });
 
@@ -434,21 +335,10 @@ static JAVASCRIPT: LazyLock<Language> = LazyLock::new(|| {
             tree_sitter_javascript::JSX_HIGHLIGHT_QUERY,
         ],
         None,
-        &[tree_sitter_javascript::TAGS_QUERY],
     )
 });
 
-/// What TypeScript's tags leave out: a namespace, and an enum.
-const TYPESCRIPT_TAGS: &str = "
-(internal_module
-    name: (_) @name) @definition.module
-
-(enum_declaration
-    name: (identifier) @name) @definition.enum
-";
-
-/// TypeScript's grammar takes JavaScript's highlights and tags, and adds
-/// its own.
+/// TypeScript's grammar takes JavaScript's highlights, and adds its own.
 static TYPESCRIPT: LazyLock<Language> = LazyLock::new(|| {
     Language::new(
         "typescript",
@@ -458,11 +348,6 @@ static TYPESCRIPT: LazyLock<Language> = LazyLock::new(|| {
             tree_sitter_typescript::HIGHLIGHTS_QUERY,
         ],
         None,
-        &[
-            tree_sitter_javascript::TAGS_QUERY,
-            tree_sitter_typescript::TAGS_QUERY,
-            TYPESCRIPT_TAGS,
-        ],
     )
 });
 
@@ -476,11 +361,6 @@ static TSX: LazyLock<Language> = LazyLock::new(|| {
             tree_sitter_typescript::HIGHLIGHTS_QUERY,
         ],
         None,
-        &[
-            tree_sitter_javascript::TAGS_QUERY,
-            tree_sitter_typescript::TAGS_QUERY,
-            TYPESCRIPT_TAGS,
-        ],
     )
 });
 
@@ -490,7 +370,6 @@ static PYTHON: LazyLock<Language> = LazyLock::new(|| {
         tree_sitter_python::LANGUAGE,
         &[tree_sitter_python::HIGHLIGHTS_QUERY],
         None,
-        &[tree_sitter_python::TAGS_QUERY],
     )
 });
 
@@ -500,7 +379,6 @@ static GO: LazyLock<Language> = LazyLock::new(|| {
         tree_sitter_go::LANGUAGE,
         &[tree_sitter_go::HIGHLIGHTS_QUERY],
         None,
-        &[tree_sitter_go::TAGS_QUERY],
     )
 });
 
