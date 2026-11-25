@@ -62,7 +62,9 @@ them, its lines for theirs.\n\
 ways, as a request and its answer; `sides` the sides of `from` and of `to` it leaves and \
 meets, unless the nearest. Write only the lines no code backs, as between processes, or to the \
 people and systems around: those between boxes that own code, or hold boxes that do, come from \
-the code, and writing one is a mistake the map reports.\n\
+the code, and writing one is a mistake the map reports. A box opened keeps the lines it has \
+closed: in the level inside it, draw one on from the same node to the part it reaches, or it \
+goes to the box's edge.\n\
 - `agreed`: the drift talked through and left as it is, each `{\"id\", \"why\"}`, by the id \
 the map gives it.\n\
 Change the vocabulary as you move the code it claims.";

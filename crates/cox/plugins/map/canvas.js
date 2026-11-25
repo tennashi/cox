@@ -144,7 +144,7 @@ export function geo(f) {
     column(top.left, -GX - PW);
     column(top.right, GX);
     r[top.center] = R(-CW / 2, -CH / 2, CW, CH);
-    return { r, box: null, frames: {}, wires: top.wires.filter(showWeak), parts: [] };
+    return { id: f, r, box: null, frames: {}, wires: top.wires.filter(showWeak), parts: [] };
   }
   const d = levels[f];
   // A level gone as the map was read again draws as the top until the
@@ -173,7 +173,7 @@ export function geo(f) {
     frames[parentOf(f)] = grown(above.box);
     for (const [id, x, y] of d.parts) r[id] = R(box.x + x, box.y + y, ...size(id));
     r[f] = box;
-    return { r, box, frames, wires: wiresOf(f), parts: d.parts.map((p) => p[0]) };
+    return { id: f, r, box, frames, wires: wiresOf(f), parts: d.parts.map((p) => p[0]) };
   }
   const [bx, by, bw, bh] = d.box;
   const box = R(bx, by, bw, bh);
@@ -193,7 +193,7 @@ export function geo(f) {
   r[f] = box;
   const frames = {};
   for (const [k, v] of Object.entries(d.frames)) frames[k] = R(...v);
-  return { r, box, frames, wires: wiresOf(f), parts: d.parts.map((p) => p[0]) };
+  return { id: f, r, box, frames, wires: wiresOf(f), parts: d.parts.map((p) => p[0]) };
 }
 
 const outline = (rects) => ({
@@ -203,13 +203,17 @@ const outline = (rects) => ({
   y1: Math.max(...rects.map((r) => r.y + r.h)) + 30,
 });
 
+// The parts of a level laid out, and the box opened, whose edge the
+// lines it had closed that reach none of its parts go to.
+const within = (g) => new Set(g.box ? [...g.parts, g.id] : g.parts);
+
 // All of it, when it fits readably; when it does not, the open box and
 // what its lines reach, the rest drawn past the edges still.
 function bounds(g) {
   const all = outline([...Object.values(g.r), ...Object.values(g.frames)]);
   const k = Math.min(cv.clientWidth / (all.x1 - all.x0), cv.clientHeight / (all.y1 - all.y0));
   if (k >= 0.55 || !g.box) return all;
-  const parts = new Set(g.parts);
+  const parts = within(g);
   const near = new Set();
   g.wires.forEach(([x, y]) => {
     if (parts.has(x)) near.add(y);
@@ -372,12 +376,16 @@ export function draw() {
   const edgesOf = (gg, f) => (gg ? { ...gg.frames, ...(gg.box ? { [f]: gg.box } : {}) } : {});
   const bA = edgesOf(gA, a);
   const bB = edgesOf(gB, b);
+  // A line to a box opened above, which it kept as it opened, goes to its
+  // edge, as that edge moves.
+  for (const id of new Set([...Object.keys(bA), ...Object.keys(bB)]))
+    if (id !== b) g[id] = bA[id] && bB[id] ? lerpR(bA[id], bB[id], t1) : (g[id] ?? bA[id] ?? bB[id]);
   for (const id in bA)
     if (id !== b) o.push(boundary(id, bB[id] ? lerpR(bA[id], bB[id], t1) : bA[id], bB[id] || !gB ? 1 : 1 - t1));
   // What the open box's lines do not reach is faint.
   const near = (gg) => {
     if (!gg || !gg.parts.length) return null;
-    const P = new Set(gg.parts);
+    const P = within(gg);
     const n = new Set(P);
     gg.wires.forEach(([x, y]) => {
       if (P.has(x)) n.add(y);
@@ -390,10 +398,12 @@ export function draw() {
   const wires = (gB ?? gA).wires;
   const litNodes = new Set(view.sel ? [view.sel, ...wires.filter(([x, y]) => x === view.sel || y === view.sel).flat()] : []);
   const dim = (id) => (litNodes.has(id) ? 1 : lerp(nA && !nA.has(id) ? FAR : 1, nB && !nB.has(id) ? FAR : 1, t1));
+  const inA = within(gA);
+  const inB = gB && within(gB);
   const wireDim = (x, y) => {
     if (isLit(x, y)) return 1;
     const f = (gg, P) => (gg && gg.parts.length && !P.has(x) && !P.has(y) ? FAR : 1);
-    return lerp(f(gA, new Set(gA.parts)), f(gB, new Set(gB?.parts ?? [])), t1);
+    return lerp(f(gA, inA), f(gB, inB), t1);
   };
   // The box opened: its card fades as its edge comes.
   if (b) {
