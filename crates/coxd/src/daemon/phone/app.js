@@ -100,6 +100,7 @@ function el(tag, props, ...children) {
 // around them.
 const ICONS = {
   folder: "M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z",
+  map: "M3 6l6-3 6 3 6-3v15l-6 3-6-3-6 3zM9 3v15M15 6v15",
 };
 function icon(name, size) {
   const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
@@ -663,7 +664,7 @@ function closing(entries, row) {
   for (const entry of entries.slice(from + 1)) {
     if (!entry) continue;
     const [kind, value] = kindOf(entry);
-    if (kind === "media" || kind === "shown") shown.push([kind, value]);
+    if (kind === "media" || kind === "shown" || kind === "map_shown") shown.push([kind, value]);
     else if (kind === "plan_changed") drift = value;
     else if (kind === "checks") ended = value;
     else if (kind === "event" && value.on === "goal.met") met.push(value);
@@ -683,6 +684,11 @@ function closing(entries, row) {
           return el("button", { type: "button", class: "file", title: one.path, onclick: () => openShown(one) },
             el("span", { class: "icon" }, one.markdown ? "≡" : "‹›"),
             el("span", { class: "name" }, shownName(one)));
+        }
+        if (kind === "map_shown") {
+          return el("button", { type: "button", class: "file", title: mapShownName(one), onclick: () => openMap(one) },
+            el("span", { class: "icon" }, icon("map", 18)),
+            el("span", { class: "name" }, (one.at || []).at(-1) || mapShownName(one)));
         }
         const source = `/media/${encodeURIComponent(one.file)}`;
         return el("a", { href: source, target: "_blank", rel: "noopener noreferrer", title: one.caption || one.from },
@@ -1145,6 +1151,8 @@ function entryNode(at, kind, value, asks) {
       return media(value);
     case "shown":
       return shownRow(value);
+    case "map_shown":
+      return mapShownRow(value);
     case "permission":
       return permission(at, value, asks);
     case "question":
@@ -1552,6 +1560,49 @@ function openShown(shown) {
       if (at) at.scrollIntoView({ block: "center" });
     })
     .catch((error) => body.replaceChildren(el("p", { class: "empty" }, `Cannot read it: ${error.message}`)));
+}
+
+// What a map the agent showed is called: the map, by its name, unless
+// the project's first.
+function mapShownName(shown) {
+  return shown.map ? `Map ${shown.map}` : "Map";
+}
+
+// Where the phone shows the Map page, beside its own, open where the
+// agent showed the map, as the window's stage opens it: the map's name and
+// `:`, unless the project's first, then the ids of the nodes from the top
+// down, each encoded; of the project of the chat shown.
+function mapAddress(shown) {
+  const at = (shown.at || []).map(encodeURIComponent).join("/");
+  const hash = shown.map ? `${encodeURIComponent(shown.map)}:${at}` : at;
+  return `/map/?kept=${chat.kept}#${hash}`;
+}
+
+// A map of the project the agent showed on the stage: a row that opens it
+// over the chat, where the agent showed it, with the node it opened at.
+function mapShownRow(shown) {
+  const last = (shown.at || []).at(-1);
+  return el("button", { type: "button", class: "shown-file map-shown", onclick: () => openMap(shown) },
+    el("span", { class: "icon" }, icon("map", 16)),
+    el("span", { class: "name" }, mapShownName(shown)),
+    el("span", { class: "path" }, last || ""),
+    el("span", { class: "go" }, "›"));
+}
+
+// Shows the Map page over the chat, in a frame, where the agent showed the
+// map, as it is drawn now: it is the window's own page, read beside the
+// phone's, whose taps, drags and pinches move through the map.
+function openMap(shown) {
+  const close = () => { viewer.remove(); document.body.classList.remove("trying"); };
+  const name = mapShownName(shown);
+  const viewer = el("div", { id: "map", role: "dialog", "aria-label": name },
+    el("div", { class: "bar" },
+      el("button", { type: "button", class: "icon-button", "aria-label": "Back to the chat", onclick: close }, "‹"),
+      el("span", { class: "page" }, name)),
+    el("iframe", { src: mapAddress(shown), title: name }));
+  document.getElementById("map")?.remove();
+  document.body.classList.add("trying");
+  document.body.append(viewer);
 }
 
 // What the triggers gathered for the human to answer with, each by its

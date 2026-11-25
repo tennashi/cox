@@ -45,6 +45,14 @@
 //! is, and shows one in a frame over the chat, as the relay passes it on
 //! at the same port of the Mac's name (see [`relay`]).
 //!
+//! The page shows, too, a map of the project the agent showed on the
+//! stage, where it showed it, in a frame over the chat: the window's own
+//! Map page, whose files coxd serves at `/map/` (see [`crate::map::PAGE`]),
+//! with the window's colors beside them, and which reads the map of the
+//! project where the chat its query names works, `?kept=<number>`, beside
+//! itself, at `/map/api/map`, as the window's stage tells it at
+//! `cox://api/map` (see [`map_asked`]).
+//!
 //! The page asks, too, to be told of the chats that need the human while
 //! they are away from the Mac, with Web Push (see [`super::push`]): it
 //! reads coxd's key on `/push`, and posts where to push to it there, or
@@ -604,6 +612,8 @@ pub async fn serve(
                         page.sketch(&request).await
                     } else if request.uri().path() == "/diagram" {
                         page.diagram(&request).await
+                    } else if map_asked(request.uri().path()).is_some() {
+                        page.map(&request).await
                     } else if request.uri().path() == "/events" {
                         page.events(&request).await
                     } else {
@@ -674,6 +684,9 @@ impl Page {
         }
         if let Some(project) = path.strip_prefix("/project-icon/") {
             return project_icon(project);
+        }
+        if let Some(file) = path.strip_prefix("/map/") {
+            return map_page(file);
         }
         match FILES.iter().find(|(at, _, _)| *at == path) {
             Some((at, kind, text)) => {
@@ -960,6 +973,41 @@ impl Page {
             Ok(Err(error)) => answer(StatusCode::UNPROCESSABLE_ENTITY, TEXT, format!("{error:#}")),
             Err(error) => answer(StatusCode::INTERNAL_SERVER_ERROR, TEXT, error.to_string()),
         }
+    }
+
+    /// The map of the project where the chat `request` names works,
+    /// `?kept=<number>`, as JSON, as the window's Map page is told it:
+    /// the project's first, or the one the path names after `api/map/`,
+    /// drawn again after a failed index when the path says `again/`
+    /// before the name (see [`map_asked`]).
+    async fn map(&self, request: &Request<Incoming>) -> Response<Body> {
+        if !self.paired(request) {
+            return answer(StatusCode::UNAUTHORIZED, TEXT, "Not paired");
+        }
+        let Some((name, again)) = map_asked(request.uri().path()) else {
+            return answer(StatusCode::NOT_FOUND, TEXT, "Not found");
+        };
+        let key = match self.chat_named(request).await {
+            Ok(key) => key,
+            Err((status, why)) => return answer(status, TEXT, why),
+        };
+        let (asked, drawn) = tokio::sync::oneshot::channel();
+        if self
+            .internal
+            .send(Internal::Map {
+                key,
+                name,
+                again,
+                answer: asked,
+            })
+            .is_err()
+        {
+            return answer(StatusCode::SERVICE_UNAVAILABLE, TEXT, "coxd is stopping");
+        }
+        let Ok(Some(told)) = drawn.await else {
+            return answer(StatusCode::NOT_FOUND, TEXT, "No such chat");
+        };
+        answer(StatusCode::OK, "application/json", told)
     }
 
     /// Does what the page posted, as `request` says it, from the page
@@ -1373,6 +1421,69 @@ fn same(a: &[u8], b: &[u8]) -> bool {
     a.len() == b.len() && a.iter().zip(b).fold(0, |differ, (a, b)| differ | (a ^ b)) == 0
 }
 
+/// The map the phone's Map page asks for at `path`, under [`MAP_API`]:
+/// the map's name, if the path names one, and whether to draw it again
+/// after a failed index, as the window's stage has them at
+/// `cox://api/map[/again]/<name>`; or nothing of a path that is not of
+/// a map.
+fn map_asked(path: &str) -> Option<(Option<String>, bool)> {
+    let rest = path.strip_prefix(MAP_API)?;
+    if rest.is_empty() {
+        return Some((None, false));
+    }
+    let rest = rest.strip_prefix('/')?;
+    let (again, name) = match rest.strip_prefix("again/") {
+        Some(name) => (true, name),
+        None => (false, rest),
+    };
+    if name.contains('/') {
+        return None;
+    }
+    let name = (!name.is_empty()).then(|| cox_core::address::percent_decoded(name));
+    Some((name, again))
+}
+
+/// Where the Map page reads its map, beside itself, at `/map/`.
+const MAP_API: &str = "/map/api/map";
+
+/// The file `file` of the Map page, as the window's stage serves it at
+/// `cox://map/` (see [`crate::map::PAGE`]), and the window's colors
+/// beside it, as `theme.css`; the page itself for none. The phone's page
+/// shows it in a frame, over the chat.
+fn map_page(file: &str) -> Response<Body> {
+    let file = if file.is_empty() { "index.html" } else { file };
+    let mut response = if file == "theme.css" {
+        answer(StatusCode::OK, "text/css; charset=utf-8", theme::css())
+    } else {
+        match crate::map::PAGE.iter().find(|(at, _)| *at == file) {
+            Some((at, bytes)) => answer(StatusCode::OK, kind_of(at), Bytes::from_static(bytes)),
+            None => return answer(StatusCode::NOT_FOUND, TEXT, "Not found"),
+        }
+    };
+    frameable(&mut response);
+    response
+}
+
+/// The type of a file of a page, by the end of its name.
+fn kind_of(file: &str) -> &'static str {
+    match file.rsplit_once('.').map(|(_, end)| end) {
+        Some("html") => "text/html; charset=utf-8",
+        Some("js") => "text/javascript; charset=utf-8",
+        Some("css") => "text/css; charset=utf-8",
+        Some("json") => "application/json",
+        _ => "application/octet-stream",
+    }
+}
+
+/// Lets the phone's own page frame `response`, as it shows the Map page
+/// over the chat; still no other page.
+fn frameable(response: &mut Response<Body>) {
+    response.headers_mut().insert(
+        header::CONTENT_SECURITY_POLICY,
+        HeaderValue::from_static(FRAMED_POLICY),
+    );
+}
+
 /// The icon the human gave the project kept by the number `project`, as
 /// the rail draws it, if it has one.
 fn project_icon(project: &str) -> Response<Body> {
@@ -1463,6 +1574,11 @@ fn answer(status: StatusCode, kind: &'static str, text: impl Into<Bytes>) -> Res
 /// included.
 const PAGE_POLICY: &str = "default-src 'self'; img-src 'self' data:; object-src 'none'; \
     base-uri 'none'; frame-ancestors 'none'";
+
+/// What a page the phone's page frames, as the Map page, may do: as
+/// [`PAGE_POLICY`], but framed by the phone's page.
+const FRAMED_POLICY: &str = "default-src 'self'; img-src 'self' data:; object-src 'none'; \
+    base-uri 'none'; frame-ancestors 'self'";
 
 /// What an answer holds: a file whole, or the stream of events.
 enum Body {
@@ -1616,6 +1732,7 @@ fn opened(entries: Vec<(usize, Entry)>, len: usize, holds: usize) -> (usize, Vec
                 entry,
                 Entry::Media { .. }
                     | Entry::Shown { .. }
+                    | Entry::MapShown { .. }
                     | Entry::PlanChanged { .. }
                     | Entry::Checks(_)
                     | Entry::Event { .. }
@@ -2136,8 +2253,15 @@ mod tests {
             (2, Entry::Thought("why".into())),
             (3, Entry::Human("last".into())),
             (4, Entry::Checks(Vec::new())),
+            (
+                5,
+                Entry::MapShown {
+                    map: None,
+                    at: vec!["shop".into()],
+                },
+            ),
         ];
-        entries.extend((5..len).map(|at| (at, Entry::Reply(format!("{at}")))));
+        entries.extend((6..len).map(|at| (at, Entry::Reply(format!("{at}")))));
         let patch = |entries| Patch {
             len,
             entries,
@@ -2170,8 +2294,8 @@ mod tests {
         assert_eq!(opened["Patch"]["patch"]["len"], len);
         assert_eq!(opened["Patch"]["patch"]["from"], 10);
         let told = places(&opened);
-        assert_eq!(told[..3], [1, 3, 4], "{told:?}");
-        assert_eq!(told[3..], (10..len as u64).collect::<Vec<_>>()[..]);
+        assert_eq!(told[..4], [1, 3, 4, 5], "{told:?}");
+        assert_eq!(told[4..], (10..len as u64).collect::<Vec<_>>()[..]);
 
         // A page that read back to 6 is told all from there as it follows
         // the chat again, and what it reads before.
@@ -2185,8 +2309,8 @@ mod tests {
         .unwrap();
         assert_eq!(again["Patch"]["patch"]["from"], 6);
         let told = places(&again);
-        assert_eq!(told[..3], [1, 3, 4], "{told:?}");
-        assert_eq!(told[3..], (6..len as u64).collect::<Vec<_>>()[..]);
+        assert_eq!(told[..4], [1, 3, 4, 5], "{told:?}");
+        assert_eq!(told[4..], (6..len as u64).collect::<Vec<_>>()[..]);
 
         // And a page that holds more than the conversation does, as it
         // was cut short meanwhile, is told its last.
@@ -2405,6 +2529,133 @@ mod tests {
         tokio::time::timeout(Duration::from_secs(30), test)
             .await
             .expect("the page answers in time");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn serves_the_map_page_and_the_chats_map_to_a_paired_phone_alone() {
+        let local = tokio::task::LocalSet::new();
+        let test = local.run_until(async {
+            let listener = listen(0).await.unwrap();
+            let port = listener.local_addr().unwrap().port();
+            let (internal, mut heard) = unbounded_channel();
+            tokio::task::spawn_local(serve(
+                listener,
+                Rc::new(Phones::new("secret".to_owned(), None)),
+                None,
+                internal,
+            ));
+            let get = |path: &str, cookie: &str| {
+                format!("GET {path} HTTP/1.1\r\nHost: x\r\n{cookie}Connection: close\r\n\r\n")
+            };
+            let cookie = "Cookie: cox_phone=secret\r\n";
+
+            for path in [
+                "/map/",
+                "/map/app.js",
+                "/map/theme.css",
+                "/map/api/map?kept=12",
+            ] {
+                let unpaired = ask(port, &get(path, ""), "").await;
+                assert!(unpaired.starts_with("HTTP/1.1 401"), "{path}: {unpaired}");
+            }
+
+            // The files the window's stage serves, and the theme beside
+            // them, which the phone's page may frame, and no other.
+            let page = ask(port, &get("/map/", cookie), "").await;
+            assert!(page.starts_with("HTTP/1.1 200"), "{page}");
+            assert!(
+                page.contains("content-type: text/html; charset=utf-8"),
+                "{page}"
+            );
+            assert!(
+                page.contains(&format!("content-security-policy: {FRAMED_POLICY}")),
+                "{page}"
+            );
+            assert!(FRAMED_POLICY.contains("default-src 'self'"));
+            assert!(FRAMED_POLICY.contains("frame-ancestors 'self'"));
+            assert!(page.contains("href=\"./theme.css\""), "{page}");
+            assert!(
+                !page.contains("\"cox:"),
+                "nothing the phone refuses: {page}"
+            );
+            for (file, bytes) in crate::map::PAGE {
+                let served = ask(port, &get(&format!("/map/{file}"), cookie), "").await;
+                assert!(served.starts_with("HTTP/1.1 200"), "{file}: {served}");
+                assert!(served.contains(kind_of(file)), "{file}: {served}");
+                assert!(
+                    served.ends_with(std::str::from_utf8(bytes).unwrap()),
+                    "{file} is served as it is"
+                );
+            }
+            let theme = ask(port, &get("/map/theme.css", cookie), "").await;
+            assert!(theme.contains("text/css"), "{theme}");
+            assert!(theme.contains("--asking-ground: #1e1b15;"), "{theme}");
+            let missing = ask(port, &get("/map/../app.js", cookie), "").await;
+            assert!(missing.starts_with("HTTP/1.1 404"), "{missing}");
+
+            // The map of the project where the chat kept as 12 works, as
+            // the window's Map page asks for it.
+            let unnamed = ask(port, &get("/map/api/map", cookie), "").await;
+            assert!(unnamed.starts_with("HTTP/1.1 400"), "{unnamed}");
+            for (path, asked, again) in [
+                ("/map/api/map?kept=12", None, false),
+                ("/map/api/map/use%3Aflow?kept=12", Some("use:flow"), false),
+                ("/map/api/map/again/use?kept=12", Some("use"), true),
+            ] {
+                let request = get(path, cookie);
+                let told = tokio::task::spawn_local(async move { ask(port, &request, "").await });
+                let Some(Internal::Key { number: 12, answer }) = heard.recv().await else {
+                    panic!("coxd is not asked the key of the chat kept as 12");
+                };
+                answer.send(Some(7)).unwrap();
+                let Some(Internal::Map {
+                    key: 7,
+                    name,
+                    again: drawn_again,
+                    answer,
+                }) = heard.recv().await
+                else {
+                    panic!("coxd is not asked the map of the chat 7");
+                };
+                assert_eq!((name.as_deref(), drawn_again), (asked, again), "{path}");
+                answer.send(Some(r#"{"state":"none"}"#.to_owned())).unwrap();
+                let told = told.await.unwrap();
+                assert!(told.starts_with("HTTP/1.1 200"), "{path}: {told}");
+                assert!(told.contains("content-type: application/json"), "{told}");
+                assert!(told.ends_with(r#"{"state":"none"}"#), "{told}");
+            }
+            let request = get("/map/api/map?kept=13", cookie);
+            let gone = tokio::task::spawn_local(async move { ask(port, &request, "").await });
+            let Some(Internal::Key { number: 13, answer }) = heard.recv().await else {
+                panic!("coxd is not asked the key of the chat kept as 13");
+            };
+            answer.send(None).unwrap();
+            let gone = gone.await.unwrap();
+            assert!(gone.starts_with("HTTP/1.1 404"), "{gone}");
+            let deeper = ask(port, &get("/map/api/map/a/b?kept=12", cookie), "").await;
+            assert!(deeper.starts_with("HTTP/1.1 404"), "{deeper}");
+        });
+        tokio::time::timeout(Duration::from_secs(30), test)
+            .await
+            .expect("the page answers in time");
+    }
+
+    #[test]
+    fn reads_which_map_the_map_page_asks_for_as_the_stage_has_it() {
+        assert_eq!(map_asked("/map/api/map"), Some((None, false)));
+        assert_eq!(map_asked("/map/api/map/"), Some((None, false)));
+        assert_eq!(
+            map_asked("/map/api/map/use"),
+            Some((Some("use".to_owned()), false))
+        );
+        assert_eq!(
+            map_asked("/map/api/map/again/a%2Fb"),
+            Some((Some("a/b".to_owned()), true))
+        );
+        assert_eq!(map_asked("/map/api/map/again/"), Some((None, true)));
+        assert_eq!(map_asked("/map/api/maps"), None);
+        assert_eq!(map_asked("/map/api/map/a/b"), None);
+        assert_eq!(map_asked("/map/app.js"), None);
     }
 
     #[tokio::test(flavor = "current_thread")]

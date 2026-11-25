@@ -70,8 +70,9 @@
 //!   page elsewhere, gets nothing (see [`Asker`]).
 //!
 //! A plugin draws in the window's colors by linking the stylesheet at
-//! `cox://api/theme.css`, whose custom properties on `:root` are the
-//! colors of [`coxd::theme`], named after them, as `--asking-ground`.
+//! `cox://api/theme.css`, or `theme.css` beside its page, whose custom
+//! properties on `:root` are the colors of [`coxd::theme`], named after
+//! them, as `--asking-ground`.
 //!
 //! A plugin shows a chat of the window by going to `cox://chat/<key>`,
 //! the number the Activity page is told it by.
@@ -124,22 +125,8 @@ const BUILT_IN: &[(&str, Files)] = &[
             ("app.js", include_bytes!("../../plugins/activity/app.js")),
         ],
     ),
-    (
-        "map",
-        &[
-            (
-                "plugin.json",
-                include_bytes!("../../plugins/map/plugin.json"),
-            ),
-            ("index.html", include_bytes!("../../plugins/map/index.html")),
-            ("map.css", include_bytes!("../../plugins/map/map.css")),
-            ("app.js", include_bytes!("../../plugins/map/app.js")),
-            ("canvas.js", include_bytes!("../../plugins/map/canvas.js")),
-            ("detail.js", include_bytes!("../../plugins/map/detail.js")),
-            ("drift.js", include_bytes!("../../plugins/map/drift.js")),
-            ("icons.js", include_bytes!("../../plugins/map/icons.js")),
-        ],
-    ),
+    // The phone serves the same files (see [`coxd::map::PAGE`]).
+    ("map", coxd::map::PAGE),
     (
         "wiki",
         &[
@@ -266,7 +253,12 @@ impl Plugins {
         } else {
             path.to_owned()
         };
-        let body = Self::built_in(host, &path).or_else(|| self.of_project(host, &path))?;
+        // A plugin's page may link the theme beside itself, as the Map
+        // page does, whose files the phone serves with the theme beside
+        // them too, unless the plugin has a file of that name.
+        let body = Self::built_in(host, &path)
+            .or_else(|| self.of_project(host, &path))
+            .or_else(|| (path == "theme.css").then(|| coxd::theme::css().into_bytes()))?;
         Some(Resource {
             mime: mime(&path).to_owned(),
             body,
@@ -732,6 +724,27 @@ mod tests {
         );
         assert_eq!(body("cox://api/activity/command/not-a-command"), None);
         coxd::storage::keep_on_this_thread(None);
+    }
+
+    #[test]
+    fn a_plugin_has_the_theme_beside_its_page_unless_it_has_its_own() {
+        let root = TempDir::new();
+        let folder = root.join(PROJECT_PLUGINS).join("tour");
+        std::fs::create_dir_all(&folder).unwrap();
+        std::fs::write(folder.join("index.html"), "<h1>Tour</h1>").unwrap();
+        let plugins = Plugins::new(root.to_path_buf());
+
+        let theme = coxd::theme::css().into_bytes();
+        for beside in ["cox://map/theme.css", "cox://tour/theme.css"] {
+            let resource = plugins.resource(beside).unwrap();
+            assert_eq!(resource.mime, "text/css", "{beside}");
+            assert_eq!(resource.body, theme, "{beside}");
+        }
+        std::fs::write(folder.join("theme.css"), "body{}").unwrap();
+        assert_eq!(
+            plugins.resource("cox://tour/theme.css").unwrap().body,
+            b"body{}"
+        );
     }
 
     #[test]

@@ -109,6 +109,11 @@ impl Stage {
             self.show_flow(call.to_owned(), window, cx);
             return;
         }
+        // Before a file's, which any link with a `#` reads as.
+        if let Some(fragment) = map_linked(url) {
+            self.show_plugin("map", fragment, window, cx);
+            return;
+        }
         if let Some(link) = crate::ui::markdown::file_link(url) {
             self.open_file(link, from, window, cx);
             return;
@@ -389,6 +394,24 @@ impl Stage {
 /// `--stage` says another.
 pub const ACTIVITY_URL: &str = "cox://activity/";
 
+/// The address of the Map page, which a link to opens on the tab that
+/// shows the page, wherever it has gone (see [`Stage::show_plugin`]).
+const MAP_URL: &str = "cox://map/";
+
+/// The address of the Map page open at the map `map`, or the project's
+/// first, `at`, as the agent showed it (see [`map_fragment`]).
+#[must_use]
+pub fn map_url(map: Option<&str>, at: &[String]) -> String {
+    format!("{MAP_URL}{}", map_fragment(map, at))
+}
+
+/// Where on the map `url` links to, its hash, if it links to the Map
+/// page.
+fn map_linked(url: &str) -> Option<&str> {
+    url.strip_prefix(MAP_URL)
+        .filter(|fragment| fragment.is_empty() || fragment.starts_with('#'))
+}
+
 /// The hash of the Map page open at the map `map`, or the project's
 /// first, `at`, the nodes it opens from the top down and the one chosen
 /// last, by their ids, each written as [`percent_encoded`] says, as ids
@@ -509,7 +532,7 @@ mod tests {
 
     use cox_core::tabs::Lines;
 
-    use super::{FileTab, linked, map_fragment};
+    use super::{FileTab, linked, map_fragment, map_linked, map_url};
 
     #[test]
     fn the_map_page_is_opened_at_a_map_by_its_name() {
@@ -524,6 +547,19 @@ mod tests {
             map_fragment(Some("use"), &at),
             "#use:app/app%2Fserver%2FServer%3A%3Arun"
         );
+        // A row of the conversation opens it where the agent showed it,
+        // on the Map page's tab, though a file's link reads it too.
+        let url = map_url(Some("use"), &at);
+        assert_eq!(url, "cox://map/#use:app/app%2Fserver%2FServer%3A%3Arun");
+        assert_eq!(
+            map_linked(&url),
+            Some("#use:app/app%2Fserver%2FServer%3A%3Arun")
+        );
+        assert!(crate::ui::markdown::file_link(&url).is_some());
+        assert_eq!(map_url(None, &[]), "cox://map/#");
+        assert_eq!(map_linked("cox://map/"), Some(""));
+        assert_eq!(map_linked("cox://map/app.js"), None);
+        assert_eq!(map_linked("cox://wiki/#use:a"), None);
     }
 
     #[test]

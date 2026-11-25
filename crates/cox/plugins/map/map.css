@@ -1,6 +1,6 @@
-/* The Map page. Its colors are the window's, which `cox://api/theme.css`
-   gives after this file where there is one; these stand in elsewhere, as
-   on the phone. */
+/* The Map page. Its colors are the window's, which `theme.css` beside
+   the page gives after this file, on the stage as on the phone; these
+   stand in until it does. */
 :root {
   color-scheme: dark;
   --ground: #0e0e0f;
@@ -226,13 +226,17 @@ button {
   color: var(--foreground);
 }
 
-/* The drawing. */
+/* The drawing, which a finger or the pointer moves: its words are not
+   selected, nor looked up by a phone's browser as they are tapped. */
 #cv {
   position: fixed;
   inset: var(--top) 0 0 0;
   cursor: grab;
   background: var(--ground);
   touch-action: none;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
 }
 #cv.drag {
   cursor: grabbing;
@@ -319,8 +323,22 @@ svg .mono {
   overflow: auto;
   z-index: 3;
   transform: translateX(100%);
-  transition: transform 0.25s ease;
   font-size: 13px;
+}
+/* A pane closed is not drawn once it has slid away, nor reached by the
+   keyboard: a phone's browser drew one just off its screen over the
+   drawing. */
+#dt,
+#dr {
+  visibility: hidden;
+  transition:
+    transform 0.25s ease,
+    visibility 0s 0.25s;
+}
+#dt.on,
+#dr.on {
+  visibility: visible;
+  transition: transform 0.25s ease;
 }
 #dt.on {
   transform: none;
@@ -655,7 +673,6 @@ svg .mono {
   overflow: auto;
   z-index: 5;
   transform: translateX(100%);
-  transition: transform 0.25s ease;
   font-size: 13px;
 }
 #dr.on {
@@ -738,12 +755,15 @@ svg .mono {
     border-top: 1px solid var(--border);
     border-radius: 14px 14px 0 0;
     transform: translateY(100%);
-    transition: transform 0.28s ease;
+    transition:
+      transform 0.28s ease,
+      visibility 0s 0.28s;
     box-shadow: 0 -8px 24px rgba(0, 0, 0, 0.4);
     overscroll-behavior: contain;
   }
   #dt.on {
     transform: translateY(calc(88vh - 50vh));
+    transition: transform 0.28s ease;
   }
   #dt.on.full {
     transform: none;

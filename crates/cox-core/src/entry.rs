@@ -76,6 +76,17 @@ pub enum Entry {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         lines: Option<(usize, usize)>,
     },
+    /// A map of the project the agent showed the human on the stage, as
+    /// `show_map` does, for the human to open where it showed it, on the
+    /// Mac or on the phone: the `map`, by its name, unless the project's
+    /// first, open `at`, the ids of the nodes it opened from the top
+    /// down, and last of the node or the function chosen, if any.
+    MapShown {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        map: Option<String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        at: Vec<String>,
+    },
     /// A tool call, running until it has a result.
     ToolCall {
         id: String,
@@ -1229,6 +1240,28 @@ mod tests {
                 answer: Some(QuestionAnswer::Declined),
                 answered_at: None,
             }
+        );
+    }
+
+    #[test]
+    fn a_map_shown_is_written_with_what_it_says_alone() {
+        let entry = Entry::MapShown {
+            map: Some("use".to_owned()),
+            at: vec!["cox".to_owned(), "cox/coxd".to_owned()],
+        };
+        let written = serde_json::to_string(&entry).unwrap();
+        assert_eq!(
+            written,
+            r#"{"map_shown":{"map":"use","at":["cox","cox/coxd"]}}"#
+        );
+        assert_eq!(serde_json::from_str::<Entry>(&written).unwrap(), entry);
+        assert_eq!(
+            serde_json::from_str::<Entry>(r#"{"map_shown":{}}"#).unwrap(),
+            Entry::MapShown {
+                map: None,
+                at: Vec::new()
+            },
+            "the project's first map, at its top"
         );
     }
 

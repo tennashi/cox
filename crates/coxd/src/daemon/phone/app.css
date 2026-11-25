@@ -565,11 +565,13 @@ pre code { padding: 0; background: none; font-size: inherit; color: var(--foregr
   font-size: 13px;
 }
 body.trying { overflow: hidden; }
-#trial, #changes, #reading, #settings { position: fixed; inset: 0; z-index: 20; display: flex; flex-direction: column; background: var(--ground); }
-#trial .bar, #changes .bar, #reading .bar, #settings .bar { padding: calc(env(safe-area-inset-top) + 6px) 8px 6px; background: var(--surface); border-bottom: 1px solid var(--border); }
-#trial .bar .icon-button, #changes .bar .icon-button, #reading .bar .icon-button, #settings .bar .icon-button { font-size: 20px; color: var(--dim); }
-#trial .page, #changes .page, #reading .page, #settings .page { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--dim); font-size: 14px; }
+#trial, #changes, #reading, #settings, #map { position: fixed; inset: 0; z-index: 20; display: flex; flex-direction: column; background: var(--ground); }
+#trial .bar, #changes .bar, #reading .bar, #settings .bar, #map .bar { padding: calc(env(safe-area-inset-top) + 6px) 8px 6px; background: var(--surface); border-bottom: 1px solid var(--border); }
+#trial .bar .icon-button, #changes .bar .icon-button, #reading .bar .icon-button, #settings .bar .icon-button, #map .bar .icon-button { font-size: 20px; color: var(--dim); }
+#trial .page, #changes .page, #reading .page, #settings .page, #map .page { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--dim); font-size: 14px; }
 #trial iframe { flex: 1; width: 100%; border: 0; background: #fff; }
+#map { padding-bottom: env(safe-area-inset-bottom); }
+#map iframe { flex: 1; width: 100%; border: 0; background: var(--ground); }
 
 /* What changed where the chat works, over the chat, as the window's
    "Changes" tab: a card for each file, headed by how it changed, its
@@ -724,6 +726,9 @@ body.trying { overflow: hidden; }
 .shown-file .path { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--mono); font-size: 12.5px; }
 .shown-file .lines-at { color: var(--dim); font-size: 12px; }
 .shown-file .go { color: var(--dim); font-size: 18px; }
+.map-shown .icon { display: grid; place-items: center; }
+.map-shown .name { flex-shrink: 0; }
+.map-shown .path { color: var(--dim); }
 .closing .shown .file { flex-shrink: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; width: 80px; height: 80px; padding: 4px; border: 0; border-radius: 8px; background: var(--raised); color: var(--foreground); font: inherit; }
 .closing .shown .file .icon { color: var(--link); font-size: 18px; font-family: var(--mono); }
 .closing .shown .file .name { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; color: var(--dim); }

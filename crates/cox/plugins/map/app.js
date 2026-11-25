@@ -15,16 +15,19 @@
 //
 // The page draws from the JSON alone: on the phone, where nothing else
 // of Cox's is there, it is the same, but for the JSON's address. On the
-// stage, a file of the code opens on a tab of its own.
+// stage, a file of the code opens on a tab of its own; on the phone, its
+// place is told as text.
 
 import { afterRender, canOpen, chain, esc, goTo, node, parentOf, render, setMap, view, whenStill } from "./canvas.js";
 import { chosenFunction, jump, setTypes } from "./detail.js";
 import { setDrift, show as showDrift } from "./drift.js";
 
 // Where the map's JSON is: on the stage, Cox's own address; elsewhere,
-// as on the phone, beside the page.
+// as on the phone, beside the page, asked with the page's own query,
+// which names the chat whose project it is, as `?kept=<n>`.
 const onStage = location.protocol === "cox:";
 const SOURCE = onStage ? "cox://api/map" : new URL("api/map", location.href).href;
+const QUERY = onStage ? "" : location.search;
 // How often the map is read again: often while an index is made, to
 // draw it once it is, and less often after, for what changed in the code.
 const EVERY = 3000;
@@ -65,8 +68,8 @@ function parsed(hash) {
 const mapAsked = () => parsed(location.hash).map;
 const address = (again) => {
   const name = mapAsked() ?? (again ? told?.name : null);
-  if (!name) return SOURCE;
-  return `${SOURCE}/${again ? "again/" : ""}${encodeURIComponent(name)}`;
+  if (!name) return SOURCE + QUERY;
+  return `${SOURCE}/${again ? "again/" : ""}${encodeURIComponent(name)}${QUERY}`;
 };
 
 // How many times the page asked for the map: only the last ask's answer

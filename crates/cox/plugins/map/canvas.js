@@ -617,9 +617,24 @@ cv.addEventListener(
   { passive: false },
 );
 // A press chooses a box, which lights its lines; its corner's mark, or a
-// second press, opens it. A drag moves the drawing.
+// second press, opens it. A drag moves the drawing; two fingers, as on a
+// phone, move it and pinch it larger or smaller, and choose nothing.
 let drag = null;
+const fingers = new Map();
+let pinch = null;
+// Where two fingers are: how far apart, and the point between them.
+function spread() {
+  const [a, b] = [...fingers.values()];
+  return { d: Math.hypot(a.x - b.x, a.y - b.y) || 1, x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+}
 cv.addEventListener("pointerdown", (e) => {
+  if (e.pointerType === "touch") fingers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  if (fingers.size >= 2) {
+    pinch = spread();
+    drag = null;
+    cv.classList.remove("drag");
+    return;
+  }
   drag = {
     x: e.clientX,
     y: e.clientY,
@@ -631,6 +646,16 @@ cv.addEventListener("pointerdown", (e) => {
   };
 });
 addEventListener("pointermove", (e) => {
+  if (fingers.has(e.pointerId)) fingers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  if (pinch && fingers.size >= 2) {
+    const now = spread();
+    const r = cv.getBoundingClientRect();
+    cam.x += now.x - pinch.x;
+    cam.y += now.y - pinch.y;
+    zoomAt(now.d / pinch.d, now.x - r.left, now.y - r.top);
+    pinch = now;
+    return;
+  }
   if (!drag) return;
   const dx = e.clientX - drag.x;
   const dy = e.clientY - drag.y;
@@ -642,7 +667,18 @@ addEventListener("pointermove", (e) => {
     apply();
   }
 });
-addEventListener("pointerup", () => {
+// A finger lifted, or taken by the browser: a pinch ends with either.
+function lift(e) {
+  fingers.delete(e.pointerId);
+  if (fingers.size < 2) pinch = null;
+}
+addEventListener("pointercancel", (e) => {
+  lift(e);
+  drag = null;
+  cv.classList.remove("drag");
+});
+addEventListener("pointerup", (e) => {
+  lift(e);
   if (drag && drag.moved <= 4 && !anim) {
     if (drag.open) open(drag.open);
     else {
