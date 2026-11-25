@@ -24,34 +24,16 @@ pub(super) fn keep(
     let inside_of = vocabulary.inside_of();
     let mut kept: Vec<(String, Line)> = Vec::new();
     for (opened, level) in levels.iter() {
-        let (above, around) = match inside_of.get(opened.as_str()) {
+        let above = match inside_of.get(opened.as_str()) {
             Some(&parent) => match levels.get(parent) {
-                Some(above) => (&above.lines[..], shown(above, parent, opened)),
+                Some(above) => &above.lines[..],
                 None => continue,
             },
-            None if *opened == vocabulary.top.center => (
-                top_lines,
-                vocabulary
-                    .top
-                    .left
-                    .iter()
-                    .chain(&vocabulary.top.right)
-                    .map(String::as_str)
-                    .collect(),
-            ),
+            None if *opened == vocabulary.top.center => top_lines,
             None => continue,
         };
-        // A level of types grows out of the level above, which it shows
-        // all of around it; a person places what a level of boxes shows.
-        let around = if level.size.is_some() {
-            around
-        } else {
-            level
-                .at
-                .keys()
-                .chain(level.outer.keys())
-                .map(String::as_str)
-                .collect()
+        let Some(around) = around(vocabulary, &inside_of, levels, opened) else {
+            continue;
         };
         let reached = reached(level, opened);
         for line in above {
@@ -77,18 +59,52 @@ pub(super) fn keep(
     }
 }
 
-/// The nodes the level of types inside `opened` shows around it, as it
-/// grows out of `above`, the level inside `parent` that `opened` is in:
-/// those `above` places, but `opened`, and `parent`, whose edge it is.
-fn shown<'l>(above: &'l Level, parent: &str, opened: &str) -> BTreeSet<&'l str> {
-    above
-        .parts
-        .keys()
-        .chain(above.at.keys())
-        .chain(above.outer.keys())
-        .map(String::as_str)
-        .filter(|&id| id != opened && id != parent)
-        .collect()
+/// The nodes the level inside `opened`, of `levels`, shows around it,
+/// where it is inside a level, or is the top's center's; `inside_of` the
+/// node each node a level places is inside of.
+///
+/// A level of types grows out of the level above, which it shows all of
+/// around it, but the box opened and the one whose edge it is; a person
+/// places what a level of boxes shows.
+pub(super) fn around<'l>(
+    vocabulary: &'l Vocabulary,
+    inside_of: &BTreeMap<&str, &str>,
+    levels: &'l BTreeMap<String, Level>,
+    opened: &str,
+) -> Option<BTreeSet<&'l str>> {
+    let level = levels.get(opened)?;
+    if level.size.is_none() {
+        return Some(
+            level
+                .at
+                .keys()
+                .chain(level.outer.keys())
+                .map(String::as_str)
+                .collect(),
+        );
+    }
+    let Some(&parent) = inside_of.get(opened) else {
+        return (opened == vocabulary.top.center).then(|| {
+            vocabulary
+                .top
+                .left
+                .iter()
+                .chain(&vocabulary.top.right)
+                .map(String::as_str)
+                .collect()
+        });
+    };
+    let above = levels.get(parent)?;
+    Some(
+        above
+            .parts
+            .keys()
+            .chain(above.at.keys())
+            .chain(above.outer.keys())
+            .map(String::as_str)
+            .filter(|&id| id != opened && id != parent)
+            .collect(),
+    )
 }
 
 /// The nodes around `level`, the level inside `opened`, that its lines

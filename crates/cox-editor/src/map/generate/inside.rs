@@ -4,6 +4,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use super::code::SymbolId;
+use super::rules::Reach;
 use super::{Map, layout};
 use crate::map::generated::{Level, Line};
 use crate::scip::role;
@@ -31,11 +32,13 @@ impl<'c> Map<'c, '_> {
 
     /// The level inside each box that opens on its types and sits in a
     /// level of the vocabulary: its types, placed, and the lines between
-    /// them and to the boxes around.
+    /// them and to the boxes around; those that `reaches` pick placed
+    /// toward the other end of their lines too.
     pub(super) fn type_levels(
         &self,
         slots: &HashMap<&'c str, (&'c str, [i32; 2])>,
         levels: &BTreeMap<String, Level>,
+        reaches: &[Reach<'_>],
     ) -> Vec<(&'c str, Level)> {
         let owners: BTreeSet<&str> = self.types.iter().map(|ty| ty.owner).collect();
         let mut out = Vec::new();
@@ -69,7 +72,9 @@ impl<'c> Map<'c, '_> {
                     code: self.types[index].kind,
                 })
                 .collect();
-            let (size, parts) = layout::types(&cards, &lines, &around, me);
+            let mut placing = lines.clone();
+            placing.extend(self.reached_types(reaches, owner, &around));
+            let (size, parts) = layout::types(&cards, &placing, &around, me);
             out.push((
                 owner,
                 Level {

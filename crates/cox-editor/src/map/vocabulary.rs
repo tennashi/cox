@@ -31,16 +31,24 @@
 //!       "box": [-360, -260, 800, 520],
 //!       "outer": { "user": ["left", 0] },
 //!       "parts": { "server": [-300, -100], "store": [100, -100] },
-//!       "lines": [{ "from": "user", "to": "server", "both": true }]
+//!       "lines": [{ "from": "user", "to": { "box": "server", "implements": "Handler" } }]
 //!     }
 //!   },
 //!   "agreed": [{ "id": "unowned:app/util", "why": "Helpers every box uses." }]
 //! }
 //! ```
+//!
+//! A line's end at a box may be a rule over the code, which picks the
+//! types inside the box the line goes on to as the box opens: those that
+//! implement a trait or an interface, or subclass a class, or those whose
+//! code uses a name. The names are the code's, and the framework's,
+//! which the person who knows it writes: no type id kept by hand, to go
+//! stale as the code moves.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
+use serde::de::{self, Deserializer};
 use serde::{Deserialize, Serialize};
 
 /// A map's vocabulary, as its file has it.
@@ -131,7 +139,7 @@ pub enum Lines {
 }
 
 /// The top level of the map.
-#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Top {
     /// The node in the middle, the project, which opens on the level
@@ -149,7 +157,7 @@ pub struct Top {
 
 /// A level inside a node, as a person placed it, in the coordinates of
 /// the picture, `y` down.
-#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Level {
     /// Where the node opened sits, as its edge: `[x, y, width, height]`.
@@ -157,15 +165,15 @@ pub struct Level {
     pub area: [i32; 4],
     /// The nodes of the top level around it, by the side they are on and
     /// how far along it, for a level the top level opens on.
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    #[serde(default)]
     pub outer: BTreeMap<String, Outer>,
     /// The nodes of the levels above around it, by where each sits, for
     /// a level further down.
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    #[serde(default)]
     pub at: BTreeMap<String, [i32; 2]>,
     /// The edges of the nodes above that it is inside of, by node, as
     /// `box` is written.
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    #[serde(default)]
     pub frames: BTreeMap<String, [i32; 4]>,
     /// The nodes inside it, by where each sits: `[x, y]`.
     pub parts: BTreeMap<String, [i32; 2]>,
@@ -190,18 +198,155 @@ pub enum Side {
 }
 
 /// A line between two nodes.
-#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+#[serde(try_from = "LineText")]
 pub struct Line {
     pub from: String,
     pub to: String,
     /// Whether it goes both ways, as a request and its answer.
-    #[serde(default)]
     pub both: bool,
     /// The sides of `from` and `to` it leaves and meets, unless the
     /// nearest.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sides: Option<[Side; 2]>,
+    /// The rules its ends at `from` and at `to` are, if they are: what
+    /// it goes on to inside the box there as the box opens.
+    pub rules: [Option<Rule>; 2],
+}
+
+/// Of the types inside a box, those a line to the box goes on to as it
+/// opens, by a rule over the facts every index of the code has, the same
+/// for every language: what a language server tells as a type's
+/// implementations, and as a name's references.
+///
+/// The name is the code's: a type's, or a function's, as it is declared,
+/// and as much of the module it is in, before it, as tells it from
+/// others of its name, as `Render`, `tui/Renderer`, `hono-base.ts/Hono`
+/// or `httpx._transports.base/BaseTransport`, whichever of `/`, `.` and
+/// `:` parts them. rust-analyzer names the trait an `impl` block is of
+/// by its name alone, which the name's last part is matched against.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Rule {
+    /// The types that implement the trait or the interface, or subclass
+    /// the class, of the name: its implementations.
+    Implements(String),
+    /// The types whose code, in their declarations or their functions,
+    /// names it: its references.
+    Uses(String),
+}
+
+impl Rule {
+    /// The name it picks by.
+    #[must_use]
+    pub fn name(&self) -> &str {
+        match self {
+            Rule::Implements(name) | Rule::Uses(name) => name,
+        }
+    }
+}
+
+impl fmt::Display for Rule {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Rule::Implements(name) => write!(f, "implements {name}"),
+            Rule::Uses(name) => write!(f, "uses {name}"),
+        }
+    }
+}
+
+/// A line, as its file has it.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LineText {
+    from: EndText,
+    to: EndText,
+    #[serde(default)]
+    both: bool,
+    #[serde(default)]
+    sides: Option<[Side; 2]>,
+}
+
+/// A line's end, as its file has it: a node's id, or a rule over the
+/// types inside a box, `{"box", "implements"}` or `{"box", "uses"}`.
+enum EndText {
+    Node(String),
+    Rule(RuleText),
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RuleText {
+    #[serde(rename = "box")]
+    node: String,
+    #[serde(default)]
+    implements: Option<String>,
+    #[serde(default)]
+    uses: Option<String>,
+}
+
+impl<'de> Deserialize<'de> for EndText {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct Visitor;
+        impl<'de> de::Visitor<'de> for Visitor {
+            type Value = EndText;
+
+            fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                f.write_str(
+                    "a node's id, or a rule over the types inside a box, \
+                     as `{\"box\": \"app\", \"implements\": \"Handler\"}`",
+                )
+            }
+
+            fn visit_str<E: de::Error>(self, id: &str) -> Result<EndText, E> {
+                Ok(EndText::Node(id.to_owned()))
+            }
+
+            fn visit_map<A: de::MapAccess<'de>>(self, map: A) -> Result<EndText, A::Error> {
+                RuleText::deserialize(de::value::MapAccessDeserializer::new(map)).map(EndText::Rule)
+            }
+        }
+        deserializer.deserialize_any(Visitor)
+    }
+}
+
+impl TryFrom<LineText> for Line {
+    type Error = String;
+
+    fn try_from(text: LineText) -> Result<Self, String> {
+        let mut ends = [String::new(), String::new()];
+        let mut rules = [None, None];
+        for (at, end) in [text.from, text.to].into_iter().enumerate() {
+            match end {
+                EndText::Node(id) => ends[at] = id,
+                EndText::Rule(rule) => {
+                    let names = |name: &str| {
+                        name.split(['/', '.', ':'])
+                            .any(|part| !part.trim().is_empty())
+                    };
+                    rules[at] = Some(match (rule.implements, rule.uses) {
+                        (Some(name), None) if names(&name) => Rule::Implements(name),
+                        (None, Some(name)) if names(&name) => Rule::Uses(name),
+                        (None, None) | (Some(_), Some(_)) => {
+                            return Err(format!(
+                                "the end at `{}` is a rule of one kind: \
+                                 `implements` or `uses`",
+                                rule.node
+                            ));
+                        }
+                        _ => return Err(format!("the end at `{}` names nothing", rule.node)),
+                    });
+                    ends[at] = rule.node;
+                }
+            }
+        }
+        let [from, to] = ends;
+        Ok(Line {
+            from,
+            to,
+            both: text.both,
+            sides: text.sides,
+            rules,
+        })
+    }
 }
 
 /// A drift talked through and left as it is.
@@ -395,14 +540,49 @@ impl Vocabulary {
         problems
     }
 
+    /// Whether the node `id` opens on types, or holds boxes that do, for
+    /// a rule to pick of: a part that owns code and does not stay
+    /// closed, or whose level places one.
+    #[must_use]
+    pub fn shows_types(&self, id: &str) -> bool {
+        self.shows_types_within(id, &mut BTreeSet::new())
+    }
+
+    fn shows_types_within<'v>(&'v self, id: &'v str, seen: &mut BTreeSet<&'v str>) -> bool {
+        let Some(node) = self.nodes.get(id) else {
+            return false;
+        };
+        if node.kind == Kind::Outside || !seen.insert(id) {
+            return false;
+        }
+        (node.owns_code() && node.open)
+            || self.levels.get(id).is_some_and(|level| {
+                level
+                    .parts
+                    .keys()
+                    .any(|part| self.shows_types_within(part, seen))
+            })
+    }
+
     fn check_lines(&self, at: &str, lines: &[Line], problems: &mut Vec<String>) {
         for (index, line) in lines.iter().enumerate() {
             let mut both_generate = true;
-            for end in [&line.from, &line.to] {
-                if self.nodes.contains_key(end) {
-                    both_generate &= self.generates(end);
-                } else {
+            for (end, rule, field) in [
+                (&line.from, &line.rules[0], "from"),
+                (&line.to, &line.rules[1], "to"),
+            ] {
+                if !self.nodes.contains_key(end) {
                     problems.push(format!("{at}[{index}]: no node `{end}`"));
+                    continue;
+                }
+                both_generate &= self.generates(end);
+                if let Some(rule) = rule
+                    && !self.shows_types(end)
+                {
+                    problems.push(format!(
+                        "{at}[{index}].{field}: `{rule}` picks of the types inside `{end}`, \
+                         which shows none: it owns no code, stays closed, or is outside"
+                    ));
                 }
             }
             if both_generate {
@@ -574,6 +754,87 @@ mod tests {
                 "levels.a: `a` is inside itself",
                 "levels.b: `b` is inside itself"
             ]
+        );
+    }
+
+    #[test]
+    fn a_lines_end_at_a_box_may_be_a_rule_over_its_types() {
+        let text = A_VOCABULARY.replace(
+            r#""lines": [{ "from": "window", "to": "server", "both": true, "sides": ["top", "bottom"] }]"#,
+            r#""lines": [{ "from": "user", "to": { "box": "server", "implements": "tui/Renderer" } },
+                         { "from": { "box": "server", "uses": "useState" }, "to": "user", "both": true }]"#,
+        );
+        let vocabulary = Vocabulary::parse(&text).unwrap();
+        let lines = &vocabulary.levels["app"].lines;
+        assert_eq!(
+            (lines[0].from.as_str(), lines[0].to.as_str()),
+            ("user", "server")
+        );
+        assert_eq!(
+            lines[0].rules,
+            [None, Some(Rule::Implements("tui/Renderer".to_owned()))]
+        );
+        assert_eq!(
+            lines[1].rules,
+            [Some(Rule::Uses("useState".to_owned())), None]
+        );
+        assert!(lines[1].both);
+        assert_eq!(
+            lines[1].rules[0].as_ref().unwrap().to_string(),
+            "uses useState"
+        );
+
+        // A rule is of one kind, and names something; its file says where
+        // one is not.
+        for (end, said) in [
+            (
+                r#"{ "box": "server", "implements": "A", "uses": "B" }"#,
+                "the end at `server` is a rule of one kind: `implements` or `uses`",
+            ),
+            (
+                r#"{ "box": "server" }"#,
+                "the end at `server` is a rule of one kind: `implements` or `uses`",
+            ),
+            (
+                r#"{ "box": "server", "implements": " / " }"#,
+                "the end at `server` names nothing",
+            ),
+            (
+                r#"{ "box": "server", "implement": "A" }"#,
+                "unknown field `implement`",
+            ),
+            ("3", "a node's id, or a rule over the types inside a box"),
+        ] {
+            let text = A_VOCABULARY.replace(
+                r#""to": "server", "both""#,
+                &format!(r#""to": {end}, "both""#),
+            );
+            let error = Vocabulary::parse(&text).unwrap_err().to_string();
+            assert!(error.contains(said), "{error}");
+            assert!(error.contains("at line 16 column"), "{error}");
+        }
+
+        // Nor does a rule pick of a node that shows no types: one outside,
+        // or a box that stays closed.
+        let text = A_VOCABULARY.replace(
+            r#""lines": [{ "from": "window", "to": "server", "both": true, "sides": ["top", "bottom"] }]"#,
+            r#""lines": [{ "from": { "box": "user", "uses": "A" }, "to": "server" },
+                         { "from": "user", "to": { "box": "store", "implements": "B" } }]"#,
+        );
+        assert_eq!(
+            Vocabulary::parse(&text).unwrap_err().problems,
+            [
+                "levels.app.lines[0].from: `uses A` picks of the types inside `user`, \
+                 which shows none: it owns no code, stays closed, or is outside",
+                "levels.app.lines[1].to: `implements B` picks of the types inside `store`, \
+                 which shows none: it owns no code, stays closed, or is outside",
+            ]
+        );
+        // A box whose level holds boxes that open shows their types.
+        assert!(
+            Vocabulary::parse(&nested("hand"))
+                .unwrap()
+                .shows_types("group")
         );
     }
 

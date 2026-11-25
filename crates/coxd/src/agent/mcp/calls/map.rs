@@ -64,7 +64,15 @@ meets, unless the nearest. Write only the lines no code backs, as between proces
 people and systems around: those between boxes that own code, or hold boxes that do, come from \
 the code, and writing one is a mistake the map reports. A box opened keeps the lines it has \
 closed: in the level inside it, draw one on from the same node to the part it reaches, or it \
-goes to the box's edge.\n\
+goes to the box's edge. Or write the end at a box as a rule, `{\"box\", \"implements\"}` or \
+`{\"box\", \"uses\"}`, as `{\"from\": \"user\", \"to\": {\"box\": \"window\", \
+\"implements\": \"Render\"}}`, and the line goes on, inside the box, to the types that \
+implement the trait or interface, or subclass the class, or whose code names the type or \
+function: the boxes that hold them, then the types. Write the name as declared, not as \
+imported under another, with as much of its module before it as tells it from others, as \
+`tui/Renderer` or `hono-base.ts/Hono`; rust-analyzer's `impl` blocks name a trait by its last \
+part alone. It sees only indexed code, not what a build or a macro leaves out, and reaches \
+types only, not free functions. A rule that picks nothing is drift.\n\
 - `agreed`: the drift talked through and left as it is, each `{\"id\", \"why\"}`, by the id \
 the map gives it.\n\
 Change the vocabulary as you move the code it claims.";

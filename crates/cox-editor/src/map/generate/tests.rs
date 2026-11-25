@@ -1252,3 +1252,5 @@ fn a_map_generates_from_what_real_indexers_wrote() {
         "Puts an item in the cart."
     );
 }
+
+mod rules;

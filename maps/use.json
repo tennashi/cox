@@ -251,7 +251,7 @@
         "mcp": [140, 150]
       },
       "lines": [
-        { "from": "mac", "to": "win", "both": true },
+        { "from": "mac", "to": { "box": "win", "implements": "Render" }, "both": true },
         { "from": "phone", "to": "phonepage", "both": true },
         { "from": "phonepage", "to": "coxd", "both": true },
         { "from": "win", "to": "coxd", "both": true },

@@ -6,6 +6,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use super::Map;
 use super::code::under;
+use super::rules::Reach;
 use crate::map::generated::{Drift, DriftKind, Level, Site};
 
 /// How often the boxes must use a module no box owns for that to be
@@ -14,15 +15,21 @@ const UNOWNED_AT: usize = 20;
 /// How many places in the code a drift shows.
 const SITES: usize = 3;
 
-/// The drift of `map`, whose levels are `levels`: claims the code no
-/// longer has, boxes with no types of their own, code two boxes share
-/// that no level shows, modules no box owns, and agreements no drift
-/// matches.
-pub(super) fn find(map: &Map<'_, '_>, levels: &BTreeMap<String, Level>) -> Vec<Drift> {
+/// The drift of `map`, whose levels are `levels` and the ends of whose
+/// lines that are rules are `reaches`: claims the code no longer has,
+/// boxes with no types of their own, code two boxes share that no level
+/// shows, modules no box owns, rules that pick no type, and agreements
+/// no drift matches.
+pub(super) fn find(
+    map: &Map<'_, '_>,
+    levels: &BTreeMap<String, Level>,
+    reaches: &[Reach<'_>],
+) -> Vec<Drift> {
     let mut drift = claims(map);
     drift.extend(no_types(map));
     drift.extend(undrawn(map, levels));
     drift.extend(unowned(map));
+    drift.extend(rule_empty(map, reaches));
     let agreed: BTreeMap<&str, &str> = map
         .vocabulary
         .agreed
@@ -45,6 +52,41 @@ pub(super) fn find(map: &Map<'_, '_>, levels: &BTreeMap<String, Level>) -> Vec<D
     }
     for drift in &mut drift {
         drift.agreed = agreed.get(drift.id.as_str()).map(|&why| why.to_owned());
+    }
+    drift
+}
+
+/// The lines whose end at a box is a rule that picks none of the types
+/// inside it: the code it names moved or went, or the rule never held.
+/// One for each line, by its ends.
+fn rule_empty(map: &Map<'_, '_>, reaches: &[Reach<'_>]) -> Vec<Drift> {
+    let mut drift: Vec<Drift> = Vec::new();
+    for reach in reaches.iter().filter(|reach| reach.picked.is_empty()) {
+        let line = reach.line;
+        let id = format!("rule-empty:{}|{}", line.from, line.to);
+        let node = reach.node();
+        let text = format!(
+            "No type inside {} {}, for the line from {} to {} to go on to",
+            name(map, node),
+            reach.rule,
+            name(map, &line.from),
+            name(map, &line.to)
+        );
+        match drift.iter_mut().find(|drift| drift.id == id) {
+            Some(drift) => {
+                drift.nodes.push(node.to_owned());
+                drift.text = format!("{}; {text}", drift.text);
+            }
+            None => drift.push(Drift {
+                id,
+                kind: DriftKind::RuleEmpty,
+                nodes: vec![node.to_owned()],
+                text,
+                count: None,
+                at: Vec::new(),
+                agreed: None,
+            }),
+        }
     }
     drift
 }
