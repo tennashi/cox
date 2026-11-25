@@ -159,7 +159,8 @@ fn no_types(map: &Map<'_, '_>) -> Vec<Drift> {
 }
 
 /// The boxes whose code meets, whose lines come from the code, but that
-/// no level shows a line between, the most often meeting first.
+/// no level shows a line between, nor between boxes they are inside of,
+/// which stand for them, the most often meeting first.
 fn undrawn(map: &Map<'_, '_>, levels: &BTreeMap<String, Level>) -> Vec<Drift> {
     let vocabulary = map.vocabulary;
     let ends = |from: &str, to: &str| {
@@ -181,17 +182,17 @@ fn undrawn(map: &Map<'_, '_>, levels: &BTreeMap<String, Level>) -> Vec<Drift> {
                 .map(|line| ends(&line.from, &line.to)),
         )
         .collect();
-    let generates = |id: &str| {
-        vocabulary
-            .nodes
-            .get(id)
-            .is_some_and(crate::map::vocabulary::Node::generates_lines)
+    let shown = |a: &str, b: &str| {
+        let around = map.and_around(b);
+        map.and_around(a)
+            .iter()
+            .any(|x| around.iter().any(|y| x != y && drawn.contains(&ends(x, y))))
     };
     let mut edges: Vec<(&(&str, &str), &usize)> = map
         .edges
         .iter()
-        .filter(|((a, b), _)| generates(a) && generates(b))
-        .filter(|((a, b), _)| !drawn.contains(&((*a).to_owned(), (*b).to_owned())))
+        .filter(|((a, b), _)| vocabulary.generates(a) && vocabulary.generates(b))
+        .filter(|((a, b), _)| !shown(a, b))
         .collect();
     edges.sort_by(|x, y| y.1.cmp(x.1).then(x.0.cmp(y.0)));
     edges

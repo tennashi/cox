@@ -98,7 +98,7 @@ impl<'c> Map<'c, '_> {
     /// The lines inside the box `owner`: between two of its `types` where
     /// a field of one names the other, once for both ways; and to each box
     /// `around`, from the type whose fields name it most, and to the type
-    /// it uses most.
+    /// it uses most, a box around standing for the boxes inside it.
     pub(super) fn type_lines(
         &self,
         owner: &str,
@@ -127,8 +127,9 @@ impl<'c> Map<'c, '_> {
                     Some(other) => Some(self.types[self.type_ids[&other]].owner),
                     None => self.box_of_symbol(id),
                 };
-                if let Some(other) =
-                    other.filter(|&other| other != owner && around.contains_key(other))
+                if let Some(other) = other
+                    .and_then(|other| self.shown_as(other, |at| around.contains_key(at)))
+                    .filter(|&other| other != owner)
                 {
                     *out.entry((other, ty.id.as_str())).or_default() += 1;
                 }
@@ -147,9 +148,11 @@ impl<'c> Map<'c, '_> {
                             .get(node)
                             .map_or(node, |&other| self.types[other].owner)
                     });
-                    if let Some(other) = other.filter(|&other| {
-                        !found.test && other != owner && around.contains_key(other)
-                    }) {
+                    if let Some(other) = other
+                        .filter(|_| !found.test)
+                        .and_then(|other| self.shown_as(other, |at| around.contains_key(at)))
+                        .filter(|&other| other != owner)
+                    {
                         *into.entry((other, ty.id.as_str())).or_default() += 1;
                     }
                 }

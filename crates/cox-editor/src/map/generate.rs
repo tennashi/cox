@@ -11,7 +11,8 @@
 //! - how often each two boxes' code meets, outside tests and imports,
 //!   which gives the lines between the boxes whose lines come from the
 //!   code, thicker the more it meets, each box's two heaviest drawn and
-//!   the rest only while one end is chosen;
+//!   the rest only while one end is chosen, a box drawn closed standing
+//!   for the boxes inside it;
 //! - inside each box that opens, a line between two of its types where
 //!   a field of one names the other, and one to each box around, from
 //!   the type that names it most, or that it names most;
@@ -144,6 +145,8 @@ struct Map<'c, 'a> {
     files_from: &'c str,
     /// The box that owns each module the code has, if one does.
     module_boxes: HashMap<&'c str, Option<&'c str>>,
+    /// The node each node a level places is inside of.
+    inside_of: BTreeMap<&'c str, &'c str>,
     types: Vec<TypeRec<'c>>,
     type_ids: HashMap<String, usize>,
     type_symbols: HashMap<SymbolId, usize>,
@@ -185,6 +188,7 @@ impl<'c, 'a> Map<'c, 'a> {
             file_claims,
             files_from,
             module_boxes: HashMap::new(),
+            inside_of: vocabulary.inside_of(),
             types: Vec::new(),
             type_ids: HashMap::new(),
             type_symbols: HashMap::new(),
@@ -268,6 +272,45 @@ impl<'c, 'a> Map<'c, 'a> {
     fn node(&self, id: &str) -> &'c vocabulary::Node {
         let vocabulary: &'c Vocabulary = self.vocabulary;
         &vocabulary.nodes[id]
+    }
+
+    /// The box drawn for the box `id` where those `shown` are: itself,
+    /// if it is shown, or else the nearest box it is inside of that is,
+    /// which stands for it there; none when a box on the way, itself
+    /// first, keeps its lines by hand, whose lines stand for all of it.
+    fn shown_as<'s>(&self, id: &'s str, shown: impl Fn(&str) -> bool) -> Option<&'s str>
+    where
+        'c: 's,
+    {
+        self.and_around(id).into_iter().find_map(|at| {
+            if shown(at) {
+                Some(Some(at))
+            } else if self
+                .vocabulary
+                .nodes
+                .get(at)
+                .is_some_and(|node| node.lines == vocabulary::Lines::Hand)
+            {
+                Some(None)
+            } else {
+                None
+            }
+        })?
+    }
+
+    /// `id`, and the nodes it is inside of, from the nearest out.
+    fn and_around<'s>(&self, id: &'s str) -> Vec<&'s str>
+    where
+        'c: 's,
+    {
+        let mut chain = vec![id];
+        while let Some(&outer) = chain.last().and_then(|at| self.inside_of.get(at)) {
+            if chain.contains(&outer) {
+                break;
+            }
+            chain.push(outer);
+        }
+        chain
     }
 
     /// The innermost of `spans` around `line`: the shortest, then the
@@ -393,6 +436,8 @@ impl<'c, 'a> Map<'c, 'a> {
     fn into_generated(mut self) -> Generated {
         let placed = layout::place(&self);
         let mut levels = placed.levels;
+        let mut edges = self.edges.clone();
+        edges.extend(placed.standing);
         let mut nodes: BTreeMap<String, Node> = self
             .vocabulary
             .nodes
@@ -441,8 +486,7 @@ impl<'c, 'a> Map<'c, 'a> {
             },
             levels,
             types,
-            edges: self
-                .edges
+            edges: edges
                 .iter()
                 .map(|(&(a, b), &count)| Edge {
                     a: a.to_owned(),

@@ -19,7 +19,7 @@
       "open": false
     },
     "helper": { "name": "Chromium helper", "icon": "layers", "code": "cox-helper" },
-    "coxd": { "name": "coxd", "icon": "cycle", "code": "cox --daemon" },
+    "coxd": { "name": "coxd", "icon": "cycle", "code": "cox --daemon", "lines": "hand" },
     "mcp": { "name": "MCP bridge", "icon": "plug", "code": "cox --mcp" },
     "phonepage": { "name": "PWA app", "icon": "phone", "code": "the phone's browser" },
     "reader": {
