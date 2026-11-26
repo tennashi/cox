@@ -141,10 +141,11 @@ function wiresOf(f, shown, mark) {
   for (const g of chain(f)) wires = wires.filter(([x, y]) => x !== g && y !== g).concat(levels[g].wires);
   return wires.filter(([x, y]) => x in shown && y in shown).filter(showWeak(mark));
 }
-// A level laid out, with its lines and the cards lit in it.
-function laid(f, r, box, frames, parts) {
+// A level laid out, with its lines and the cards lit in it, and the
+// nodes it places at the `edge` of its box.
+function laid(f, r, box, frames, parts, edge = []) {
   const mark = marked(r, f);
-  return { id: f, r, box, frames, mark, wires: wiresOf(f, { ...r, ...frames }, mark), parts };
+  return { id: f, r, box, frames, mark, wires: wiresOf(f, { ...r, ...frames }, mark), parts, edge };
 }
 
 /// The level inside `f`, or the top for "root", laid out: where each node
@@ -221,6 +222,7 @@ export function geo(f) {
     box,
     frames,
     d.parts.map((p) => p[0]),
+    d.outer.map((o) => o[0]),
   );
 }
 
@@ -236,7 +238,10 @@ const outline = (rects) => ({
 const within = (g) => new Set(g.box ? [...g.parts, g.id] : g.parts);
 
 // All of it, when it fits readably; when it does not, the open box and
-// what its lines reach, the rest drawn past the edges still.
+// what its lines reach, no farther from the box than a card's width or
+// what the level places at its edge: a level that keeps all of the level
+// above around its box has lines to the far ends of it, and fitting
+// those leaves the box small. The rest is drawn past the edges still.
 function bounds(g) {
   const all = outline([...Object.values(g.r), ...Object.values(g.frames)]);
   const k = Math.min(cv.clientWidth / (all.x1 - all.x0), cv.clientHeight / (all.y1 - all.y0));
@@ -247,7 +252,15 @@ function bounds(g) {
     if (parts.has(x)) near.add(y);
     if (parts.has(y)) near.add(x);
   });
-  return outline([g.box, ...[...near].filter((id) => g.r[id]).map((id) => g.r[id])]);
+  const reached = outline([g.box, ...[...near].filter((id) => g.r[id]).map((id) => g.r[id])]);
+  const grown = R(g.box.x - IW, g.box.y - IW, g.box.w + 2 * IW, g.box.h + 2 * IW);
+  const close = outline([grown, ...g.edge.map((id) => g.r[id])]);
+  return {
+    x0: Math.max(reached.x0, close.x0),
+    x1: Math.min(reached.x1, close.x1),
+    y0: Math.max(reached.y0, close.y0),
+    y1: Math.min(reached.y1, close.y1),
+  };
 }
 
 const middle = (r) => ({ x: r.x + r.w / 2, y: r.y + r.h / 2 });
