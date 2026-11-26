@@ -48,6 +48,8 @@ export const ICON = {
     '<path d="M6.5 3.5h7l4 4v13h-11z"/><path d="M13.5 3.5v4h4M9 12h6M9 15.5h6"/>',
   drill:
     '<path d="M14 4h6v6M10 20H4v-6M20 4l-6 6M4 20l6-6"/>',
+  shrink:
+    '<path d="M14 4v6h6M10 20v-6H4M20 4l-6 6M4 20l6-6"/>',
   server:
     '<rect x="4" y="4" width="16" height="7" rx="1.6"/><rect x="4" y="13" width="16" height="7" rx="1.6"/><path d="M7.5 7.5h.01M7.5 16.5h.01"/>',
   clock:
