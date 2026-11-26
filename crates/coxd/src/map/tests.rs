@@ -591,6 +591,52 @@ fn how_a_map_stands_is_told_as_json() {
 }
 
 #[test]
+fn a_page_that_has_the_map_is_told_the_rest_alone() {
+    let fake = Fake::new();
+    let root = TempDir::new();
+    repository(&root);
+    let mut told = fake.settled(&root);
+    let full = told.json();
+    let json: serde_json::Value = serde_json::from_str(&full).unwrap();
+    let tag = json["tag"].as_str().unwrap().to_owned();
+    assert_eq!(tag.len(), 16);
+    assert_eq!(super::since(&full, None), full);
+    assert_eq!(super::since(&full, Some("0123456789abcdef")), full);
+
+    // What changed in the code changes; the map does not.
+    told.changed.insert(
+        "shop".to_owned(),
+        super::Changed {
+            files: 1,
+            added: 2,
+            removed: 3,
+        },
+    );
+    let again = told.json();
+    let rest = super::since(&again, Some(&tag));
+    assert!(rest.len() < again.len() / 2, "{rest}");
+    let rest: serde_json::Value = serde_json::from_str(&rest).unwrap();
+    assert_eq!(rest["tag"], tag.as_str());
+    assert_eq!(rest["map"], serde_json::Value::Null);
+    assert_eq!(rest["changed"]["shop"]["added"], 2);
+    assert_eq!(rest["state"], "ready");
+    assert_eq!(rest["indexes"][0]["state"], "ready");
+
+    // A map that changed is told whole, with its new tag.
+    told.map.as_mut().unwrap().types.clear();
+    let other = told.json();
+    assert_eq!(super::since(&other, Some(&tag)), other);
+    let other: serde_json::Value = serde_json::from_str(&other).unwrap();
+    assert_ne!(other["tag"], tag.as_str());
+
+    // No map, no tag: all of it.
+    told.map = None;
+    let none = told.json();
+    assert_eq!(super::since(&none, Some(&tag)), none);
+    assert!(!none.contains("\"tag\""));
+}
+
+#[test]
 fn two_indexes_of_one_commit_made_at_once_keep_apart() {
     let fake = Fake::with(|indexer| Indexer {
         borrows: Some(("deps".to_owned(), "deps is not installed".to_owned())),

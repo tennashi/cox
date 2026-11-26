@@ -33,6 +33,7 @@ pub mod index;
 pub mod indexers;
 mod jobs;
 
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -43,6 +44,7 @@ use cox_editor::map::vocabulary::Vocabulary;
 use cox_editor::map::{self as maps, Named};
 use cox_editor::scip::Index;
 use serde::Serialize;
+use sha2::{Digest as _, Sha256};
 
 use self::cache::{Cache, Key};
 use self::index::Code;
@@ -112,7 +114,9 @@ pub struct Told {
     pub indexes: Vec<Indexed>,
     /// The map, from its vocabulary and the indexes there are, with no
     /// drift unless every language's code is in it; none when the
-    /// vocabulary does not read.
+    /// vocabulary does not read. Its JSON goes last, after its tag (see
+    /// [`Told::json`]).
+    #[serde(skip)]
     pub map: Option<Generated>,
     /// What changed in the code of the map's nodes, by id, as the
     /// Changes tab shows each repository's changes: of a box, in the
@@ -784,13 +788,52 @@ impl State {
 }
 
 impl Told {
-    /// It as JSON, for a page.
+    /// It as JSON, for a page: the map last, as `"map"`, after its tag, as
+    /// `"tag"`, which a page that has the map already gives back to be
+    /// told the rest alone (see [`since`]).
     #[must_use]
     pub fn json(&self) -> String {
-        serde_json::to_string(self).unwrap_or_else(|error| {
+        let failed = |error: serde_json::Error| {
             serde_json::json!({ "state": "invalid", "problems": [error.to_string()] }).to_string()
-        })
+        };
+        let head = match serde_json::to_string(self) {
+            Ok(head) => head,
+            Err(error) => return failed(error),
+        };
+        let Some(map) = &self.map else {
+            return head;
+        };
+        let map = match serde_json::to_string(map) {
+            Ok(map) => map,
+            Err(error) => return failed(error),
+        };
+        let sum = format!("{:x}", Sha256::digest(&map));
+        let tag = &sum[..16];
+        // The head is an object of the fields above, never empty.
+        let fields = head.strip_suffix('}').unwrap_or(&head);
+        format!("{fields}{TAG}{tag}\",\"map\":{map}}}")
     }
+}
+
+/// What starts a map's tag in [`Told::json`], after the other fields:
+/// no field before it names `tag`, and no string holds `"` unescaped.
+const TAG: &str = ",\"tag\":\"";
+
+/// What a page that has the map tagged `seen` is told of `json`, as
+/// [`Told::json`] writes it: the rest alone, with the tag but not the
+/// map, when the map is the same, so that a page that reads the map
+/// every few seconds is not sent megabytes of it again each time, as
+/// what changed in the code changes; else all of it.
+#[must_use]
+pub fn since<'a>(json: &'a str, seen: Option<&str>) -> Cow<'a, str> {
+    let Some(at) = json.find(TAG) else {
+        return Cow::Borrowed(json);
+    };
+    let tag = json[at + TAG.len()..].split('"').next().unwrap_or_default();
+    if tag.is_empty() || Some(tag) != seen {
+        return Cow::Borrowed(json);
+    }
+    Cow::Owned(format!("{}{TAG}{tag}\"}}", &json[..at]))
 }
 
 #[cfg(test)]
