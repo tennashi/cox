@@ -7,21 +7,21 @@
    "code": "cox, coxd"
   },
   "human": {
-   "name": "Human",
+   "name": "Person at a Mac",
    "icon": "person",
    "kind": "outside"
   },
   "debugger": {
-   "name": "Agent that debugs Cox",
+   "name": "Debugging agent",
    "icon": "agent",
    "kind": "outside",
-   "code": "a terminal agent, or a chat of another Cox"
+   "code": "a terminal agent, or another Cox"
   },
   "phone": {
-   "name": "Human's phone",
+   "name": "Person's phone",
    "icon": "phone",
    "kind": "outside",
-   "code": "a browser, with the page coxd serves"
+   "code": "a browser, on coxd's page"
   },
   "tailscale": {
    "name": "Tailnet",
@@ -44,7 +44,7 @@
    "code": "chrome-devtools-mcp"
   },
   "codetools": {
-   "name": "Language servers and indexers",
+   "name": "Language tools",
    "icon": "braces",
    "kind": "outside",
    "code": "LSP servers, rust-analyzer scip"
@@ -65,19 +65,19 @@
    "name": "macOS",
    "icon": "gear",
    "kind": "outside",
-   "code": "launchd, ScreenCaptureKit, notifications, trash"
+   "code": "launchd, screen capture, trash"
   },
   "web": {
    "name": "The web",
    "icon": "globe",
    "kind": "outside",
-   "code": "pages read, ACP Registry, downloads, Web Push"
+   "code": "pages, ACP Registry, Web Push"
   },
   "folders": {
-   "name": "Project folders and wiki",
+   "name": "Project folders",
    "icon": "folder",
    "kind": "outside",
-   "code": "the human's files"
+   "code": "the person's files, and their wiki"
   },
   "window": {
    "name": "Window",
@@ -140,9 +140,9 @@
    "lines": "hand"
   },
   "groundwork": {
-   "name": "Shared groundwork",
+   "name": "Groundwork",
    "icon": "layers",
-   "code": "coxd: logs, paths, processes, … (linked into the window too)",
+   "code": "coxd: logs, paths, processes",
    "claims": [
     "coxd/scratch",
     "coxd/trash",
@@ -153,30 +153,10 @@
     "coxd/process",
     "coxd/diagram",
     "coxd/media",
-    "coxd/project_icon",
-    "coxd"
-   ]
-  },
-  "devtools": {
-   "name": "Stand-ins, tests and build tasks",
-   "icon": "run",
-   "open": false,
-   "code": "xtask, cox-fake-agent, cox-fake-emulator, tests",
-   "claims": [
-    "xtask",
-    "cox-fake-agent",
-    "coxd/testing"
+    "coxd/project_icon"
    ],
    "files": [
-    "crates/cox-android/src/bin",
-    "crates/cox/tests",
-    "crates/coxd/tests",
-    "crates/cox-acp/tests",
-    "crates/cox-android/tests",
-    "crates/cox-fake-agent/tests",
-    "crates/cox/build.rs",
-    "crates/coxd/build.rs",
-    "crates/cox-android/build.rs"
+    "crates/coxd/src/lib.rs"
    ]
   },
   "main": {
@@ -226,16 +206,19 @@
    ]
   },
   "startup": {
-   "name": "Start and restart",
+   "name": "Startup",
    "icon": "run",
    "claims": [
-    "cox",
     "cox/app",
     "cox/restart",
     "cox/login_item",
     "cox/notices",
     "cox/busy",
     "cox/hang"
+   ],
+   "files": [
+    "crates/cox/src/lib.rs",
+    "crates/cox/src/main.rs"
    ]
   },
   "daemonlink": {
@@ -308,7 +291,18 @@
     "cox/stage/devices",
     "cox/stage/mirror",
     "cox/stage/asked/android",
-    "cox-android"
+    "cox-android/adb",
+    "cox-android/avd",
+    "cox-android/device",
+    "cox-android/proto",
+    "cox-android/running",
+    "cox-android/scratch",
+    "cox-android/sdk",
+    "cox-android/settle",
+    "cox-android/ui"
+   ],
+   "files": [
+    "crates/cox-android/src/lib.rs"
    ]
   },
   "plugins": {
@@ -322,7 +316,7 @@
    ]
   },
   "server": {
-   "name": "Window and phone server",
+   "name": "Window and phone",
    "icon": "socket",
    "code": "coxd/daemon"
   },
@@ -350,7 +344,7 @@
    "code": "coxd/agent, coxd/agents, cox-acp"
   },
   "tools": {
-   "name": "Cox's tools for agents",
+   "name": "Tools for agents",
    "icon": "plug",
    "claims": [
     "coxd/agent/mcp"
@@ -364,7 +358,7 @@
    ]
   },
   "triggers": {
-   "name": "Triggers and schedules",
+   "name": "Triggers",
    "icon": "clock",
    "claims": [
     "coxd/trigger",
@@ -385,7 +379,7 @@
    ]
   },
   "repos": {
-   "name": "Repositories and pull requests",
+   "name": "Repos and PRs",
    "icon": "branch",
    "claims": [
     "coxd/repositories",
@@ -398,7 +392,7 @@
   "store": {
    "name": "Data store",
    "icon": "store",
-   "code": "cox-core, and the files of the data folder",
+   "code": "cox-core, and the data folder",
    "lines": "hand"
   },
   "keytable": {
@@ -409,7 +403,7 @@
    ]
   },
   "motions": {
-   "name": "Cursor and search",
+   "name": "Cursor, search",
    "icon": "search",
    "claims": [
     "cox/vim/cursor",
@@ -452,7 +446,7 @@
    ]
   },
   "markdown": {
-   "name": "Replies as Markdown",
+   "name": "Markdown text",
    "icon": "doc",
    "claims": [
     "cox/ui/markdown",
@@ -462,7 +456,7 @@
    ]
   },
   "look": {
-   "name": "Buttons, menus and icons",
+   "name": "Buttons, menus",
    "icon": "box",
    "claims": [
     "cox/ui",
@@ -491,7 +485,7 @@
    "code": "cox-browser (CEF)"
   },
   "pageinput": {
-   "name": "Mouse and keys to pages",
+   "name": "Page input",
    "icon": "run",
    "claims": [
     "cox-browser/events",
@@ -516,14 +510,14 @@
    "many": true
   },
   "convview": {
-   "name": "Conversation view",
+   "name": "Chat view",
    "icon": "chat",
    "claims": [
     "cox/chat/view"
    ]
   },
   "chatstart": {
-   "name": "Chat start and hand-offs",
+   "name": "Chat launcher",
    "icon": "run",
    "claims": [
     "cox/chat",
@@ -552,7 +546,7 @@
    ]
   },
   "lsp": {
-   "name": "Language server client",
+   "name": "LSP client",
    "icon": "braces",
    "claims": [
     "cox/stage/servers",
@@ -590,7 +584,7 @@
    "many": true
   },
   "conv": {
-   "name": "Conversation state",
+   "name": "Chat state",
    "icon": "doc",
    "claims": [
     "coxd/chat/conversation",
@@ -619,10 +613,11 @@
   "acp": {
    "name": "ACP client",
    "icon": "plug",
-   "claims": [
-    "cox-acp"
+   "many": true,
+   "files": [
+    "crates/cox-acp/src/lib.rs"
    ],
-   "many": true
+   "code": "cox-acp"
   },
   "agentsetup": {
    "name": "Agent setup",
@@ -672,7 +667,7 @@
    ]
   },
   "entries": {
-   "name": "Conversation entries",
+   "name": "Chat entries",
    "icon": "chat",
    "claims": [
     "cox-core/entry",
@@ -680,7 +675,7 @@
    ]
   },
   "sqlite": {
-   "name": "Projects and chats",
+   "name": "Projects, chats",
    "icon": "store",
    "claims": [
     "cox-core",
@@ -702,7 +697,7 @@
    "claims": [
     "cox/ui/input/draft"
    ],
-   "code": "cox/ui/input/draft (with Vim's normal mode)"
+   "code": "with Vim's normal mode"
   },
   "modes": {
    "name": "Modes",
@@ -719,7 +714,7 @@
    ]
   },
   "acpextras": {
-   "name": "Questions, usage, compaction",
+   "name": "ACP extensions",
    "icon": "chat",
    "claims": [
     "cox-acp/question",
@@ -889,39 +884,35 @@
    "parts": {
     "inspectclient": [
      60,
-     140
-    ],
-    "waiting": [
-     360,
-     100
+     280
     ],
     "window": [
-     360,
-     320
-    ],
-    "helpers": [
-     360,
-     540
+     380,
+     280
     ],
     "daemon": [
-     720,
-     320
+     700,
+     280
     ],
     "bridge": [
      1020,
-     140
+     280
+    ],
+    "waiting": [
+     60,
+     480
+    ],
+    "helpers": [
+     380,
+     480
+    ],
+    "store": [
+     700,
+     480
     ],
     "pagereader": [
      1020,
-     540
-    ],
-    "devtools": [
-     1020,
-     690
-    ],
-    "store": [
-     720,
-     540
+     480
     ]
    },
    "lines": [
@@ -1064,8 +1055,8 @@
    "box": [
     0,
     0,
-    1300,
-    600
+    1340,
+    620
    ],
    "parts": {
     "main": [
@@ -1073,26 +1064,10 @@
      80
     ],
     "chatview": [
-     60,
-     280
-    ],
-    "inspector": [
-     60,
-     480
-    ],
-    "settingsview": [
      380,
      80
     ],
-    "vim": [
-     380,
-     280
-    ],
-    "widgets": [
-     380,
-     480
-    ],
-    "startup": [
+    "stage": [
      700,
      80
     ],
@@ -1100,12 +1075,28 @@
      1020,
      80
     ],
-    "stage": [
-     1020,
+    "inspector": [
+     60,
+     280
+    ],
+    "settingsview": [
+     380,
      280
     ],
     "browser": [
+     700,
+     280
+    ],
+    "startup": [
      1020,
+     280
+    ],
+    "vim": [
+     60,
+     480
+    ],
+    "widgets": [
+     380,
      480
     ]
    },
@@ -1181,52 +1172,52 @@
    "box": [
     0,
     0,
-    980,
-    710
+    1020,
+    730
    ],
    "parts": {
     "tabs": [
      60,
      80
     ],
+    "pages": [
+     380,
+     80
+    ],
+    "lsp": [
+     700,
+     80
+    ],
     "plugins": [
      60,
+     250
+    ],
+    "codeview": [
+     380,
+     250
+    ],
+    "changes": [
+     700,
      250
     ],
     "terminals": [
      60,
      420
     ],
-    "activity": [
-     60,
-     590
-    ],
-    "pages": [
-     380,
-     80
-    ],
-    "codeview": [
-     380,
-     250
-    ],
     "editorcore": [
      380,
      420
-    ],
-    "lsp": [
-     700,
-     80
-    ],
-    "changes": [
-     700,
-     250
     ],
     "mirrors": [
      700,
      420
     ],
+    "activity": [
+     60,
+     590
+    ],
     "macwin": [
-     700,
+     380,
      590
     ]
    },
@@ -1262,8 +1253,8 @@
    "box": [
     0,
     0,
-    1300,
-    600
+    1340,
+    420
    ],
    "parts": {
     "server": [
@@ -1272,27 +1263,27 @@
     ],
     "chats": [
      380,
-     280
-    ],
-    "groundwork": [
-     60,
-     480
+     80
     ],
     "agentlink": [
-     1020,
+     700,
      80
     ],
     "maps": [
      1020,
-     480
+     80
+    ],
+    "groundwork": [
+     60,
+     280
     ],
     "repos": [
      380,
-     480
+     280
     ],
     "translation": [
      700,
-     480
+     280
     ]
    },
    "lines": [
