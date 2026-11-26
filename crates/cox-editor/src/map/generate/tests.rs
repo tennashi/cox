@@ -586,16 +586,77 @@ fn a_box_that_keeps_its_lines_by_hand_keeps_those_of_the_boxes_inside_it() {
     assert_eq!(map.levels["app"].lines, []);
     assert_eq!(line_ends(&map, "group")[0].1, "store");
     assert_eq!(open_drift(&map), Vec::<&str>::new());
-    // With the server nowhere around the store, only a line a person
-    // draws to the group stands for the code inside it.
+    // Where the group's level places none around it, the map places the
+    // server there, and the code gives the line all the same.
     let map = generated(&grouped("hand", "", ""), &app());
-    assert_eq!(open_drift(&map), ["undrawn:server|store"]);
+    assert_eq!(line_ends(&map, "group")[0].1, "store");
+    assert_eq!(open_drift(&map), Vec::<&str>::new());
     let map = generated(
         &grouped("hand", r#"{ "from": "server", "to": "group" }"#, ""),
         &app(),
     );
     assert_eq!(map.levels["app"].lines.len(), 1);
     assert_eq!(open_drift(&map), Vec::<&str>::new());
+}
+
+/// The ends of the lines of `map`'s levels that a person placed which
+/// the level shows nowhere, as its level and the end: the page has
+/// nowhere to draw such a line to.
+fn ends_nowhere(map: &Generated) -> Vec<(&str, &str)> {
+    let mut nowhere = Vec::new();
+    for (opened, level) in map.levels.iter().filter(|(_, level)| level.area.is_some()) {
+        for end in level.lines.iter().flat_map(|line| [&line.from, &line.to]) {
+            if end != opened
+                && !level.parts.contains_key(end)
+                && !level.at.contains_key(end)
+                && !level.outer.contains_key(end)
+                && !level.frames.contains_key(end)
+            {
+                nowhere.push((opened.as_str(), end.as_str()));
+            }
+        }
+    }
+    nowhere
+}
+
+#[test]
+fn a_level_shows_around_its_box_what_its_lines_reach_that_no_one_placed() {
+    let project = app();
+    // The group's level places none around it: the code's line from the
+    // server, beside the group in the level above, still goes to the
+    // store, and the server sits left of the group's box, as it does of
+    // the group there.
+    let map = generated(&grouped("generated", "", ""), &project);
+    let level = &map.levels["group"];
+    assert_eq!(line_ways(&map, "group"), [("server", "store", false)]);
+    let [x, y] = level.at["server"];
+    assert!(x + 216 <= 0, "{x}");
+    assert!((0..500).contains(&y), "{y}");
+    // Inside the store, its type's line goes on to the server.
+    assert_eq!(
+        line_ways(&map, "store"),
+        [("server", "app/store/Store", false)]
+    );
+    assert_eq!(ends_nowhere(&map), []);
+
+    // So does an end of a line a person drew: the admin, on the left of
+    // the top, sits left of the box, clear of the server.
+    let to_store = r#"{ "from": "admin", "to": "store" }"#;
+    let map = generated(&people("", "", to_store), &project);
+    let level = &map.levels["group"];
+    let (admin, server) = (level.at["admin"], level.at["server"]);
+    assert!(admin[0] + 248 <= 0, "{admin:?}");
+    assert!((admin[1] - server[1]).abs() >= 60, "{admin:?} {server:?}");
+    assert_eq!(ends_nowhere(&map), []);
+
+    // Where a person places the server, they say what the level shows
+    // around it: the code's lines go to the server alone, and the admin,
+    // which their line still reaches, sits past where they placed it.
+    let map = generated(&people("", r#""server": [-300, 0]"#, to_store), &project);
+    let level = &map.levels["group"];
+    assert_eq!(level.at["server"], [-300, 0]);
+    assert!(level.at["admin"][0] + 248 <= -300, "{:?}", level.at);
+    assert_eq!(ends_nowhere(&map), []);
 }
 
 /// [`app`]'s server, and its store in a box of its own, `group`, which

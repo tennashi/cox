@@ -53,7 +53,9 @@ picture, `y` down: `{\"box\": [x, y, width, height], \"outer\": {id: [side, alon
 {id: [x, y]}, \"frames\": {id: [x, y, width, height]}, \"parts\": {id: [x, y]}, \"lines\"}`. \
 `box` is where the node opened sits; `outer` places the top's nodes around a level the top \
 opens on, by the side of `box` (`left`, `right`, `top` or `bottom`) and how far along it; `at` \
-places the nodes of the levels above around a level further down; `frames` are the edges of \
+places the nodes of the levels above around a level further down, those the code's lines go \
+on to: leave it out, and Cox places around `box` every box above that the code of the parts \
+meets, as it does any end of the level's lines placed nowhere in it; `frames` are the edges of \
 the nodes above that it is inside of; `parts` are the boxes inside it, each 216 by 56. Inside a \
 box that owns code, Cox lays out its types. A box with too many types to read on one level \
 owns no code itself, and opens on a level of boxes that own it; drawn closed, it stands for \

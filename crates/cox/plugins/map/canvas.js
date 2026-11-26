@@ -126,10 +126,13 @@ function size(id) {
 // it; the other lines stay. A weak line shows only while one of its ends
 // is chosen or pointed at.
 const showWeak = (e) => !e[4] || [e[0], e[1]].some((n) => n === view.sel || view.mark.has(n));
-function wiresOf(f) {
+// A level a person placed shows, of the levels above, only what it
+// places around its box, so of their lines only those between what
+// `shown` there, by id.
+function wiresOf(f, shown) {
   let wires = top.wires;
   for (const g of chain(f)) wires = wires.filter(([x, y]) => x !== g && y !== g).concat(levels[g].wires);
-  return wires.filter(showWeak);
+  return wires.filter(([x, y]) => x in shown && y in shown).filter(showWeak);
 }
 
 /// The level inside `f`, or the top for "root", laid out: where each node
@@ -173,7 +176,7 @@ export function geo(f) {
     frames[parentOf(f)] = grown(above.box);
     for (const [id, x, y] of d.parts) r[id] = R(box.x + x, box.y + y, ...size(id));
     r[f] = box;
-    return { id: f, r, box, frames, wires: wiresOf(f), parts: d.parts.map((p) => p[0]) };
+    return { id: f, r, box, frames, wires: wiresOf(f, { ...r, ...frames }), parts: d.parts.map((p) => p[0]) };
   }
   const [bx, by, bw, bh] = d.box;
   const box = R(bx, by, bw, bh);
@@ -193,7 +196,7 @@ export function geo(f) {
   r[f] = box;
   const frames = {};
   for (const [k, v] of Object.entries(d.frames)) frames[k] = R(...v);
-  return { id: f, r, box, frames, wires: wiresOf(f), parts: d.parts.map((p) => p[0]) };
+  return { id: f, r, box, frames, wires: wiresOf(f, { ...r, ...frames }), parts: d.parts.map((p) => p[0]) };
 }
 
 const outline = (rects) => ({

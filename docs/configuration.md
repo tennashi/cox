@@ -550,7 +550,12 @@ the code disagree, for you and the agent to talk through, then fix the
 vocabulary, change the code, or agree to leave it in the vocabulary's
 `agreed`. A box too big to read on one level of its types opens on a
 level of boxes of its own instead, which you place, and which own its
-code; drawn closed, it stands for them. A box opened keeps the lines it
+code; drawn closed, it stands for them. Around the box of such a level
+you place, in its `at`, the boxes of the levels above it is to show, and
+the code's lines go on to those; leave `at` out, and Cox places there
+every box above that the code of its parts meets, on the side the box
+lies on in the level above. An end of a line you drew that you placed
+nowhere in the level, Cox places the same way. A box opened keeps the lines it
 has closed: each goes on to the parts inside that the level inside joins
 to the line's other end, or else to the box's edge, as a line from a
 person does where no code ties it to one of the box's types. What
