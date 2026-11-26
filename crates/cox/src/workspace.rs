@@ -49,7 +49,7 @@ use std::sync::Arc;
 
 use cox_core::goal::Goal;
 use cox_core::list::List;
-use cox_core::store::{ChatId, Named, ProjectId, Resolved, ResolvedBy};
+use cox_core::store::{ChatId, Named, ProjectId, Resolved, ResolvedBy, TurnEnd};
 use gpui::{
     App, Context, Entity, FocusHandle, Focusable, Image, ImageFormat, KeyBinding,
     PathPromptOptions, Pixels, Point, SharedString, Subscription, Task, Window, actions,
@@ -286,6 +286,8 @@ pub struct Chat {
     on_steps: Vec<OnStepLine>,
     /// When it last moved, in milliseconds since the epoch.
     active: i64,
+    /// How its last turn was cut off, while it waits to go on.
+    cut_off: Option<TurnEnd>,
     /// Its view, once the window showed it, or something asked of its
     /// stage.
     view: Option<Entity<ChatView>>,
@@ -317,6 +319,7 @@ impl Chat {
             steers,
             on_steps,
             active,
+            cut_off,
         } = row;
         Self {
             key,
@@ -341,6 +344,7 @@ impl Chat {
             steers,
             on_steps,
             active,
+            cut_off,
             view,
         }
     }
@@ -1628,6 +1632,7 @@ impl Workspace {
                     steers: chat.steers,
                     on_steps: chat.on_steps.clone(),
                     active: chat.active,
+                    cut_off: chat.cut_off.clone(),
                 })
                 .collect(),
             projects: self

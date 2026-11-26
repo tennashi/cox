@@ -162,6 +162,9 @@ pub enum AgentEvent {
     TurnEnded(StopReason),
     /// The agent answered the prompt with an error.
     TurnFailed(String),
+    /// The agent answered the prompt with an error that says its account
+    /// reached a usage or rate limit, as it says it.
+    TurnLimited(String),
     /// The connection to the agent closed, with the error that closed it, if
     /// any.
     Closed(Option<String>),
@@ -917,6 +920,10 @@ async fn take_turn(
                         return Ok(());
                     }
                 }
+            }
+            Err(error) if cox_acp::limited(&error) => {
+                let _ = events.send(AgentEvent::TurnLimited(cox_acp::said(&error)));
+                return Ok(());
             }
             Err(error) => {
                 let _ = events.send(AgentEvent::TurnFailed(format!("{error:#}")));
@@ -1995,7 +2002,10 @@ done"#,
         assert!(
             !told.iter().any(|event| matches!(
                 event,
-                AgentEvent::TurnEnded(_) | AgentEvent::TurnFailed(_) | AgentEvent::Closed(_)
+                AgentEvent::TurnEnded(_)
+                    | AgentEvent::TurnFailed(_)
+                    | AgentEvent::TurnLimited(_)
+                    | AgentEvent::Closed(_)
             )),
             "{told:?}"
         );

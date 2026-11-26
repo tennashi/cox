@@ -122,7 +122,9 @@ pub fn generate(agents: &Agents, id: ProjectId, name: &str, folder: &Path) -> an
             }
             AgentEvent::TurnEnded(cox_acp::StopReason::EndTurn) => break,
             AgentEvent::TurnEnded(reason) => bail!("the agent's turn ended early: {reason:?}"),
-            AgentEvent::TurnFailed(error) => bail!("the agent's turn failed: {error}"),
+            AgentEvent::TurnFailed(error) | AgentEvent::TurnLimited(error) => {
+                bail!("the agent's turn failed: {error}")
+            }
             AgentEvent::Closed(error) => match error {
                 Some(error) => bail!("the agent closed: {error}"),
                 None => bail!("the agent closed"),

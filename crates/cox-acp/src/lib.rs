@@ -448,6 +448,41 @@ pub fn needs_login(error: &anyhow::Error) -> bool {
     })
 }
 
+/// Whether `error`, which ended a turn, is the agent's saying the account
+/// reached a usage or rate limit: an error whose `data` has `errorKind`
+/// `rate_limit`, as `claude-agent-acp` fails such a turn.
+#[must_use]
+pub fn limited(error: &anyhow::Error) -> bool {
+    error.chain().any(|cause| {
+        cause
+            .downcast_ref::<agent_client_protocol::Error>()
+            .and_then(|error| error.data.as_ref())
+            .and_then(|data| data.get("errorKind"))
+            .is_some_and(|kind| kind == "rate_limit")
+    })
+}
+
+/// What `error`, which ended a turn, says, in a line: its message, as the
+/// agent wrote it, without the data that came with it, nor the words
+/// "Internal error" `claude-agent-acp` puts first; or else all of it.
+#[must_use]
+pub fn said(error: &anyhow::Error) -> String {
+    error
+        .chain()
+        .find_map(|cause| cause.downcast_ref::<agent_client_protocol::Error>())
+        .filter(|error| !error.message.is_empty())
+        .map_or_else(
+            || format!("{error:#}"),
+            |error| {
+                let message = error.message.as_str();
+                message
+                    .strip_prefix("Internal error: ")
+                    .unwrap_or(message)
+                    .to_owned()
+            },
+        )
+}
+
 /// Asks the agent to go on with session `id`, working in `cwd`, with
 /// `mcp_servers` and `meta`, and returns, when it does, the settings it says the
 /// session has, if it says. An agent that can resume a session without
@@ -1794,6 +1829,24 @@ impl From<AcpStopReason> for StopReason {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_turn_failed_on_a_usage_limit_is_told_apart_with_what_it_says() {
+        let mut error = agent_client_protocol::Error::internal_error()
+            .data(serde_json::json!({ "errorKind": "rate_limit" }));
+        "Internal error: You've hit your limit · resets 3pm".clone_into(&mut error.message);
+        let limit = anyhow::Error::new(error).context("the turn");
+        assert!(limited(&limit));
+        assert_eq!(said(&limit), "You've hit your limit · resets 3pm");
+
+        let other = anyhow::Error::new(
+            agent_client_protocol::Error::internal_error()
+                .data(serde_json::json!({ "errorKind": "server_error" })),
+        );
+        assert!(!limited(&other));
+        assert!(!limited(&anyhow::anyhow!("lost")));
+        assert_eq!(said(&anyhow::anyhow!("lost")), "lost");
+    }
 
     #[test]
     fn a_tool_call_keeps_its_kind_to_its_end() {

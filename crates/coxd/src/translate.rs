@@ -476,7 +476,7 @@ impl Worker {
                 AgentEvent::TurnEnded(reason) => {
                     return Err(format!("the agent's turn ended early: {reason:?}"));
                 }
-                AgentEvent::TurnFailed(error) => {
+                AgentEvent::TurnFailed(error) | AgentEvent::TurnLimited(error) => {
                     return Err(format!("the agent's turn failed: {error}"));
                 }
                 AgentEvent::Closed(error) => {

@@ -305,6 +305,8 @@ pub struct Conversation {
     /// Which of the settings, the commands and what the agent spent
     /// changed since that was last taken, to keep.
     unkept: Unkept,
+    /// How the last turn ended in this run, if one did.
+    last_turn: Option<TurnEnd>,
     /// Whose move it was when the agent asked the human to log in, or for
     /// their permission, which it is again once they have answered: the
     /// agent's, when it asked in a turn, the human's, when it asked as it
@@ -375,6 +377,7 @@ impl Conversation {
             commands: Vec::new(),
             spent: None,
             unkept: Unkept::default(),
+            last_turn: None,
             before_asking: State::Idle,
             keeps: true,
             steers: false,
@@ -432,6 +435,7 @@ impl Conversation {
             commands: Vec::new(),
             spent: None,
             unkept: Unkept::default(),
+            last_turn: None,
             before_asking: State::Idle,
             keeps: true,
             steers: false,
@@ -575,12 +579,18 @@ impl Conversation {
         std::mem::take(&mut self.unkept.turns)
     }
 
-    /// Notes that the turn ended now, as `how` says.
-    fn turn_over(&mut self, how: TurnOver) {
-        self.unkept.turns.push(TurnEnd {
-            at: cox_core::store::now(),
-            how,
-        });
+    /// Notes that the turn ended now, as `how` says, for `why`, as the
+    /// agent said it, if it did.
+    fn turn_over(&mut self, how: TurnOver, why: Option<&str>) {
+        let end = TurnEnd::now(how, why.map(why_of));
+        self.last_turn = Some(end.clone());
+        self.unkept.turns.push(end);
+    }
+
+    /// How the last turn ended in this run, if one did.
+    #[must_use]
+    pub const fn last_turn(&self) -> Option<&TurnEnd> {
+        self.last_turn.as_ref()
     }
 
     /// Whether the settings changed since this was last called, to keep.
@@ -1446,14 +1456,17 @@ impl Conversation {
     /// does, having done what it was asked, is when the goal is looked
     /// at, and the triggers due run.
     fn turn_ended(&mut self, reason: StopReason) {
-        self.turn_over(match reason {
-            StopReason::EndTurn => TurnOver::Done,
-            StopReason::Cancelled => TurnOver::Stopped,
-            StopReason::MaxTokens => TurnOver::TooLong,
-            StopReason::MaxTurnRequests => TurnOver::TooManyRequests,
-            StopReason::Refusal => TurnOver::Refused,
-            StopReason::Other => TurnOver::Other,
-        });
+        self.turn_over(
+            match reason {
+                StopReason::EndTurn => TurnOver::Done,
+                StopReason::Cancelled => TurnOver::Stopped,
+                StopReason::MaxTokens => TurnOver::TooLong,
+                StopReason::MaxTurnRequests => TurnOver::TooManyRequests,
+                StopReason::Refusal => TurnOver::Refused,
+                StopReason::Other => TurnOver::Other,
+            },
+            None,
+        );
         if let Some(note) = ended(reason) {
             self.push(Entry::Note(note.to_owned()));
         }
@@ -2041,30 +2054,38 @@ impl Conversation {
                 self.wait_on_human();
             }
             AgentEvent::Note(note) => self.push(Entry::Note(note)),
-            AgentEvent::TurnFailed(error) => {
-                self.turn_over(TurnOver::Failed);
-                self.push(Entry::Note(format!("The turn failed: {error}")));
-                // A line steered into it, which the agent side has not
-                // taken yet, starts a turn of its own.
-                self.state = if self.steering() {
-                    State::Busy
-                } else {
-                    State::Idle
-                };
-            }
-            AgentEvent::Closed(error) => self.agent_closed(error),
+            AgentEvent::TurnFailed(error) => self.turn_failed(TurnOver::Failed, &error),
+            AgentEvent::TurnLimited(error) => self.turn_failed(TurnOver::Limited, &error),
+            AgentEvent::Closed(error) => self.agent_closed(error.as_deref()),
         }
     }
 
+    /// The turn failed, as `how` says, for `error`, as the agent said.
+    fn turn_failed(&mut self, how: TurnOver, error: &str) {
+        self.turn_over(how, Some(error));
+        self.push(Entry::Note(if how == TurnOver::Limited {
+            format!("The turn stopped at a limit: {error}")
+        } else {
+            format!("The turn failed: {error}")
+        }));
+        // A line steered into it, which the agent side has not taken yet,
+        // starts a turn of its own.
+        self.state = if self.steering() {
+            State::Busy
+        } else {
+            State::Idle
+        };
+    }
+
     /// The agent closed, for `error` if it failed.
-    fn agent_closed(&mut self, error: Option<String>) {
+    fn agent_closed(&mut self, error: Option<&str>) {
         let note = match error {
             Some(error) => format!("The agent closed: {error}"),
             None => "The agent closed.".to_owned(),
         };
         // A turn running ends with the agent.
         if matches!(self.state, State::Busy | State::Asking | State::Stopping) {
-            self.turn_over(TurnOver::Closed);
+            self.turn_over(TurnOver::Closed, error);
         }
         self.push(Entry::Note(note));
         self.state = State::Closed;
@@ -2190,6 +2211,24 @@ fn started_of(step: &Step) -> Option<i64> {
 
 /// What the conversation notes of a turn that ended for `reason`: nothing
 /// when the agent ended it as it does, having done what it was asked.
+/// What is kept of why a turn ended, of what the agent said, `why`: its
+/// first line, as long as [`WHY_KEPT`] at most, for the human to read at
+/// a glance where the chat is listed.
+fn why_of(why: &str) -> String {
+    let line = why
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .unwrap_or("");
+    match line.char_indices().nth(WHY_KEPT) {
+        Some((at, _)) => format!("{}…", line[..at].trim_end()),
+        None => line.to_owned(),
+    }
+}
+
+/// How many characters of why a turn ended are kept, at most.
+const WHY_KEPT: usize = 200;
+
 fn ended(reason: StopReason) -> Option<&'static str> {
     match reason {
         StopReason::EndTurn => None,
@@ -2888,6 +2927,43 @@ mod tests {
         busy.submit("five");
         busy.apply(AgentEvent::Closed(Some("crashed".to_owned())));
         assert_eq!(hows(&mut busy), [TurnOver::Closed]);
+        assert_eq!(
+            busy.last_turn().and_then(|end| end.why.as_deref()),
+            Some("crashed")
+        );
+    }
+
+    #[test]
+    fn a_turn_at_a_limit_ends_with_what_the_agent_said_of_it_in_a_line() {
+        let mut conversation = Conversation::new();
+        assert_eq!(conversation.last_turn(), None);
+        conversation.submit("one");
+        conversation.apply(AgentEvent::TurnLimited(
+            "You've hit your limit · resets 3pm".to_owned(),
+        ));
+        assert_eq!(conversation.state(), State::Idle);
+        let last = conversation.last_turn().unwrap();
+        assert_eq!(last.how, TurnOver::Limited);
+        assert_eq!(
+            last.why.as_deref(),
+            Some("You've hit your limit · resets 3pm")
+        );
+        assert!(conversation.entries().iter().any(|entry| matches!(
+            entry,
+            Entry::Note(note) if note == "The turn stopped at a limit: You've hit your limit · resets 3pm"
+        )));
+
+        // What a failure printed is kept to its first line, cut short.
+        conversation.submit("two");
+        let long = format!("\n  {}\nat node:internal", "x".repeat(300));
+        conversation.apply(AgentEvent::TurnFailed(long));
+        let why = conversation.last_turn().unwrap().why.clone().unwrap();
+        assert_eq!(why.chars().count(), WHY_KEPT + 1, "{why}");
+        assert!(why.starts_with("xxx") && why.ends_with('…'), "{why}");
+
+        conversation.submit("three");
+        conversation.apply(AgentEvent::TurnEnded(StopReason::EndTurn));
+        assert_eq!(conversation.last_turn().unwrap().how, TurnOver::Done);
     }
 
     #[test]

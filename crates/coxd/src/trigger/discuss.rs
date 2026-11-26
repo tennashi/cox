@@ -402,7 +402,9 @@ fn ask(agent: &mut Agent, prompt: String, mut so_far: impl FnMut(&str)) -> Resul
             AgentEvent::TurnEnded(reason) => {
                 return Err(format!("its turn ended early: {reason:?}"));
             }
-            AgentEvent::TurnFailed(error) => return Err(format!("its turn failed: {error}")),
+            AgentEvent::TurnFailed(error) | AgentEvent::TurnLimited(error) => {
+                return Err(format!("its turn failed: {error}"));
+            }
             AgentEvent::Closed(error) => {
                 return Err(error.map_or_else(
                     || "the agent closed".to_owned(),

@@ -1,0 +1,54 @@
+{
+  "turns": [
+    {
+      "when": "Go on",
+      "steps": [
+        {
+          "update": {
+            "sessionUpdate": "plan",
+            "entries": [
+              { "content": "Read the code", "priority": "medium", "status": "completed" },
+              { "content": "Add the --shout flag", "priority": "medium", "status": "completed" },
+              { "content": "Test it", "priority": "medium", "status": "completed" }
+            ]
+          }
+        },
+        { "say": "Picked up where I was: the flag is in, and its test passes." }
+      ]
+    },
+    {
+      "steps": [
+        {
+          "update": {
+            "sessionUpdate": "plan",
+            "entries": [
+              { "content": "Read the code", "priority": "medium", "status": "completed" },
+              { "content": "Add the --shout flag", "priority": "medium", "status": "in_progress" },
+              { "content": "Test it", "priority": "medium", "status": "pending" }
+            ]
+          }
+        },
+        { "say": "Read the code. Adding the flag next." },
+        { "sleep": 800 },
+        { "limit": "You've hit your limit · resets 3pm (Asia/Tokyo)" }
+      ]
+    },
+    {
+      "steps": [
+        {
+          "update": {
+            "sessionUpdate": "plan",
+            "entries": [
+              { "content": "Read the code", "priority": "medium", "status": "completed" },
+              { "content": "Add the --shout flag", "priority": "medium", "status": "in_progress" },
+              { "content": "Test it", "priority": "medium", "status": "pending" }
+            ]
+          }
+        },
+        { "say": "Read the code. Adding the flag next." },
+        { "sleep": 800 },
+        { "limit": "You've hit your limit · resets 3pm (Asia/Tokyo)" }
+      ]
+    }
+  ]
+}

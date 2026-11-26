@@ -480,6 +480,23 @@ fn a_scenario_it_cannot_read_stops_it() {
 }
 
 #[test]
+fn a_turn_cut_off_by_a_limit_fails_with_the_kind_of_error_claude_agent_acp_sends() {
+    let mut agent = Agent::session(
+        &json!({ "turns": [{ "steps": [{ "limit": "You've hit your limit" }] }] }),
+        &json!([]),
+    );
+    let (_, answer) = agent.turn("work");
+    assert_eq!(
+        answer["error"],
+        json!({
+            "code": -32603,
+            "message": "Internal error: You've hit your limit",
+            "data": { "errorKind": "rate_limit" },
+        })
+    );
+}
+
+#[test]
 fn the_scenarios_that_come_with_it_read() {
     let scenarios = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("scenarios");
     for entry in std::fs::read_dir(scenarios).unwrap() {
