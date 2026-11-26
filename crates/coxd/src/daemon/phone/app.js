@@ -1,7 +1,15 @@
-// The phone's page: the projects and chats coxd runs, and a chat's
-// conversation, as coxd tells them on /events, drawn as the window draws
-// its list of chats and its chat's panel. Everything the agents wrote is
-// put in as text, never as HTML.
+// The phone's page: what goes on in the chats coxd runs, the projects
+// and chats, and a chat's conversation, as coxd tells them on /events
+// and /activity, drawn as the window draws its Activity page, its list
+// of chats and its chat's panel. Everything the agents wrote is put in
+// as text, never as HTML.
+//
+// The top of the page has two sides, which the head's two segments
+// switch between: "Activity", what goes on, which shows first when the
+// page opens, and "Chats", the list of chats, at `#chats`. A chat is at
+// `#kept/<number>`; the head's arrow goes back from it to the side of the
+// top the human came from, Activity when they came by a notice or the
+// chat's own address.
 
 "use strict";
 
@@ -37,11 +45,15 @@ const head = {
   title: document.getElementById("title"),
   dot: document.getElementById("dot"),
   waiting: document.getElementById("waiting"),
+  seg: document.getElementById("seg"),
   plan: document.getElementById("plan"),
   lost: document.getElementById("lost"),
 };
 
 let listing = null;
+// The side of the top that shows, or showed last, as the address has it:
+// "activity", or "chats" at `#chats`. A chat goes back to it.
+let side = location.hash === "#chats" ? "chats" : "activity";
 // The pages the chat shown has for the human to try, the mocks of the
 // sketch it works in and the pages of its stage served on the Mac's own
 // address: { key, asked, told: { pages: [{ name, port, path }] } }, as
@@ -81,7 +93,8 @@ let planOpen = false;
 const GOAL_TURNS = 10;
 
 // An element of `tag`, with `props` set and `children` in it: strings as
-// text, nodes as they are.
+// text, nodes as they are, lists of them, however deep, one after
+// another.
 function el(tag, props, ...children) {
   const node = document.createElement(tag);
   for (const [name, value] of Object.entries(props || {})) {
@@ -90,7 +103,7 @@ function el(tag, props, ...children) {
     else if (name.startsWith("on")) node.addEventListener(name.slice(2), value);
     else node.setAttribute(name, value === true ? "" : value);
   }
-  for (const child of children.flat()) {
+  for (const child of children.flat(Infinity)) {
     if (child === undefined || child === null || child === false) continue;
     node.append(typeof child === "string" ? document.createTextNode(child) : child);
   }
@@ -186,6 +199,8 @@ function hear(told) {
   if (told === null || typeof told !== "object") return;
   if (told.Listing) {
     listing = told.Listing;
+    // What goes on changed with the list, and who waits for the human.
+    readActivity();
     if (chat) chat.key = keyOf(chat.kept);
     // A sketch opened as a project, or on its way to an end, ends no more.
     if (sketching) sketching.asked = false;
@@ -255,10 +270,26 @@ function standing(row) {
   return { dot: "", words: "idle" };
 }
 
-// Whether the chat waits for the human, as the bell counts it: one
-// marked done never does.
+// Whether the chat waits for the human, as the Activity counts it under
+// "Needs you", so that the head's count, the shelf of those that wait
+// and the Activity agree: as coxd told (see `activity.waiting`), or,
+// until it did, by the same rule, from the list: it asks; or, unless
+// the human put it away, its turn ended unseen, or was cut off and it is
+// not at work again, or CI ended unseen on a pull request its agent
+// opened. One marked done never does.
 function waits(row) {
-  return !row.resolved && (row.state === "Asking" || row.unread);
+  if (activity) return activity.waiting.some((one) => one.key === row.key);
+  if (row.resolved) return false;
+  if (row.state === "Asking") return true;
+  if (listing.archived.includes(row)) return false;
+  const atWork = working(row.state) || (row.state === "Idle" && (row.background || []).length > 0);
+  return row.unread || Boolean(row.cut_off && !atWork) || (row.pulls || []).some((pull) => pull.unseen);
+}
+
+// The chats that wait for the human, those put away too, which wait
+// while they ask.
+function waiting() {
+  return listing ? listing.chats.concat(listing.archived).filter(waits) : [];
 }
 
 // A goal as the input that sets it reads it: the chat's, as the list
@@ -382,9 +413,16 @@ function drawHead(row) {
   head.icon.hidden = Boolean(chat);
   head.dot.hidden = !row;
   head.switcher.setAttribute("href", "#");
+  head.switcher.classList.toggle("home", !chat);
+  head.seg.hidden = Boolean(chat);
+  for (const tab of head.seg.children) tab.setAttribute("aria-selected", String(tab.dataset.side === side));
   if (!chat) {
+    // On the top, how many chats wait for the human, in every project.
+    const count = waiting().length;
     head.title.textContent = "Cox";
-    head.waiting.hidden = true;
+    head.waiting.hidden = !count;
+    head.waiting.textContent = String(count);
+    head.waiting.classList.add("asks");
     head.plan.hidden = true;
     return;
   }
@@ -526,11 +564,15 @@ function drawHome() {
   compose.sketch.hidden = true;
   drawHead(null);
   document.title = "Cox";
+  if (side === "activity") {
+    main.replaceChildren(...activityPage());
+    return;
+  }
   const shelves = [];
   if (!listing) {
     shelves.push(el("p", { class: "empty" }, "Reaching Cox…"));
   } else {
-    const asking = listing.chats.filter(waits);
+    const asking = waiting();
     if (asking.length) {
       shelves.push(el("section", { class: "shelf asking" },
         el("div", { class: "shelf-head" }, el("span", { class: "label" }, "Waits for you")),
@@ -2204,11 +2246,773 @@ document.addEventListener("selectionchange", () => {
   if (document.activeElement === compose.line) drawCommands();
 });
 
+// ---- The Activity, the top of the page ----
+//
+// What goes on in every project, as the window's Activity page of the
+// home tells it, read as JSON from /activity, which coxd puts together
+// as the window does, from the chats as it lists them itself, so that it
+// is there with no window open. It is asked again whenever coxd lists
+// the chats anew, and every few seconds while the top shows, since a
+// plan goes on with no change to the list; and drawn as that page draws
+// it, laid for a phone: how it all stands, then a card for each chat at
+// the top of its tree, in groups by what it needs, then the pull
+// requests in theirs. A tap on a card shows its chat; on its plan, the
+// steps; on "Timeline", what the chat did when, read from
+// /activity/timeline for it alone.
+
+// What coxd last told goes on, and the text it came as, to draw afresh
+// only when it changed.
+let activity = null;
+let activityText = null;
+let activityAsked = false;
+let activityAgain = false;
+// How often, in milliseconds, the top asks what goes on, and how often
+// it is drawn again though nothing changed, for "4 min ago" to go on.
+const ACTIVITY_EVERY = 5000;
+const AGES_EVERY = 30000;
+// The window the third tile tells of, by its name, as the human last
+// picked it, kept across the page's loads.
+let windowed = (() => {
+  try {
+    return localStorage.getItem("activity.window") || "1 h";
+  } catch (_) {
+    return "1 h";
+  }
+})();
+// What the human unfolded: the plans, by their chat's key; the
+// subagents folded away, by the key of the chat over them; the folds of
+// those done; the timelines, by the number their chat is kept by, and
+// what was read of each; what a line of one printed, by its key; and
+// the buttons pressed, until coxd tells what came of them.
+const plansOpen = new Set();
+const subsFolded = new Set();
+const foldsOpen = new Set();
+const storiesOpen = new Set();
+const stories = new Map();
+const printedOpen = new Set();
+const pressed = new Set();
+
+// Asks coxd what goes on, and draws it if it changed: one question at a
+// time, and once more after it when it was asked meanwhile.
+async function readActivity() {
+  if (activityAsked) {
+    activityAgain = true;
+    return;
+  }
+  activityAsked = true;
+  try {
+    const answer = await fetch("/activity", { cache: "no-store" });
+    if (answer.ok) {
+      const text = await answer.text();
+      if (text !== activityText) {
+        activityText = text;
+        activity = JSON.parse(text);
+        pressed.clear();
+        // Something moved: the timelines open are read again.
+        for (const kept of storiesOpen) readStory(kept);
+        redraw();
+      }
+    }
+  } catch (_) {
+    // The stream says when Cox cannot be reached; what was told stays.
+  } finally {
+    activityAsked = false;
+    if (activityAgain) {
+      activityAgain = false;
+      readActivity();
+    }
+  }
+}
+
+// Reads the timeline of the chat kept as `kept`, and draws it.
+async function readStory(kept) {
+  let story = null;
+  try {
+    const answer = await fetch(`/activity/timeline?kept=${kept}`, { cache: "no-store" });
+    if (answer.ok) story = await answer.json();
+  } catch (_) {
+    // Nothing read: the card says so.
+  }
+  if (JSON.stringify(stories.get(kept)) === JSON.stringify(story) && stories.has(kept)) return;
+  stories.set(kept, story);
+  redraw();
+}
+
+// How many of `count` there are, as "1 step" or "2 steps".
+const many = (count, one, more) => `${count} ${count === 1 ? one : more}`;
+
+// How long ago `at`, in milliseconds since the epoch, was, roughly.
+function ago(at) {
+  const minutes = Math.max(0, Math.round((Date.now() - at) / 60000));
+  if (minutes < 1) return "now";
+  if (minutes < 60) return `${minutes} min ago`;
+  if (minutes < 24 * 60) return `${Math.floor(minutes / 60)} h ago`;
+  return `${Math.floor(minutes / (24 * 60))} d ago`;
+}
+
+// How long from `from` to `to`, both in milliseconds, as "4 min" or
+// "1 h 37 min".
+function long(from, to) {
+  const minutes = Math.max(0, Math.round((to - from) / 60000));
+  if (minutes < 60) return `${minutes} min`;
+  const hours = Math.floor(minutes / 60);
+  return minutes % 60 ? `${hours} h ${minutes % 60} min` : `${hours} h`;
+}
+
+// How a chat of the Activity stands, in the words the page uses for it,
+// and the class that colors it, as the window's page has it: at work,
+// cut off, the human's turn, waiting on CI or on its subagents, stopped
+// with its plan not done, or done.
+function standsAs(chat) {
+  if (chat.working) return { as: "work", says: "at work" };
+  if (chat.cut_off) return { as: "cut", says: "cut off" };
+  const waits = chat.waits ?? chat.why;
+  if (waits === "asks you" || waits === "finished a turn") return { as: "yours", says: waits };
+  if (waits === "waits on CI") return { as: "ci", says: waits };
+  if (waits === "waits on subagents") return { as: "subs", says: waits };
+  // A chat only waiting, whose CI ended while the human did not look.
+  if (!chat.plans && chat.why) return { as: "yours", says: chat.why };
+  if (chat.finished || waits === "finished" || waits === "done") return { as: "done", says: "done" };
+  return { as: "stopped", says: "stopped" };
+}
+
+// The chats of the Activity, one each: those with a plan or at work, the
+// subagents under them and the chats above them, and those that only
+// wait for the human, each with how it stands, how far its plan went, as
+// Cox counted it, the step under way, the subagents its agent opened,
+// and all those under it, at any depth.
+function activityChats() {
+  const all = activity.plans.map((chat) => ({ ...chat, plans: true }));
+  for (const waiting of activity.waiting) {
+    const planned = all.find((chat) => chat.key === waiting.key);
+    if (planned) Object.assign(planned, { asks: waiting.asks, why: waiting.why });
+    else all.push({ ...waiting, plan: [], pulls: [], background: [], depth: 0 });
+  }
+  const chats = all.map((chat) => {
+    const plan = chat.plan || [];
+    return {
+      ...chat,
+      plan,
+      stands: standsAs(chat),
+      progress: chat.progress || { done: 0, of: 0 },
+      under: plan.find((step) => step.state === "in_progress"),
+      next: plan.find((step) => step.state === "pending"),
+      subs: [],
+    };
+  });
+  for (const chat of chats) {
+    const above = chats.find((one) => one.key === chat.parent);
+    if (above) above.subs.push(chat);
+  }
+  const below = (chat) => chat.subs.flatMap((sub) => [sub, ...below(sub)]);
+  for (const chat of chats) chat.below = below(chat);
+  return chats;
+}
+
+// The order chats stand in: the human's turn first, done last.
+const ORDER = { cut: 0, yours: 0, work: 1, subs: 2, ci: 3, stopped: 4, done: 5 };
+
+// How many of the subagents under `chat`, at any depth, are at work.
+const busyUnder = (chat) => chat.below.filter((sub) => sub.working).length;
+
+// What `chat` does now, in a line.
+function doesNow(chat) {
+  if (chat.stands.as === "cut") return `Cut off: ${chat.cut_off.says}`;
+  if (chat.stands.as === "yours" && chat.asks) return chat.asks;
+  if (chat.running) return `$ ${chat.running.called}`;
+  if (chat.stands.as === "work" && chat.under) return chat.under.text;
+  if (chat.stands.as === "subs") return `waits on ${many(busyUnder(chat), "subagent", "subagents")} at work`;
+  if (chat.reported) return "↲ reported";
+  if (chat.waits === "finished") return "finished, not reported yet";
+  if (chat.stands.as === "stopped" && chat.next) return `next: ${chat.next.text}`;
+  if (chat.said) return chat.said;
+  return chat.stands.says;
+}
+
+// How `chat` stands, as its badge says it, the class that colors it and
+// what it does now, and the group it leads its card to: "busy" for one
+// at work, since `work` is what the conversation folds.
+function badgeOf(chat) {
+  switch (chat.stands.as) {
+    case "cut":
+      return { as: "bad", tone: "bad", says: "Cut off", group: "yours" };
+    case "yours":
+      if (chat.asks || chat.waits === "asks you" || chat.why === "asks you") return { as: "ask", tone: "ask", says: "Asking", group: "yours" };
+      if (chat.waits === "finished a turn" || chat.why === "finished a turn") return { as: "ask", tone: "ask", says: "Your turn", group: "yours" };
+      return { as: "ask", tone: "ask", says: "CI ended", group: "yours" };
+    case "work":
+      return { as: "busy", tone: "run", says: "Working", group: "busy" };
+    case "subs":
+      return { as: "busy", tone: "run", says: "Waiting", group: "busy" };
+    case "ci":
+      return { as: "busy", tone: "run", says: "On CI", group: "busy" };
+    case "done":
+      return { as: "quiet", tone: "quiet", says: chat.reported ? "Reported" : "Done", group: "done" };
+    default:
+      return { as: "quiet", tone: "quiet", says: "Stopped", group: "stopped" };
+  }
+}
+
+// The group the card of the chat at the top, `chat`, falls in: the
+// human's turn, if any chat of it waits for them, then at work, if any
+// is, then stopped, if any is, else done.
+function treeGroup(chat) {
+  const groups = [chat, ...chat.below].map((one) => badgeOf(one).group);
+  return ["yours", "busy", "stopped"].find((group) => groups.includes(group)) || "done";
+}
+
+// Where a tap on `chat` goes: its conversation, by the number it is kept
+// by, if it is kept.
+const chatHref = (chat) => (chat.chat == null ? null : `#kept/${chat.chat}`);
+
+// The key's chat, by the number it is kept by, as coxd last listed it,
+// if it is kept.
+function keptOf(key) {
+  const row = listing && listing.chats.concat(listing.archived).find((one) => one.key === key);
+  return row ? row.kept : null;
+}
+
+// `node`, stepped in `indent` times: set as the page's script sets a
+// style, since the page's policy lets no element say its own.
+function indented(node, indent) {
+  node.style.setProperty("--indent", String(indent));
+  return node;
+}
+
+// A bar of blocks, one each of `all`, by its class.
+const barOf = (all) => el("span", { class: "blocks" }, all.map((as) => el("s", { class: as || null })));
+
+// The plan of `chat` as blocks, the step under way colored as the chat
+// stands.
+function planBlocks(chat) {
+  const under = { yours: "a", cut: "f" }[chat.stands.as] || "r";
+  return barOf(chat.plan.map((step) => ({ completed: "p", in_progress: under })[step.state] || ""));
+}
+
+const STEP_MARKS = { pending: "○", in_progress: "◐", completed: "✓" };
+
+// What `chat` asks of the human: to answer or reply, in the chat, or,
+// once its turn was cut off, to have it go on, as the line the human
+// would send.
+function chatAct(chat) {
+  const href = chatHref(chat);
+  if (chat.stands.as === "cut") {
+    if (!chat.resume || chat.chat == null) return null;
+    const asked = pressed.has(`resume-${chat.key}`);
+    return el("button", {
+      type: "button", class: "btn bad", disabled: asked,
+      onclick: () => ask(`resume-${chat.key}`, `/activity/resume?kept=${chat.chat}`, {}),
+    }, asked ? "Asked" : "Resume");
+  }
+  if (chat.stands.as !== "yours" || !href) return null;
+  return el("a", { class: "btn", href }, badgeOf(chat).says === "Asking" ? "Answer" : "Reply");
+}
+
+// Asks coxd, at `path`, for what the button pressed as `name` asks, and
+// reads what goes on then; says so when coxd would not.
+async function ask(name, path, body) {
+  pressed.add(name);
+  redraw();
+  try {
+    await post(path, body);
+    say("");
+  } catch (error) {
+    pressed.delete(name);
+    say(`Not done: ${error.message}`);
+  }
+  readActivity();
+}
+
+// The row of a subagent, `chat`, stepped in `indent` times, and those
+// under it.
+function subRows(chat, indent) {
+  const stands = badgeOf(chat);
+  const far = chat.plan.length
+    ? [planBlocks(chat), el("span", { class: "far" }, `${chat.progress.done}/${chat.progress.of}`)]
+    : null;
+  return [
+    indented(el(chatHref(chat) ? "a" : "div", { class: `sub ${stands.as}`, href: chatHref(chat) },
+      el("span", { class: "l1" },
+        el("span", { class: "arrow" }, "↳"), el("span", { class: "cname" }, chat.name),
+        el("span", { class: `stand ${stands.as}` }, stands.says)),
+      el("span", { class: "l2" }, far,
+        el("span", { class: `now ${stands.tone}` }, doesNow(chat)),
+        chat.active ? el("span", { class: "age" }, ago(chat.active)) : null)), indent),
+    ...subsUnder(chat, indent + 1),
+  ];
+}
+
+// The subagents under `chat`: those that came from no step of its plan
+// first, then those of each step, under a line of the step.
+function subsUnder(chat, indent) {
+  const from = (at) => chat.subs.filter((sub) => (sub.step ?? null) === at);
+  return [
+    ...from(null).flatMap((sub) => subRows(sub, indent)),
+    ...chat.plan.flatMap((step, at) => {
+      const subs = from(at);
+      if (!subs.length) return [];
+      return [
+        indented(el("div", { class: `from ${step.state}` },
+          el("span", { class: "emark" }, STEP_MARKS[step.state] || "?"), el("span", { class: "text" }, step.text)), indent),
+        ...subs.flatMap((sub) => subRows(sub, indent)),
+      ];
+    }),
+  ];
+}
+
+// The card of the chat at the top of its tree, `chat`: how it stands,
+// where, when it last moved, its name and what it does now, which a tap
+// opens the chat by; at its foot, its plan, which a tap unfolds to its
+// steps, "Timeline", which a tap unfolds to what it did when, and what
+// it asks; then the subagents under it, which a tap folds away.
+function chatCard(chat) {
+  const stands = badgeOf(chat);
+  const under = chat.below;
+  const cut = [chat, ...under].some((one) => one.stands.as === "cut");
+  const planOpen = plansOpen.has(chat.key);
+  const storyOpen = chat.chat != null && storiesOpen.has(chat.chat);
+  const flip = (set, key) => () => {
+    if (!set.delete(key)) set.add(key);
+    draw();
+  };
+  const planned = chat.plan.length
+    ? el("button", { type: "button", class: "planbar", "aria-expanded": String(planOpen), "aria-label": "The steps of its plan", onclick: flip(plansOpen, chat.key) },
+        el("span", { class: "fold" }, planOpen ? "▾" : "▸"), planBlocks(chat),
+        el("span", { class: "far" }, `${chat.progress.done}/${chat.progress.of}`))
+    : el("span", { class: "spacer" });
+  const timeline = chat.chat == null ? null : el("button", {
+    type: "button", class: "story-button", "aria-expanded": String(storyOpen),
+    onclick: () => {
+      if (storiesOpen.delete(chat.chat)) stories.delete(chat.chat);
+      else {
+        storiesOpen.add(chat.chat);
+        readStory(chat.chat);
+      }
+      draw();
+    },
+  }, el("span", { class: "fold" }, storyOpen ? "▾" : "▸"), "Timeline");
+  const folded = subsFolded.has(chat.key);
+  const busy = busyUnder(chat);
+  const yours = under.filter((sub) => badgeOf(sub).group === "yours").length;
+  const where = [chat.where, chat.sketch ? "sketch" : null].filter(Boolean).join(" · ");
+  return el("div", { class: `acard tree ${treeGroup(chat)}${cut ? " failed" : ""}` },
+    el(chatHref(chat) ? "a" : "div", { class: "abody", href: chatHref(chat) },
+      el("span", { class: "l1" },
+        el("span", { class: `stand ${stands.as}` }, stands.says),
+        el("span", { class: "where" }, where),
+        chat.active ? el("span", { class: "age" }, ago(chat.active)) : null),
+      el("span", { class: "aname" }, chat.name, chat.hint ? el("span", { class: "hint" }, ` ${chat.hint}`) : null),
+      el("span", { class: `now ${stands.tone}` }, doesNow(chat))),
+    el("div", { class: "afoot" }, planned, timeline, chatAct(chat)),
+    planOpen && chat.plan.length
+      ? el("ul", { class: "steps-list" }, chat.plan.map((step) =>
+          el("li", { class: step.state }, el("span", { class: "state" }, STEP_MARKS[step.state] || "?"), el("span", {}, step.text))))
+      : null,
+    storyOpen ? storyOf(chat) : null,
+    under.length
+      ? el("button", { type: "button", class: "subfold", "aria-expanded": String(!folded), onclick: flip(subsFolded, chat.key) },
+          el("span", { class: "fold" }, folded ? "▸" : "▾"),
+          el("span", {}, many(under.length, "subagent", "subagents"),
+            yours ? [" · ", el("span", { class: "ask" }, `${yours} for you`)] : null,
+            busy ? ` · ${busy} at work` : null))
+      : null,
+    under.length && !folded ? subsUnder(chat, 1) : null);
+}
+
+// How each kind of what happened in a chat is marked.
+const EVENT_MARKS = {
+  start: "▶", step_started: "◐", step_done: "✓", plan_revised: "≡", asked: "?", answered: "→",
+  declined: "×", said: "✎", subagent: "↳", reported: "↲", commit: "●", pull_opened: "#",
+  pull_merged: "#", pull_closed: "#", ci: "◇", check: "◇", ran: "$", turn_end: "·",
+};
+
+// What a turn's end is called, by how it ended.
+const TURN_ENDS = {
+  done: "Ended its turn", stopped: "Stopped", too_long: "Ended its turn: its reply grew too long",
+  too_many_requests: "Ended its turn: too many requests", refused: "Refused to go on",
+  failed: "The turn failed", limited: "Stopped at a usage limit", closed: "The agent closed",
+  other: "Ended its turn",
+};
+
+// How a check that ran as a turn ended went, as a line says it.
+const CHECKED = { passed: "passed", failed: "failed", broken: "could not run", running: "runs" };
+
+// How long a command ran, from its seconds, as "42s" or "1m 3s".
+function took(secs) {
+  if (!secs) return "";
+  return secs < 60 ? `${secs}s` : `${Math.floor(secs / 60)}m ${secs % 60}s`;
+}
+
+// What `event` of the timeline of `chat` says, as what goes in its line.
+function eventSays(event, chat) {
+  const b = (text) => el("b", {}, text);
+  const number = `#${event.number}`;
+  switch (event.kind) {
+    case "step_started":
+      return ["Started ", b(event.text)];
+    case "step_done":
+      return ["Done ", b(event.text)];
+    case "plan_revised": {
+      const line = (as, mark, text) => el("span", { class: as }, `${mark} ${text}`, el("br"));
+      const far = event.before && event.after
+        ? `${event.before.done}/${event.before.of} → ${event.after.done}/${event.after.of} steps done` : "";
+      return ["Plan ", b(event.text), el("span", { class: "revised" },
+        (event.added || []).map((text) => line("added", "+", text)),
+        (event.removed || []).map((text) => line("removed", "−", text)),
+        (event.reworded || []).map((step) => line("reworded", "~", `${step.from} → ${step.to}`)),
+        (event.undone || []).map((text) => line("added", "↺", `${text} (no longer done)`)),
+        el("span", { class: "lines" }, far))];
+    }
+    case "asked":
+      return [`Asked you: ${event.text}`];
+    case "answered":
+      return ["You chose ", b(event.text), event.question ? ` for ${event.question}` : null, event.other ? `, “${event.other}”` : null];
+    case "declined":
+      return ["You declined to answer"];
+    case "said":
+      return [`${event.by === "human" ? "You" : "Agent"} on “${event.step}”: ${event.text}`];
+    case "subagent":
+      return [`Opened ${event.text}`];
+    case "reported":
+      return [`${event.text} reported`];
+    case "commit":
+      return [`Committed ${event.text} `, el("span", { class: "lines" }, `+${event.added} −${event.removed}`)];
+    case "pull_opened":
+      return [`${number} ${event.text} opened`];
+    case "pull_merged":
+      return [`${number} merged`];
+    case "pull_closed":
+      return [`${number} closed`];
+    case "ci":
+      return [`CI ${event.text} on ${number}`];
+    case "ran": {
+      const shown = event.commands.length;
+      const of = event.of > shown ? `${shown} of ${many(event.of, "command", "commands")}` : many(shown, "command", "commands");
+      return [event.text || "Ran", " ", el("span", { class: "lines" }, of),
+        event.commands.map((command) => el("div", { class: `command ${command.state}` },
+          el("span", { class: "ended" }, { done: "✓", failed: "✗", cancelled: "–" }[command.state] || "?"),
+          el("span", { class: "cline" }, command.about ? `${command.about} · ${command.gist}` : command.gist),
+          el("span", { class: "secs" }, took(command.secs))))];
+    }
+    case "check": {
+      const key = `${chat.chat}/${event.at}/${event.text}`;
+      const printed = event.said == null ? null : el("details", {
+        open: printedOpen.has(key),
+        ontoggle: (toggled) => {
+          if (toggled.currentTarget.open) printedOpen.add(key);
+          else printedOpen.delete(key);
+        },
+      }, el("summary", {}, event.state === "broken" ? "why" : "what it printed"), el("pre", { class: "printed" }, event.said));
+      return ["Check ", b(event.text), ` ${CHECKED[event.state] || event.state}${event.on ? ` on ${event.on}` : ""}`, printed];
+    }
+    case "turn_end":
+      return [event.cut != null ? `Cut off: ${event.cut}` : TURN_ENDS[event.text] || "Ended its turn"];
+    default:
+      return [event.text];
+  }
+}
+
+// Whether `event` tells of something that failed: CI, a turn, or a check
+// that failed or could not run.
+const eventFailed = (event) =>
+  ((event.kind === "ci" || event.kind === "turn_end") && event.text === "failed") ||
+  (event.kind === "turn_end" && event.cut != null) ||
+  (event.kind === "check" && (event.state === "failed" || event.state === "broken"));
+
+// How `chat` ended, as its timeline, `story`, tells, or that it goes on,
+// as its last line.
+function storyEnd(chat, story) {
+  const ended = story.ended;
+  const since = story.started.at;
+  const line = (as, mark, how, more, when) =>
+    el("div", { class: `ending ${as}` }, el("span", { class: "at" }, when), el("span", { class: "emark" }, mark),
+      el("span", { class: "how" }, `${how} `, el("span", {}, `· ${more}`)));
+  if (!ended) {
+    const clock = new Date().toTimeString().slice(0, 5);
+    return line("busy", "◌", chat.stands.as === "ci" ? "Waits on CI" : "At work", `for ${long(since, Date.now())}, since ${story.started.when}`, clock);
+  }
+  const when = ended.clock || ended.when;
+  const before = `${long(ended.at, Date.now())} ago`;
+  const lasted = `took ${long(since, ended.at)}`;
+  switch (ended.how) {
+    case "resolved":
+      return line("done", "✓", "Done", `marked done by ${ended.by === "human" ? "you" : "Cox"} · ${lasted}`, when);
+    case "asks":
+      return line("yours", "?", "Waits for your answer", `since ${long(ended.at, Date.now())}`, when);
+    case "done":
+      if (chat.stands.as === "subs") return line("busy", "◌", "Waits on its subagents", `${busyUnder(chat)} at work · ended its turn ${before}`, when);
+      if (chat.finished) return line("done", "✓", "Done", lasted, when);
+      if (chat.stands.as === "yours") return line("yours", "●", "Finished a turn", before, when);
+      return line("stopped", "■", chat.progress.of ? `Stopped at ${chat.progress.done}/${chat.progress.of}` : "Stopped", `after ${long(since, ended.at)} · ${before}`, when);
+    case "stopped":
+      return line("stopped", "■", "Stopped", `after ${long(since, ended.at)} · ${before}`, when);
+    default:
+      return line("failed", "×", ended.cut != null ? `Cut off: ${ended.cut}` : TURN_ENDS[ended.how] || "Ended", before, when);
+  }
+}
+
+// The timeline of `chat`, under its card's foot: its goal and what it
+// spent, then what it did when, the first first, under the line of each
+// day that is not today, what it runs now, how it ended or that it goes
+// on, what it runs in the background and its open pull requests.
+function storyOf(chat) {
+  const story = stories.get(chat.chat);
+  if (story === undefined) return el("div", { class: "story" }, el("p", { class: "none" }, "Reading what it did…"));
+  if (story === null) return el("div", { class: "story" }, el("p", { class: "none" }, "Cox keeps nothing of what it did."));
+  const spent = chat.spent ? [chat.spent.cost, chat.spent.context == null ? null : `${chat.spent.context}% context`].filter((part) => part != null) : [];
+  const meta = [chat.goal ? `◎ ${chat.goal}` : null, spent.length ? spent.join(" · ") : null].filter(Boolean);
+  let last = null;
+  const day = (time) => {
+    const of = (time && time.day) || null;
+    if (of === last) return null;
+    last = of;
+    return el("div", { class: "day" }, of || "Today");
+  };
+  return el("div", { class: "story" },
+    meta.length ? el("p", { class: "meta" }, meta.join(" · ")) : null,
+    story.events.map((event) => [
+      day(event),
+      el("div", { class: `event ${event.kind}${eventFailed(event) ? " failed" : ""}${event.dropped ? " dropped" : ""}` },
+        el("span", { class: "at" }, event.clock || event.when),
+        el("span", { class: "emark" }, EVENT_MARKS[event.kind] || "·"),
+        el("span", { class: "text" }, eventSays(event, chat))),
+    ]),
+    chat.running
+      ? el("div", { class: "event running" }, el("span", { class: "at" }), el("span", { class: "emark" }, "◌"),
+          el("span", { class: "text" }, `Running: ${chat.running.called}`))
+      : null,
+    day(story.ended),
+    storyEnd(chat, story),
+    (chat.background || []).map((what) => el("div", { class: "background" }, `${what.command ? ">_ " : ""}${what.what} · in the background`)),
+    (chat.pulls || []).map((pull) => el("div", { class: "pull" }, `#${pull.number}${pull.draft ? " draft" : ""} ${pull.title || ""}${pull.ci ? ` · CI ${pull.ci}` : ""}`)));
+}
+
+// A group of `cards`, under its name and how many it holds, of the class
+// `as`, or nothing when it holds none.
+const cardGroup = (as, name, cards) =>
+  cards.length
+    ? el("div", { class: `group ${as}` },
+        el("div", { class: "group-head" }, el("span", { class: "label" }, name), el("span", { class: "n" }, String(cards.length))),
+        el("div", { class: "cards" }, cards))
+    : null;
+
+// A fold, by its name, `name`, which says `says`, of `cards`, open as
+// the human last left it.
+const cardFold = (name, says, cards) =>
+  el("details", {
+    class: "folded", open: foldsOpen.has(name),
+    ontoggle: (event) => {
+      if (event.currentTarget.open) foldsOpen.add(name);
+      else foldsOpen.delete(name);
+    },
+  }, el("summary", {}, says), el("div", { class: "cards" }, cards));
+
+// How it all stands: the three tiles, the third of which a tap has tell
+// of another window, and every step of every plan in one bar.
+function numbers(all) {
+  const summaries = activity.summaries || [];
+  const at = Math.max(0, summaries.findIndex((summary) => summary.window === windowed));
+  const shown = summaries[at];
+  const yours = all.filter((chat) => badgeOf(chat).group === "yours").length;
+  const planned = all.filter((chat) => chat.plan.length);
+  const steps = planned.flatMap((chat) => chat.plan);
+  const rank = { completed: 0, in_progress: 1, pending: 2 };
+  steps.sort((one, other) => (rank[one.state] ?? 3) - (rank[other.state] ?? 3));
+  const done = planned.reduce((sum, chat) => sum + chat.progress.done, 0);
+  const of = planned.reduce((sum, chat) => sum + chat.progress.of, 0);
+  const cycle = () => {
+    if (!summaries.length) return;
+    windowed = summaries[(at + 1) % summaries.length].window;
+    try {
+      localStorage.setItem("activity.window", windowed);
+    } catch (_) {
+      // The pick holds while the page is open.
+    }
+    draw();
+  };
+  const count = shown ? shown.steps : 0;
+  return [
+    el("div", { class: "numbers" },
+      el("div", { class: "number yours" }, el("span", { class: "count" }, String(yours)), el("span", { class: "what" }, `${yours === 1 ? "waits" : "wait"} for you`)),
+      el("div", { class: "number busy" }, el("span", { class: "count" }, String(activity.busy)), el("span", { class: "what" }, "at work")),
+      el("button", { type: "button", class: "number", title: "a tap shows another span", onclick: cycle },
+        el("span", { class: "count" }, String(count)),
+        el("span", { class: "what" }, `${count === 1 ? "step" : "steps"} done in `, el("b", {}, shown ? shown.window : "")))),
+    steps.length
+      ? el("div", { class: "overall" }, el("span", {}, `${done} of ${many(of, "step", "steps")}`),
+          el("span", { class: "steps" }, steps.map((step) => el("i", { class: step.state }))),
+          el("span", {}, many(planned.length, "chat", "chats")))
+      : null,
+  ];
+}
+
+// Whether `pull` is merged or closed.
+const pullEnded = (pull) => pull.state === "merged" || pull.state === "closed";
+
+// The group `pull` falls in, by what it needs, as the window's page
+// groups them: merged or closed, Cox to read it, a draft, the human, as
+// its CI failed, a review asked for changes or it conflicts, its CI to
+// end, a review, or nothing, as it is ready to merge.
+function pullNeed(pull) {
+  if (pullEnded(pull)) return "done";
+  if (!pull.state) return "unread";
+  if (pull.state === "draft") return "draft";
+  if (pull.ci === "failed" || pull.review === "changes" || pull.conflicts) return "yours";
+  if (pull.ci === "running") return "running";
+  if (pull.review === "required") return "review";
+  return "ready";
+}
+
+// The groups of pull requests, in the order they show.
+const PULL_NEEDS = [
+  ["yours", "Needs you"], ["running", "CI running"], ["ready", "Ready to merge"],
+  ["review", "Waiting on review"], ["draft", "Drafts"], ["unread", "Not read yet"],
+];
+
+// How the checks of `pull` stand: a block each, then how many passed,
+// failed, run and were skipped, of how many.
+function pullChecks(pull) {
+  const checks = pull.checks;
+  if (!checks || !checks.total) return pull.state ? el("span", { class: "fact quiet" }, "No CI") : null;
+  const drawn = [...Array(checks.passed).fill("p"), ...Array(checks.failed).fill("f"), ...Array(checks.running).fill("r"), ...Array(checks.skipped).fill("")];
+  const parts = [el("span", { class: checks.passed + checks.skipped === checks.total ? "p" : null }, `${checks.passed}/${checks.total} passed`)];
+  if (checks.failed) parts.push(el("span", { class: "f" }, `${checks.failed} failed`));
+  if (checks.running) parts.push(pullEnded(pull) ? el("span", {}, `${checks.running} cancelled`) : el("span", { class: "r" }, `${checks.running} running`));
+  if (checks.skipped) parts.push(el("span", {}, `${checks.skipped} skipped`));
+  return el("span", { class: "ci" }, barOf(drawn),
+    el("span", {}, parts.flatMap((part, at) => (at ? [el("span", { class: "sep" }, " · "), part] : [part]))));
+}
+
+// What the reviews of `pull` decided, while it is open.
+function pullReview(pull) {
+  if (pullEnded(pull) || !pull.state) return null;
+  const fact = (as, mark, says) => el("span", { class: `fact ${as}` }, mark ? el("b", {}, mark) : null, says);
+  switch (pull.review) {
+    case "approved":
+      return fact("good", "✓", "Approved");
+    case "changes":
+      return fact("ask", "±", "Changes requested");
+    case "required":
+      return fact("quiet", "○", "Review required");
+    default:
+      return fact("quiet", null, "No review needed");
+  }
+}
+
+// The card of `pull`: how it stands, its number, where it is, when it
+// was opened, or merged or closed, its title, how its checks stand, the
+// names of those that failed, what its reviews decided, whether it
+// conflicts and how much it changes, which a tap opens on GitHub; at its
+// foot, the chat that opened it, which a tap shows, and what asks that
+// chat to fix its CI.
+function pullCard(pull) {
+  const ended = pullEnded(pull);
+  const says = { open: "Open", draft: "Draft", merged: "Merged", closed: "Closed" }[pull.state];
+  const when = ended && pull.ended ? `${pull.state} ${ago(pull.ended)}` : pull.opened ? `opened ${ago(pull.opened)}` : null;
+  const author = pull.author;
+  const authorKept = author ? keptOf(author.key) : null;
+  const by = author
+    ? el(authorKept == null ? "span" : "a", { class: `by${author.resolved ? " done" : ""}`, href: authorKept == null ? null : `#kept/${authorKept}` },
+        el("span", {}, "↳"), el("span", { class: "who" }, `${author.name}${author.hint ? ` ${author.hint}` : ""}${author.resolved ? " (done)" : ""}`))
+    : el("span", { class: "by none" }, "opened by hand");
+  const name = `fix-${pull.repo}#${pull.number}`;
+  const asked = pressed.has(name);
+  const fix = pull.fix && authorKept != null
+    ? el("button", {
+        type: "button", class: "btn", disabled: asked,
+        onclick: () => ask(name, `/activity/fix?kept=${authorKept}`, { repo: pull.repo, number: pull.number }),
+      }, asked ? "Asked" : "Ask to fix")
+    : null;
+  return el("div", { class: `acard pr ${pullNeed(pull)}${pull.ci === "failed" && !ended ? " failed" : ""}` },
+    el("a", { class: "abody", href: pull.url, target: "_blank", rel: "noopener" },
+      el("span", { class: "l1" },
+        says ? el("span", { class: `stand ${pull.state}` }, says) : null,
+        el("span", { class: "num" }, `#${pull.number}`),
+        el("span", { class: "where" }, pull.where || (pull.repo || "").split("/").pop()),
+        when ? el("span", { class: "age" }, when) : null),
+      el("span", { class: "aname" }, pull.title || pull.url),
+      pullChecks(pull),
+      !ended && pull.failed.length ? el("span", { class: "failnames" }, pull.failed.map((failed) => el("code", {}, failed))) : null,
+      el("span", { class: "facts" }, pullReview(pull),
+        !ended && pull.conflicts ? el("span", { class: "fact ask" }, el("b", {}, "⚠"), "Conflicts") : null,
+        pull.size
+          ? el("span", { class: "size" }, el("span", { class: "a" }, `+${pull.size.added}`), " ", el("span", { class: "d" }, `−${pull.size.removed}`), ` · ${many(pull.size.files, "file", "files")}`)
+          : null)),
+    el("div", { class: "afoot" }, by, fix));
+}
+
+// The pull requests the projects hold, under their own head, in groups
+// by what they need, those merged or closed folded away; or nothing when
+// they hold none.
+function pullRequests() {
+  const pulls = activity.pulls || [];
+  if (!pulls.length) return [];
+  const count = (as) => pulls.filter((pull) => pullNeed(pull) === as).length;
+  const going = count("running") + count("review") + count("draft") + count("unread");
+  const sum = [
+    count("yours") ? `${count("yours")} ${count("yours") === 1 ? "needs" : "need"} you` : null,
+    count("ready") ? `${count("ready")} ready to merge` : null,
+    going ? `${going} in progress` : null,
+  ].filter(Boolean);
+  const done = pulls.filter(pullEnded);
+  return [
+    el("div", { class: "section-head" }, el("h2", {}, "Pull requests"), el("span", { class: "sum" }, sum.join(" · "))),
+    ...PULL_NEEDS.map(([as, name]) => cardGroup(as, name, pulls.filter((pull) => pullNeed(pull) === as).map(pullCard))),
+    done.length ? cardFold("pulls", `${done.length} merged or closed lately`, done.map(pullCard)) : null,
+  ];
+}
+
+// The Activity side of the top: how it all stands, the chats in their
+// groups, those done folded away, and the pull requests in theirs.
+function activityPage() {
+  if (!activity) return [el("p", { class: "empty" }, listing ? "Reading what goes on…" : "Reaching Cox…")];
+  const all = activityChats();
+  // A subagent's row stays under the chat that opened it, in the card of
+  // the chat at the top.
+  const tops = all.filter((chat) => chat.parent == null);
+  tops.sort((one, other) => ORDER[one.stands.as] - ORDER[other.stands.as]);
+  const of = (as) => tops.filter((chat) => treeGroup(chat) === as).map(chatCard);
+  const done = of("done");
+  return [el("div", { class: "activity" },
+    activity.github ? el("p", { class: "notice" }, activity.github) : null,
+    numbers(all),
+    tops.length
+      ? [cardGroup("yours", "Needs you", of("yours")), cardGroup("busy", "At work", of("busy")), cardGroup("stopped", "Stopped", of("stopped")),
+          done.length ? cardFold("chats", `${done.length} done`, done) : null]
+      : el("p", { class: "empty" }, "No chat is at work, has a plan to finish, or waits for you."),
+    pullRequests())];
+}
+
+// The two segments of the head switch the side of the top that shows, in
+// place: the address says which, for a chat to go back to it, but no
+// page is left behind for the browser to go back through.
+head.seg.addEventListener("click", (event) => {
+  const tab = event.target.closest("[data-side]");
+  if (!tab || tab.dataset.side === side) return;
+  side = tab.dataset.side;
+  history.replaceState(null, "", side === "chats" ? "#chats" : location.pathname + location.search);
+  say("");
+  if (side === "activity") readActivity();
+  draw();
+  window.scrollTo(0, 0);
+});
+// What goes on is asked again while the top shows, as a plan goes on
+// with no change to the list of chats, and drawn again as time passes.
+setInterval(() => {
+  if (!chat && document.visibilityState === "visible") readActivity();
+}, ACTIVITY_EVERY);
+setInterval(() => {
+  if (!chat && side === "activity" && document.visibilityState === "visible") redraw();
+}, AGES_EVERY);
+
+// The arrow goes back from a chat to the side of the top the human came
+// from.
 head.back.addEventListener("click", (event) => {
   event.preventDefault();
-  location.hash = "";
+  location.hash = side === "chats" ? "#chats" : "";
 });
 window.addEventListener("hashchange", () => {
+  if (shownKept() === null) side = location.hash === "#chats" ? "chats" : "activity";
   const trying = document.getElementById("trial");
   if (trying) trying.remove();
   document.body.classList.remove("trying");

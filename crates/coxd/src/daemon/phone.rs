@@ -1,6 +1,6 @@
 //! The page coxd serves the human's phone, for them to follow and answer
-//! the chats away from the Mac: the projects and chats, and a chat's
-//! conversation, as they change.
+//! the chats away from the Mac: what goes on in them, which is its top,
+//! the projects and chats, and a chat's conversation, as they change.
 //!
 //! An installed coxd serves it unless `settings.json` turns it off, as
 //! `{"phone": false}`; any other, as a test's or `cargo xtask run`'s,
