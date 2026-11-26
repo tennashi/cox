@@ -111,7 +111,7 @@ pub enum Kept {
     /// The pages the stage visited (see `cox::stage::page::history`).
     History,
     /// The plans the human dismissed from the Activity page (see
-    /// `cox::stage::activity`).
+    /// `crate::activity`).
     DismissedPlans,
     /// The folders the stage's playgrounds build and run their code in,
     /// and the target folder their Rust shares (see
