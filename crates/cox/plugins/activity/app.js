@@ -9,7 +9,8 @@
 // hour or four hours, as the human picks; then every step of every plan
 // in one bar. Below, a card for each chat at the top of its tree, in
 // groups by the chat of it that most needs the human: one that waits for
-// them, one at work, the rest folded away. Each chat tells how it stands,
+// them, one at work, one stopped with its plan not done, and those done
+// folded away. Each chat tells how it stands,
 // as a badge, its plan as a bar, how far it got, what it does now, in the
 // color of how it stands, when it last moved, where it is in the home, and,
 // when it waits for the human, a button that shows it, to answer or reply
@@ -261,9 +262,9 @@ function badge(chat) {
     case "ci":
       return { as: "work", says: "On CI", group: "work" };
     case "done":
-      return { as: "quiet", says: chat.reported ? "Reported" : "Done", group: "rest" };
+      return { as: "quiet", says: chat.reported ? "Reported" : "Done", group: "done" };
     default:
-      return { as: "quiet", says: "Stopped", group: "rest" };
+      return { as: "quiet", says: "Stopped", group: "stopped" };
   }
 }
 
@@ -365,11 +366,10 @@ const tree = (chat) => [chat, ...chat.below];
 
 /// The group the card of the chat at the top, `chat`, falls in: the
 /// human's turn, if any chat of it waits for them, then at work, if any
-/// is, else the rest.
+/// is, then stopped, if any is, else done.
 function treeGroup(chat) {
   const groups = tree(chat).map((one) => badge(one).group);
-  if (groups.includes("yours")) return "yours";
-  return groups.includes("work") ? "work" : "rest";
+  return ["yours", "work", "stopped"].find((group) => groups.includes(group)) ?? "done";
 }
 
 /// The card of the chat at the top, `chat`, with its subagents, marked
@@ -377,7 +377,7 @@ function treeGroup(chat) {
 const card = (chat) =>
   `<div class="card tree ${treeGroup(chat)}${tree(chat).some((one) => one.stands.as === "cut") ? " failed" : ""}">${lines(chat, 0)}</div>`;
 
-/// The folds the human opened, of the chats stopped or done and the pull
+/// The folds the human opened, of the chats done and the pull
 /// requests merged or closed, by their name.
 const foldsOpen = new Set();
 
@@ -929,12 +929,13 @@ function drawn() {
   const tops = all.filter((chat) => chat.parent == null);
   tops.sort((one, other) => ORDER[one.stands.as] - ORDER[other.stands.as]);
   const of = (as) => tops.filter((chat) => treeGroup(chat) === as).map(card);
-  const rest = of("rest");
+  const done = of("done");
   const cards = tops.length
     ? `<div class="section">` +
       group("yours", "Needs you", of("yours")) +
       group("work", "At work", of("work")) +
-      (rest.length ? fold("chats", `${rest.length} stopped or done`, `<div class="cards-group rest"><div class="cards">${rest.join("")}</div></div>`) : "") +
+      group("stopped", "Stopped", of("stopped")) +
+      (done.length ? fold("chats", `${done.length} done`, `<div class="cards-group done"><div class="cards">${done.join("")}</div></div>`) : "") +
       `</div>`
     : `<div class="none">No chat ${told.home ? "" : "here "}is at work, has a plan to finish, or waits for you.</div>`;
   app.innerHTML =
