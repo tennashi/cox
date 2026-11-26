@@ -300,6 +300,14 @@ svg .mono {
   border-radius: 9px;
   overflow: hidden;
   z-index: 2;
+  transition:
+    right 0.25s ease,
+    bottom 0.28s ease;
+}
+/* A pane open on the right would cover them: they stand beside it. */
+#dt.on ~ .zoom,
+#dr.on ~ .zoom {
+  right: 436px;
 }
 .zoom button {
   width: 34px;
@@ -814,5 +822,15 @@ svg .mono {
     top: 45vh;
     border-left: 0;
     border-top: 1px solid var(--border);
+  }
+  /* The zoom buttons stand above a drawer half up, or the drift's pane;
+     a drawer pulled up to all of it covers them with the drawing. */
+  #dt.on ~ .zoom {
+    right: 16px;
+    bottom: calc(50vh + 12px);
+  }
+  #dr.on ~ .zoom {
+    right: 16px;
+    bottom: calc(55vh + 12px);
   }
 }
