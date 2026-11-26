@@ -213,6 +213,25 @@ button.pill:active { background: var(--hover); }
   color: var(--dim);
 }
 .shelf-head .label { margin: 0; }
+.shelf-head .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* The project's map, at the end of its head: as tall as a finger, without
+   making the head taller. */
+.shelf-head .map {
+  flex-shrink: 0;
+  height: 44px;
+  margin: -7px 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: var(--row-radius);
+  background: none;
+  color: var(--faint);
+  font: inherit;
+  font-size: 12px;
+}
+.shelf-head .map:active { background: var(--hover); color: var(--foreground); }
 .shelf.asking .shelf-head .label { color: var(--asking); }
 /* The projects, apart from the home's chats, past a line, as the window's rail
    has them. */
