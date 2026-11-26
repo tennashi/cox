@@ -262,6 +262,14 @@ pub enum Internal {
         again: bool,
         answer: oneshot::Sender<Option<String>>,
     },
+    /// How the chats stand, as coxd lists them, and what the agent of
+    /// each of them that is at work, or asks the human something, does
+    /// now and asks, by its key, told on `answer`, for the phone's
+    /// Activity, which is told what goes on from them as the window's is
+    /// (see [`crate::activity`]).
+    Activity {
+        answer: oneshot::Sender<(crate::activity::Told, Vec<(u64, crate::commands::Now)>)>,
+    },
     /// What the tool call, or the permission request, at `at` in the
     /// conversation of the chat `key` shows, for the phone, which is told
     /// the conversation without it, to show as the human opens it, told
@@ -2310,6 +2318,27 @@ impl Daemon {
                     answer.send(Some(drawn.await)).ok();
                 });
             }
+            Internal::Activity { answer } => {
+                // Before anything settled, as when no window ever came.
+                if self.listed.is_none() {
+                    self.tell_listing();
+                }
+                let told = self
+                    .listed
+                    .as_ref()
+                    .map_or_default(crate::activity::Told::of);
+                let now = told
+                    .chats
+                    .iter()
+                    .filter(|chat| chat.working || chat.asking)
+                    .filter_map(|chat| {
+                        let entries = self.chat(chat.key)?.conversation().entries();
+                        let does = crate::commands::Chat::of(chat.key, entries).now();
+                        Some((chat.key, does))
+                    })
+                    .collect();
+                answer.send((told, now)).ok();
+            }
             Internal::Content { key, at, answer } => {
                 let content = self.chat(key).and_then(|chat| {
                     match chat.conversation().entries().get(at)? {
@@ -3853,6 +3882,47 @@ mod tests {
         );
         let none = store.add_chat(Some(here), "Not listed").unwrap();
         assert_eq!(key_of(&mut after, none), None);
+    }
+
+    #[test]
+    fn the_phone_is_told_how_the_chats_stand_with_no_window() {
+        let store = Rc::new(Store::in_memory().unwrap());
+        let here = store.project(Path::new("/tmp/cox-here"), "Here").unwrap();
+        let named = store.add_chat(Some(here), "Named").unwrap();
+        let own = store.add_chat(None, "Own").unwrap();
+        let home = TempDir::new();
+        // No window ever comes: the phone asks first.
+        let mut daemon = Daemon::new(
+            home.to_path_buf(),
+            false,
+            Rc::clone(&store),
+            Rc::new(NoAgents),
+            unbounded_channel().0,
+        );
+
+        let (answer, standing) = oneshot::channel();
+        daemon.hear(Internal::Activity { answer });
+        let (told, now) = standing.blocking_recv().unwrap();
+
+        assert_eq!(told.home, *home);
+        assert_eq!(told.shown, None);
+        assert_eq!(
+            told.projects
+                .iter()
+                .map(|(folder, name)| (folder.as_path(), name.as_str()))
+                .collect::<Vec<_>>(),
+            [(&*home, "Cox"), (Path::new("/tmp/cox-here"), "Here")]
+        );
+        let chats: Vec<_> = told
+            .chats
+            .iter()
+            .map(|chat| (chat.kept, chat.name.as_str(), chat.project.as_path()))
+            .collect();
+        assert_eq!(chats.len(), 2, "{chats:?}");
+        assert!(chats.contains(&(Some(named), "Named", Path::new("/tmp/cox-here"))));
+        assert!(chats.contains(&(Some(own), "Own", &*home)));
+        // None is at work, or asks: none tells what it does now.
+        assert!(now.is_empty(), "{now:?}");
     }
 
     #[test]
