@@ -621,7 +621,10 @@ An index takes from seconds to minutes, as rust-analyzer does on a large
 project; meanwhile the Map draws from the last commit's index, if there
 is one, and says what it waits for, or what an indexer needs that is not
 there. Cox keeps the indexes of the commits it drew last in
-`cache/indexes` in its [data folder](#the-data-folder).
+`cache/indexes` in its [data folder](#the-data-folder). rust-analyzer
+runs the build scripts and builds the procedural macros of the code it
+reads, the first time as long as a build: Cox keeps what it builds in
+`cache/index-builds`, so that the next commit builds only what changed.
 
 ### Plugins
 
