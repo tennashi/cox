@@ -399,17 +399,27 @@ impl Stage {
                     let text = std::fs::read_to_string(&path).unwrap_or_default();
                     stage.push_file::<Document>(path, &text, None, show, window, cx);
                 }
-                KeptTab::File { path, lines } => {
+                KeptTab::File {
+                    path,
+                    lines,
+                    branch: Some(on),
+                } => stage.push_branch_file(path, on, lines, show, cx),
+                KeptTab::File {
+                    path,
+                    lines,
+                    branch: None,
+                } => {
                     let text = std::fs::read_to_string(&path).unwrap_or_default();
                     stage.push_file::<Code>(path, &text, lines, show, window, cx);
                 }
                 KeptTab::Files {
                     open,
                     checkouts,
+                    branches,
                     shown,
                 } => {
                     stage.files.update(cx, |files, cx| {
-                        files.choosing(checkouts, shown, cx);
+                        files.choosing(checkouts, branches, shown, cx);
                         files.open_too(open, cx);
                     });
                     stage.push_files(show, cx);
@@ -540,7 +550,7 @@ impl Stage {
         if let Some(tab) = self.tabs.shown()
             && tab.content.is_file()
             && let file = tab.content.file(cx)
-            && self.files.read(cx).current() != file.as_deref()
+            && self.files.read(cx).current() != file.as_ref()
         {
             self.files.update(cx, |files, cx| files.reveal(file, cx));
         }

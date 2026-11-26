@@ -9,8 +9,8 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::Duration;
 
-use cox::stage::tree::{Chosen, Tree, Wrote};
-use cox_core::tabs::KeptTab;
+use cox::stage::tree::{Chosen, FileAt, Root, Tree, Wrote};
+use cox_core::tabs::{KeptTab, OnBranch};
 use cox_git::changes::How;
 use git::git;
 use gpui::{Entity, Modifiers, TestAppContext, VisualTestContext};
@@ -232,7 +232,7 @@ fn marks_the_file_shown_with_the_folders_it_is_in_open(cx: &mut TestAppContext) 
     assert_eq!(shown(&tree, &root, cx), ["src", "README.md"]);
 
     let file = root.join("src/code/tree.rs");
-    tree.update(cx, |tree, cx| tree.reveal(Some(file.clone()), cx));
+    tree.update(cx, |tree, cx| tree.reveal(Some(on_disk(&file)), cx));
     cx.run_until_parked();
     assert_eq!(
         shown(&tree, &root, cx),
@@ -245,7 +245,7 @@ fn marks_the_file_shown_with_the_folders_it_is_in_open(cx: &mut TestAppContext) 
         ]
     );
     assert_eq!(
-        tree.read_with(cx, |tree, _| tree.current().map(Path::to_owned)),
+        tree.read_with(cx, |tree, _| tree.current().map(|file| file.path.clone())),
         Some(file)
     );
 
@@ -254,7 +254,7 @@ fn marks_the_file_shown_with_the_folders_it_is_in_open(cx: &mut TestAppContext) 
     tree.update(cx, |tree, cx| tree.reveal(None, cx));
     cx.run_until_parked();
     assert_eq!(
-        tree.read_with(cx, |tree, _| tree.current().map(Path::to_owned)),
+        tree.read_with(cx, |tree, _| tree.current().map(|file| file.path.clone())),
         None
     );
     assert_eq!(
@@ -366,7 +366,18 @@ fn project(name: &str) -> (PathBuf, PathBuf) {
 
 /// The folder the tree shows.
 fn root(tree: &Entity<Tree>, cx: &mut VisualTestContext) -> PathBuf {
-    tree.read_with(cx, |tree, _| tree.root().to_owned())
+    tree.read_with(cx, |tree, _| {
+        assert_eq!(tree.root().branch(), None, "a folder on disk");
+        tree.root().top().to_owned()
+    })
+}
+
+/// The file at `path` on disk, as a tab of it shows it.
+fn on_disk(path: &Path) -> FileAt {
+    FileAt {
+        path: path.to_owned(),
+        branch: None,
+    }
 }
 
 #[gpui::test]
@@ -448,6 +459,7 @@ fn keeps_what_the_human_chose_to_show(cx: &mut TestAppContext) {
         KeptTab::Files {
             open: Vec::new(),
             checkouts: Vec::new(),
+            branches: Vec::new(),
             shown: None,
         }
     );
@@ -459,20 +471,24 @@ fn keeps_what_the_human_chose_to_show(cx: &mut TestAppContext) {
         KeptTab::Files {
             open: Vec::new(),
             checkouts: vec![("app".to_owned(), search.clone())],
+            branches: Vec::new(),
             shown: Some("app".to_owned()),
         }
     );
 
     // A stage that opens again shows it again.
     let KeptTab::Files {
-        checkouts, shown, ..
+        checkouts,
+        branches,
+        shown,
+        ..
     } = kept
     else {
         unreachable!()
     };
     let folder = project.clone();
     let (again, cx) = cx.add_window_view(|_, cx| Tree::new(folder, Vec::new(), cx));
-    again.update(cx, |tree, cx| tree.choosing(checkouts, shown, cx));
+    again.update(cx, |tree, cx| tree.choosing(checkouts, branches, shown, cx));
     cx.run_until_parked();
     assert_eq!(root(&again, cx), search);
 }
@@ -483,11 +499,11 @@ fn follows_the_file_shown_to_the_checkout_it_is_in(cx: &mut TestAppContext) {
     let elsewhere = scratch("follows-file-elsewhere", &["a.txt"]);
     let (tree, _, cx) = open(cx, &project, Vec::new());
     let marked = |tree: &Entity<Tree>, cx: &mut VisualTestContext| {
-        tree.read_with(cx, |tree, _| tree.current().map(Path::to_owned))
+        tree.read_with(cx, |tree, _| tree.current().map(|file| file.path.clone()))
     };
 
     let file = search.join("s.txt");
-    tree.update(cx, |tree, cx| tree.reveal(Some(file.clone()), cx));
+    tree.update(cx, |tree, cx| tree.reveal(Some(on_disk(&file)), cx));
     cx.run_until_parked();
     assert_eq!(root(&tree, cx), search);
     assert_eq!(marked(&tree, cx), Some(file));
@@ -495,9 +511,258 @@ fn follows_the_file_shown_to_the_checkout_it_is_in(cx: &mut TestAppContext) {
     // A file of the project's in none of the checkouts, as of its wiki, or
     // of no project's: the tree stays, marking none of its rows.
     for file in [project.join("wiki/index.md"), elsewhere.join("a.txt")] {
-        tree.update(cx, |tree, cx| tree.reveal(Some(file.clone()), cx));
+        tree.update(cx, |tree, cx| tree.reveal(Some(on_disk(&file)), cx));
         cx.run_until_parked();
         assert_eq!(root(&tree, cx), search);
         assert!(!tree.read_with(cx, |tree, _| tree.shown()).contains(&file));
     }
+}
+
+/// A project whose directory `app` is a repository on `main`, with a
+/// branch `side` no checkout has, whose files are not on disk: `NOTES.md`
+/// and `src/deep/lib.rs`, `deep` all there is in `src`.
+fn project_with_a_branch(name: &str) -> (PathBuf, PathBuf) {
+    let project = scratch(name, &[]);
+    let app = project.join("directories/app");
+    repository(&app, &["README.md"]);
+    git(&app, &["checkout", "--quiet", "-b", "side"]);
+    std::fs::create_dir_all(app.join("src/deep")).unwrap();
+    std::fs::write(app.join("src/deep/lib.rs"), "pub fn side() {}\n").unwrap();
+    std::fs::write(app.join("NOTES.md"), "# Side\n").unwrap();
+    git(&app, &["add", "--all"]);
+    git(&app, &["commit", "--quiet", "-m", "Side"]);
+    git(&app, &["checkout", "--quiet", "main"]);
+    assert!(!app.join("src").exists());
+    (project, app)
+}
+
+/// The branch `branch` of the repository at `app`.
+fn side(app: &Path, branch: &str) -> OnBranch {
+    OnBranch {
+        repository: app.to_owned(),
+        branch: branch.to_owned(),
+    }
+}
+
+#[gpui::test]
+fn shows_the_files_of_a_branch_no_checkout_has_from_git(cx: &mut TestAppContext) {
+    let (project, app) = project_with_a_branch("branch");
+    let (tree, chosen, cx) = open(cx, &project, Vec::new());
+    assert_eq!(
+        tree.read_with(cx, |tree, _| tree
+            .checkouts()
+            .iter()
+            .map(|checkout| (checkout.label(), checkout.branch().is_some()))
+            .collect::<Vec<_>>()),
+        [("main".to_owned(), false), ("side".to_owned(), true)]
+    );
+
+    press("files-checkout", cx);
+    press("files-checkout-choice-1", cx);
+    assert_eq!(
+        tree.read_with(cx, |tree, _| tree.root().clone()),
+        Root::Branch(side(&app, "side"))
+    );
+    // The branch's files, from Git.
+    assert_eq!(shown(&tree, &app, cx), ["src", "NOTES.md", "README.md"]);
+    // `src` opens with `deep`, all there is in it, as one row, as on disk.
+    click(1, cx);
+    assert_eq!(
+        shown(&tree, &app, cx),
+        ["src/deep", "src/deep/lib.rs", "NOTES.md", "README.md"]
+    );
+    // A file of the branch is chosen as the branch's, not as one on disk.
+    let branches = Rc::new(RefCell::new(Vec::new()));
+    let heard = Rc::clone(&branches);
+    cx.update(|_, cx| {
+        cx.subscribe(&tree, move |_, chosen: &Chosen, _| {
+            heard.borrow_mut().push(chosen.branch.clone());
+        })
+        .detach();
+    });
+    click(2, cx);
+    assert_eq!(*chosen.borrow(), [(app.join("src/deep/lib.rs"), false)]);
+    assert_eq!(*branches.borrow(), [Some(side(&app, "side"))]);
+    // What changed on disk is not marked on the branch's files.
+    std::fs::write(app.join("README.md"), "changed on disk\n").unwrap();
+    look(cx);
+    assert_eq!(
+        tree.read_with(cx, |tree, _| tree.how(&app.join("README.md"))),
+        None
+    );
+    // Nothing of it was written to disk.
+    assert!(!app.join("src").exists());
+}
+
+#[gpui::test]
+fn lists_a_branch_again_as_it_moves(cx: &mut TestAppContext) {
+    let (project, app) = project_with_a_branch("branch-moves");
+    let (tree, _, cx) = open(cx, &project, Vec::new());
+    tree.update(cx, |tree, cx| {
+        tree.show_branch("app".to_owned(), "side".to_owned(), cx);
+    });
+    cx.run_until_parked();
+    assert_eq!(shown(&tree, &app, cx), ["src", "NOTES.md", "README.md"]);
+
+    // A commit to the branch from elsewhere, as an agent's in a checkout
+    // it then let go of.
+    git(&app, &["checkout", "--quiet", "side"]);
+    std::fs::write(app.join("MORE.md"), "more\n").unwrap();
+    git(&app, &["add", "--all"]);
+    git(&app, &["commit", "--quiet", "-m", "More"]);
+    git(&app, &["checkout", "--quiet", "main"]);
+    look(cx);
+    assert_eq!(
+        shown(&tree, &app, cx),
+        ["src", "MORE.md", "NOTES.md", "README.md"]
+    );
+}
+
+#[gpui::test]
+fn shows_where_a_branch_is_once_it_is_gone_or_checked_out(cx: &mut TestAppContext) {
+    let (project, app) = project_with_a_branch("branch-falls-back");
+    let (tree, _, cx) = open(cx, &project, Vec::new());
+    tree.update(cx, |tree, cx| {
+        tree.show_branch("app".to_owned(), "side".to_owned(), cx);
+    });
+    cx.run_until_parked();
+
+    // A checkout has it now: the tree shows that checkout, once it lists
+    // the checkouts again.
+    let worktree = project.join("worktrees/app/side");
+    git(
+        &app,
+        &[
+            "worktree",
+            "add",
+            "--quiet",
+            &worktree.to_string_lossy(),
+            "side",
+        ],
+    );
+    for _ in 0..10 {
+        look(cx);
+    }
+    assert_eq!(root(&tree, cx), worktree);
+
+    // Gone: the directory's own checkout.
+    git(&app, &["branch", "--quiet", "other"]);
+    let (tree, _, cx) = open(cx, &project, Vec::new());
+    tree.update(cx, |tree, cx| {
+        tree.show_branch("app".to_owned(), "other".to_owned(), cx);
+    });
+    cx.run_until_parked();
+    assert_eq!(
+        tree.read_with(cx, |tree, _| tree.root().clone()),
+        Root::Branch(side(&app, "other"))
+    );
+    git(&app, &["branch", "--quiet", "-D", "other"]);
+    look(cx);
+    assert_eq!(root(&tree, cx), app);
+}
+
+#[gpui::test]
+fn says_a_submodule_of_a_branch_cannot_be_listed(cx: &mut TestAppContext) {
+    let (project, app) = project_with_a_branch("branch-submodule");
+    git(&app, &["checkout", "--quiet", "side"]);
+    let commit = git(&app, &["rev-parse", "HEAD"]).trim().to_owned();
+    git(
+        &app,
+        &[
+            "update-index",
+            "--add",
+            "--cacheinfo",
+            &format!("160000,{commit},vendor"),
+        ],
+    );
+    git(&app, &["commit", "--quiet", "-m", "Vendor"]);
+    git(&app, &["checkout", "--quiet", "main"]);
+    let (tree, _, cx) = open(cx, &project, Vec::new());
+    tree.update(cx, |tree, cx| {
+        tree.show_branch("app".to_owned(), "side".to_owned(), cx);
+    });
+    cx.run_until_parked();
+    assert_eq!(
+        shown(&tree, &app, cx),
+        ["src", "vendor", "NOTES.md", "README.md"]
+    );
+
+    // It opens as a folder whose files it cannot read, as the tree says.
+    click(2, cx);
+    assert_eq!(
+        tree.read_with(cx, |tree, _| tree.open()),
+        [app.join("vendor")]
+    );
+    assert_eq!(
+        shown(&tree, &app, cx),
+        ["src", "vendor", "NOTES.md", "README.md"]
+    );
+}
+
+#[gpui::test]
+fn keeps_the_branch_the_human_chose(cx: &mut TestAppContext) {
+    let (project, app) = project_with_a_branch("branch-keeps");
+    let (tree, _, cx) = open(cx, &project, Vec::new());
+    tree.update(cx, |tree, cx| {
+        tree.show_branch("app".to_owned(), "side".to_owned(), cx);
+    });
+    let kept = tree.read_with(cx, |tree, _| tree.kept());
+    assert_eq!(
+        kept,
+        KeptTab::Files {
+            open: Vec::new(),
+            checkouts: Vec::new(),
+            branches: vec![("app".to_owned(), "side".to_owned())],
+            shown: Some("app".to_owned()),
+        }
+    );
+
+    let folder = project.clone();
+    let (again, cx) = cx.add_window_view(|_, cx| Tree::new(folder, Vec::new(), cx));
+    again.update(cx, |tree, cx| {
+        tree.choosing(
+            Vec::new(),
+            vec![("app".to_owned(), "side".to_owned())],
+            Some("app".to_owned()),
+            cx,
+        );
+    });
+    cx.run_until_parked();
+    assert_eq!(
+        again.read_with(cx, |tree, _| tree.root().clone()),
+        Root::Branch(side(&app, "side"))
+    );
+    assert_eq!(shown(&again, &app, cx), ["src", "NOTES.md", "README.md"]);
+}
+
+#[gpui::test]
+fn follows_a_file_of_a_branch_to_the_branch(cx: &mut TestAppContext) {
+    let (project, app) = project_with_a_branch("branch-reveals");
+    let (tree, _, cx) = open(cx, &project, Vec::new());
+    let marked = |tree: &Entity<Tree>, cx: &mut VisualTestContext| {
+        tree.read_with(cx, |tree, _| tree.current().cloned())
+    };
+
+    let file = FileAt {
+        path: app.join("src/deep/lib.rs"),
+        branch: Some(side(&app, "side")),
+    };
+    tree.update(cx, |tree, cx| tree.reveal(Some(file.clone()), cx));
+    cx.run_until_parked();
+    assert_eq!(
+        tree.read_with(cx, |tree, _| tree.root().clone()),
+        Root::Branch(side(&app, "side"))
+    );
+    assert_eq!(marked(&tree, cx), Some(file));
+    assert_eq!(
+        shown(&tree, &app, cx),
+        ["src/deep", "src/deep/lib.rs", "NOTES.md", "README.md"]
+    );
+
+    // The file on disk of the same path as one of the branch's is the
+    // checkout's, not the branch's.
+    let readme = on_disk(&app.join("README.md"));
+    tree.update(cx, |tree, cx| tree.reveal(Some(readme), cx));
+    cx.run_until_parked();
+    assert_eq!(root(&tree, cx), app);
 }

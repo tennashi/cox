@@ -11,7 +11,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use cox_core::tabs::{KeptTab, Lines};
+use cox_core::tabs::{KeptTab, Lines, OnBranch};
 use gpui::{
     AnyView, App, Context, Entity, EventEmitter, FocusHandle, Focusable, Image, Render,
     Subscription,
@@ -28,7 +28,7 @@ use super::mac_window::MacWindow;
 use super::page::Page;
 use super::playground::Playground;
 use super::terminal::Terminal;
-use super::tree::Unchosen;
+use super::tree::{FileAt, Unchosen};
 use super::windows::Windows;
 use crate::ui::LinkClicked;
 use cox_browser::TargetId;
@@ -59,6 +59,12 @@ pub(super) trait ShowsFile: Shows + EventEmitter<LinkClicked> {
 
     /// The file, as an absolute path.
     fn path(&self) -> &Path;
+
+    /// The branch no checkout has the file is of, read from Git, if it is
+    /// of one: then it is not the file on disk at its path.
+    fn branch(&self) -> Option<&OnBranch> {
+        None
+    }
 
     /// Shows `text`, which the file says now, at `lines` if it shows lines.
     fn show(&mut self, text: &str, lines: Option<Lines>, cx: &mut Context<Self>);
@@ -177,11 +183,17 @@ impl TabContent {
         matches!(self, Self::Document(_) | Self::Code(_) | Self::Files(_))
     }
 
-    /// The file the tab shows, if it shows one.
-    pub(super) fn file(&self, cx: &App) -> Option<PathBuf> {
+    /// The file the tab shows, if it shows one, on disk or of a branch.
+    pub(super) fn file(&self, cx: &App) -> Option<FileAt> {
         match self {
-            Self::Document(document) => Some(document.read(cx).path().to_owned()),
-            Self::Code(code) => Some(code.read(cx).path().to_owned()),
+            Self::Document(document) => Some(FileAt {
+                path: document.read(cx).path().to_owned(),
+                branch: None,
+            }),
+            Self::Code(code) => Some(FileAt {
+                path: code.read(cx).path().to_owned(),
+                branch: code.read(cx).branch().cloned(),
+            }),
             Self::Files(_)
             | Self::Page { .. }
             | Self::Changes(_)

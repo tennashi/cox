@@ -79,8 +79,10 @@ pub fn all(folder: &Path, limit: usize) -> Vec<String> {
     files.into_iter().map(|(_, path)| path).collect()
 }
 
-/// Folders before files, then by name, whatever its case, then by case.
-fn order(a: &Listed, b: &Listed) -> Ordering {
+/// The order a folder lists its files and folders in: folders before
+/// files, then by name, whatever its case, then by case.
+#[must_use]
+pub fn order(a: &Listed, b: &Listed) -> Ordering {
     b.is_folder
         .cmp(&a.is_folder)
         .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))

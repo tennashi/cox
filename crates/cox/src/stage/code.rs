@@ -23,6 +23,12 @@
 //! as a page goes to another: back and forward go between the places the
 //! tab went to.
 //!
+//! A tab can show the file of a branch no checkout has, read from Git
+//! (see [`Code::on_branch`]), which is not the file on disk at its path:
+//! its bar says the branch, it asks no server, does not follow the disk,
+//! and goes to no other file. It shows the file as it was when the tab
+//! read it.
+//!
 //! - [`file`] is the file shown, with what is worked out of it to draw.
 //! - [`text`] draws the lines in sight, and [`bar`] the bar above them.
 //! - [`menu`] is the menu of the right button, [`hover`] what the server
@@ -40,7 +46,7 @@ use std::ops::Range;
 use std::path::{Path, PathBuf};
 
 use cox_core::entry::Attachment;
-use cox_core::tabs::{KeptTab, Lines};
+use cox_core::tabs::{KeptTab, Lines, OnBranch};
 use cox_editor::buffer::{Buffer, Point as Place, is_word, word_around};
 use cox_editor::history::History;
 use cox_editor::language::Highlight;
@@ -112,6 +118,9 @@ pub fn bind_keys(cx: &mut App) {
 pub struct Code {
     /// The file shown, with what is worked out of it to draw it.
     file: File,
+    /// The branch no checkout has the file is of, read from Git, if it is
+    /// of one, rather than on disk.
+    branch: Option<OnBranch>,
     /// How the tab looks at the file.
     look: Look,
     /// The project's server that knows the language of the file, if the
@@ -312,6 +321,7 @@ impl Code {
         let server_changes = server.as_ref().map(|server| Self::hear(server, cx));
         let mut code = Self {
             file: File::new(path, text),
+            branch: None,
             look: Look {
                 marked: lines,
                 reveal: lines.map(|lines| lines.first - 1),
@@ -348,9 +358,37 @@ impl Code {
         })
     }
 
+    /// A tab showing the file at `path` of the branch `on`, as `read`
+    /// read it from Git, or why it could not be shown, at `lines` if any:
+    /// read-only, asking no server, and following nothing on disk.
+    #[expect(
+        clippy::used_underscore_binding,
+        reason = "what follows the disk is only held: dropping it stops it"
+    )]
+    pub fn on_branch(
+        path: PathBuf,
+        read: Result<String, String>,
+        lines: Option<Lines>,
+        on: OnBranch,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let mut code = Self::new(path, read.as_deref().unwrap_or_default(), lines, None, cx);
+        code.file.unread = read.err();
+        code.branch = Some(on);
+        // The file on disk at its path is another branch's.
+        code._follow = Task::ready(());
+        code
+    }
+
     #[must_use]
     pub fn path(&self) -> &Path {
         &self.file.path
+    }
+
+    /// The branch no checkout has the file shown is of, if it is of one.
+    #[must_use]
+    pub fn branch(&self) -> Option<&OnBranch> {
+        self.branch.as_ref()
     }
 
     /// The text shown.
@@ -524,6 +562,10 @@ impl Code {
     fn open(&mut self, path: &Path, cx: &mut Context<Self>) -> bool {
         if path == self.file.path {
             return true;
+        }
+        // Another file on disk is not of the branch shown.
+        if self.branch.is_some() {
+            return false;
         }
         self.file = match File::read(path) {
             Ok(file) => file,
@@ -1229,15 +1271,19 @@ impl Follows for Code {
 }
 
 impl Shows for Code {
-    /// The file's name.
+    /// The file's name, and the branch it is of, if it is of one.
     fn title(&self) -> String {
-        self.file.title()
+        match &self.branch {
+            Some(on) => format!("{} · {}", self.file.title(), on.branch),
+            None => self.file.title(),
+        }
     }
 
     fn kept(&self) -> KeptTab {
         KeptTab::File {
             path: self.file.path.clone(),
             lines: self.look.marked,
+            branch: self.branch.clone(),
         }
     }
 }
@@ -1263,6 +1309,10 @@ impl ShowsFile for Code {
 
     fn path(&self) -> &Path {
         &self.file.path
+    }
+
+    fn branch(&self) -> Option<&OnBranch> {
+        self.branch.as_ref()
     }
 
     fn show(&mut self, text: &str, lines: Option<Lines>, cx: &mut Context<Self>) {

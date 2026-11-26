@@ -26,14 +26,19 @@
 //! (see [`crate::stage::chooser`]): the directories by their names, and,
 //! for a directory with more than its own checkout,
 //! a menu of its checkouts, its own first, then its worktrees, each by
-//! its branch. Branches no checkout has are not listed, as their files
-//! are not there to read. At first the tree shows the first directory,
+//! its branch, then its branches no checkout has. The files of such a
+//! branch are not on disk: the tree lists them from Git, read-only, as
+//! they are at the commit the branch is at, and lists them again as the
+//! branch moves (see [`root`]). A file chosen there opens on a tab of
+//! code of its own, which says the branch (see [`FileAt`]). As the
+//! branch is gone, or a checkout has it, the tree shows that checkout,
+//! or else the directory's own. At first the tree shows the first directory,
 //! in its own checkout, and keeps what the human chose after that, as
 //! the tab of a file not chosen yet keeps it. What is in the project's
 //! folder beside its directories, as its wiki and its worktrees, the tree
 //! does not show. As the tab shown shows a file outside the folder the
-//! tree shows, the tree shows the checkout the file is in, if it is in
-//! one, and else marks nothing. A folder with no directories, as a
+//! tree shows, the tree shows the checkout the file is in, or the branch
+//! it is from, if it is in one, and else marks nothing. A folder with no directories, as a
 //! worktree or a sketch, has no chooser: the tree shows the folder
 //! itself.
 //!
@@ -45,8 +50,10 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::Duration;
 
-use cox_core::tabs::KeptTab;
-use cox_editor::files::{self, Listed};
+mod root;
+
+use cox_core::tabs::{KeptTab, OnBranch};
+use cox_editor::files::Listed;
 use cox_git::changes::How;
 use coxd::repositories::{self, Checkout};
 use gpui::{
@@ -54,6 +61,7 @@ use gpui::{
     Global, ScrollHandle, Stateful, Task, Window, div, prelude::*, px, rgb,
 };
 
+pub use self::root::Root;
 use crate::stage::chooser::{
     self, Chip, Chooser, Menus, checkout_button, checkouts_menu, chips, under,
 };
@@ -87,22 +95,37 @@ const TOP: f32 = 4.;
 pub const WIDTH: f32 = 260.;
 
 /// The human chose the file at `path`, to read it: on the tab shown, or
-/// on a tab of its own when `apart`.
+/// on a tab of its own when `apart`; of the branch `branch`, read from
+/// Git, when it is from one, rather than from disk.
 pub struct Chosen {
     pub path: PathBuf,
     pub apart: bool,
+    pub branch: Option<OnBranch>,
+}
+
+/// A file a tab shows: on disk at `path`, or, with `branch`, the file
+/// of that path on a branch no checkout has, which is not the file on
+/// disk at that path.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FileAt {
+    pub path: PathBuf,
+    pub branch: Option<OnBranch>,
 }
 
 /// The human chose another folder of the project for the tree to show,
 /// or the tree followed the file of the tab shown to one.
 pub struct Rerooted;
 
+/// What marks a branch no checkout has in the menu of the checkouts: its
+/// files are read from Git, and cannot be changed there.
+const BRANCH_TAG: &str = "read-only";
+
 /// The one menu above the tree: the checkouts of the directory shown.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct CheckoutsMenu;
 
-/// A directory of the project, by its name, with its checkouts that have
-/// their files (see [`repositories::checkouts`]).
+/// A directory of the project, by its name, with its checkouts, and its
+/// branches no checkout has (see [`repositories::checkouts`]).
 type Directory = (String, Vec<Checkout>);
 
 /// What tells the tree which files the agent of each chat of the
@@ -171,6 +194,9 @@ pub struct Tree {
     /// The checkout the human chose of each directory, by its name, the
     /// checkout's folder.
     checkouts: Vec<(String, PathBuf)>,
+    /// The branch no checkout has the human chose of each directory, by
+    /// its name, the branch's.
+    branches: Vec<(String, String)>,
     /// The directory the human chose to show, by its name, once they
     /// chose.
     shown: Option<String>,
@@ -186,16 +212,19 @@ pub struct Tree {
     /// Whether to follow the file marked to the checkout it is in once the
     /// directories are listed.
     to_follow: bool,
-    /// The folder shown, the top of the tree, which is always open: one
-    /// of `folder`'s directories, in a checkout, or `folder` itself.
-    root: PathBuf,
+    /// What the tree shows, its top always open: one of `folder`'s
+    /// directories, in a checkout or on a branch, or `folder` itself.
+    root: Root,
+    /// The commit a branch shown was at as the tree listed it.
+    at: Option<String>,
     /// The folders open in it besides, by their absolute paths.
     open: BTreeSet<PathBuf>,
     /// What is in each folder open, as the tab last listed it, or why it
     /// could not be listed.
     listed: HashMap<PathBuf, Result<Vec<Listed>, String>>,
-    /// The file of the tab shown, which the tree marks.
-    current: Option<PathBuf>,
+    /// The file of the tab shown, which the tree marks while it shows
+    /// where the file is.
+    current: Option<FileAt>,
     /// How each file that changed changed, by its absolute path, as the
     /// tab last looked.
     hows: HashMap<PathBuf, How>,
@@ -233,19 +262,21 @@ impl Tree {
             .into_iter()
             .filter_map(|(name, directory)| Some((name?, directory)))
             .collect();
-        let root = found
+        let top = found
             .first()
             .map_or_else(|| folder.clone(), |(_, directory)| canonical(directory));
-        let open: BTreeSet<PathBuf> = open.into_iter().filter(|path| *path != root).collect();
-        let listed = std::iter::once(&root)
-            .chain(&open)
-            .map(|folder| (folder.clone(), list(folder)))
+        let open: BTreeSet<PathBuf> = open.into_iter().filter(|path| *path != top).collect();
+        let root = Root::Folder(top);
+        let listed = std::iter::once(root.top())
+            .chain(open.iter().map(PathBuf::as_path))
+            .map(|folder| (folder.to_owned(), root::list(&root, None, folder)))
             .collect();
         Self {
             folder,
             found,
             directories: None,
             checkouts: Vec::new(),
+            branches: Vec::new(),
             shown: None,
             menus: Menus::default(),
             counted: HashMap::new(),
@@ -253,6 +284,7 @@ impl Tree {
             looking: None,
             to_follow: false,
             root,
+            at: None,
             open,
             listed,
             current: None,
@@ -325,16 +357,27 @@ impl Tree {
     /// The folders whose files the tab shows: the one shown, and the ones
     /// open in it.
     fn folders(&self) -> Vec<PathBuf> {
-        std::iter::once(&self.root)
-            .chain(self.open.iter().filter(|open| open.starts_with(&self.root)))
-            .cloned()
+        let top = self.root.top();
+        std::iter::once(top)
+            .chain(
+                self.open
+                    .iter()
+                    .map(PathBuf::as_path)
+                    .filter(|open| open.starts_with(top)),
+            )
+            .map(Path::to_owned)
             .collect()
     }
 
-    /// The folder the tree shows, the top of it.
+    /// What the tree shows, the top of it.
     #[must_use]
-    pub fn root(&self) -> &Path {
+    pub fn root(&self) -> &Root {
         &self.root
+    }
+
+    /// What is in `folder`, of what the tree shows (see [`root::list`]).
+    fn list(&self, folder: &Path) -> Result<Vec<Listed>, String> {
+        root::list(&self.root, self.at.as_deref(), folder)
     }
 
     /// The directories of the project the human chooses among, by their
@@ -364,6 +407,7 @@ impl Tree {
         KeptTab::Files {
             open: Vec::new(),
             checkouts: self.checkouts.clone(),
+            branches: self.branches.clone(),
             shown: self.shown.clone(),
         }
     }
@@ -373,9 +417,11 @@ impl Tree {
     pub fn choosing(
         &mut self,
         checkouts: Vec<(String, PathBuf)>,
+        branches: Vec<(String, String)>,
         shown: Option<String>,
         cx: &mut Context<Self>,
     ) {
+        self.branches = branches;
         self.checkouts = checkouts
             .into_iter()
             .map(|(name, folder)| (name, canonical(&folder)))
@@ -394,10 +440,25 @@ impl Tree {
     /// Shows the directory `name` in its checkout at `folder`, as the human
     /// chose it.
     pub fn show_checkout(&mut self, name: String, folder: PathBuf, cx: &mut Context<Self>) {
-        self.checkouts.retain(|(chosen, _)| *chosen != name);
+        self.forget_choice(&name);
         self.checkouts.push((name.clone(), folder));
         self.shown = Some(name);
         self.chose(cx);
+    }
+
+    /// Shows the directory `name` on its branch `branch`, which no checkout
+    /// has, from Git, as the human chose it.
+    pub fn show_branch(&mut self, name: String, branch: String, cx: &mut Context<Self>) {
+        self.forget_choice(&name);
+        self.branches.push((name.clone(), branch));
+        self.shown = Some(name);
+        self.chose(cx);
+    }
+
+    /// Forgets the checkout or branch chosen of the directory `name`.
+    fn forget_choice(&mut self, name: &str) {
+        self.checkouts.retain(|(chosen, _)| chosen != name);
+        self.branches.retain(|(chosen, _)| chosen != name);
     }
 
     /// The human chose what to show: shows it, and tells the stage, which
@@ -411,7 +472,7 @@ impl Tree {
 
     /// The folder to show, as the human chose it, of the directories as
     /// the tree last listed them, or found them until then.
-    fn chosen_root(&self) -> PathBuf {
+    fn chosen_root(&self) -> Root {
         let has = |name: &str| match &self.directories {
             Some(directories) => directories.iter().any(|(listed, _)| listed == name),
             None => self.found.iter().any(|(found, _)| found == name),
@@ -424,26 +485,64 @@ impl Tree {
             Some(name) if has(name) => Some(name.clone()),
             _ => first(),
         };
-        directory.map_or_else(|| self.folder.clone(), |name| self.checkout_of(&name))
+        directory.map_or_else(
+            || Root::Folder(self.folder.clone()),
+            |name| self.root_of(&name),
+        )
     }
 
-    /// The folder of the checkout of the directory `name` to show: the one
-    /// the human chose, while it is one of its checkouts, or else its own.
-    fn checkout_of(&self, name: &str) -> PathBuf {
-        let own = self.folder.join(coxd::settings::DIRECTORIES).join(name);
+    /// What to show of the directory `name`: the branch the human chose
+    /// of it, while no checkout has it, or else the checkout that has it;
+    /// or else the checkout they chose, while it is one of its checkouts;
+    /// or else its own.
+    fn root_of(&self, name: &str) -> Root {
+        let own = canonical(&self.folder.join(coxd::settings::DIRECTORIES).join(name));
+        let listed = self
+            .directories
+            .iter()
+            .flatten()
+            .find(|(listed, _)| listed == name)
+            .map(|(_, checkouts)| checkouts);
+        let branch = self
+            .branches
+            .iter()
+            .find(|(chosen, _)| chosen == name)
+            .map(|(_, branch)| branch);
+        if let Some(branch) = branch {
+            let Some(checkouts) = listed else {
+                // As kept, until the directory is listed.
+                return Root::Branch(OnBranch {
+                    repository: own,
+                    branch: branch.clone(),
+                });
+            };
+            let found = checkouts
+                .iter()
+                .find(|checkout| {
+                    checkout.branch() == Some(branch) || checked_out(checkout) == Some(branch)
+                })
+                .or_else(|| checkouts.first());
+            return found.map_or(Root::Folder(own), root_at);
+        }
+        Root::Folder(self.checkout_of(name, listed, own))
+    }
+
+    /// The folder of the checkout of the directory `name`, whose checkouts
+    /// are `listed`, if listed, to show: the one the human chose, while it
+    /// is one of them, or else its own, `own`.
+    fn checkout_of(&self, name: &str, listed: Option<&Vec<Checkout>>, own: PathBuf) -> PathBuf {
         let chosen = self
             .checkouts
             .iter()
             .find(|(chosen, _)| chosen == name)
             .map(|(_, folder)| canonical(folder));
-        let listed = self
-            .directories
-            .iter()
-            .flatten()
-            .find(|(listed, _)| listed == name);
         match listed {
-            Some((_, checkouts)) => chosen
-                .filter(|chosen| checkouts.iter().any(|checkout| checkout.folder() == chosen))
+            Some(checkouts) => chosen
+                .filter(|chosen| {
+                    checkouts
+                        .iter()
+                        .any(|checkout| checkout.branch().is_none() && checkout.folder() == chosen)
+                })
                 .or_else(|| checkouts.first().map(|own| own.folder().to_owned()))
                 .unwrap_or(own),
             None => chosen.filter(|chosen| chosen.is_dir()).unwrap_or(own),
@@ -461,7 +560,7 @@ impl Tree {
             .find_map(|(directory, (_, checkouts))| {
                 checkouts
                     .iter()
-                    .position(|checkout| checkout.folder() == self.root)
+                    .position(|checkout| root_at(checkout) == self.root)
                     .map(|checkout| (directory, checkout))
             })
     }
@@ -469,13 +568,20 @@ impl Tree {
     /// Shows the folder chosen, from its top, if it is not the one shown,
     /// and looks at it at once.
     fn reroot(&mut self, cx: &mut Context<Self>) {
-        let root = canonical(&self.chosen_root());
+        let root = match self.chosen_root() {
+            Root::Folder(folder) => Root::Folder(canonical(&folder)),
+            branch @ Root::Branch(_) => branch,
+        };
         if root == self.root {
             return;
         }
+        self.at = root::commit_of(&root);
         self.root = root;
+        // What another root listed is not of this one, even at its paths.
+        self.listed.clear();
         for folder in self.folders() {
-            self.listed.insert(folder.clone(), list(&folder));
+            let listed = self.list(&folder);
+            self.listed.insert(folder, listed);
         }
         self.hows.clear();
         self.changed.clear();
@@ -502,39 +608,57 @@ impl Tree {
         }
     }
 
-    /// The checkout of a directory the file at `path` is in, the
-    /// innermost if several are: the directory's name and the checkout's
-    /// folder.
-    fn holder_of(&self, path: &Path) -> Option<(String, PathBuf)> {
+    /// What of a directory the file `file` is of, by the directory's name:
+    /// the checkout it is in, the innermost if several are, or the branch
+    /// no checkout has it is from.
+    fn holder_of(&self, file: &FileAt) -> Option<(String, Root)> {
         self.directories
             .iter()
             .flatten()
             .flat_map(|(name, checkouts)| {
                 checkouts
                     .iter()
-                    .map(move |checkout| (name, checkout.folder()))
+                    .map(move |checkout| (name, root_at(checkout)))
             })
-            .filter(|(_, folder)| path.starts_with(folder))
-            .max_by_key(|(_, folder)| folder.components().count())
-            .map(|(name, folder)| (name.clone(), folder.to_owned()))
+            .filter(|(_, root)| {
+                root.branch() == file.branch.as_ref() && file.path.starts_with(root.top())
+            })
+            .max_by_key(|(_, root)| root.top().components().count())
+            .map(|(name, root)| (name.clone(), root))
+    }
+
+    /// Whether the tree shows where the file `file` is.
+    fn shows(&self, file: &FileAt) -> bool {
+        self.root.branch() == file.branch.as_ref() && file.path.starts_with(self.root.top())
+    }
+
+    /// The file the tree marks: the file of the tab shown, while the tree
+    /// shows where it is.
+    fn marked(&self) -> Option<&Path> {
+        self.current
+            .as_ref()
+            .filter(|file| self.shows(file))
+            .map(|file| file.path.as_path())
     }
 
     /// Shows the checkout the file marked is in, if it is in one and
     /// outside the folder shown; once the directories are listed, if they
     /// are not yet.
     fn follow_marked(&mut self, cx: &mut Context<Self>) {
-        let Some(path) = self.current.clone() else {
+        let Some(file) = self.current.clone() else {
             return;
         };
-        if self.found.is_empty() || path.starts_with(&self.root) {
+        if self.found.is_empty() || self.shows(&file) {
             return;
         }
         if self.directories.is_none() {
             self.to_follow = true;
             return;
         }
-        if let Some((name, folder)) = self.holder_of(&path) {
-            self.show_checkout(name, folder, cx);
+        match self.holder_of(&file) {
+            Some((name, Root::Folder(folder))) => self.show_checkout(name, folder, cx),
+            Some((name, Root::Branch(on))) => self.show_branch(name, on.branch, cx),
+            None => {}
         }
         self.open_to_marked();
     }
@@ -547,19 +671,20 @@ impl Tree {
         cx.notify();
     }
 
-    /// The file the tree marks, as the file of the tab shown.
+    /// The file of the tab shown, which the tree marks while it shows
+    /// where it is.
     #[must_use]
-    pub fn current(&self) -> Option<&Path> {
-        self.current.as_deref()
+    pub fn current(&self) -> Option<&FileAt> {
+        self.current.as_ref()
     }
 
-    /// Marks the file at `path`, as the file of the tab shown, with the
+    /// Marks the file `file`, as the file of the tab shown, with the
     /// folders it is in open, and scrolls to it; or no file.
-    pub fn reveal(&mut self, path: Option<PathBuf>, cx: &mut Context<Self>) {
-        if self.current == path {
+    pub fn reveal(&mut self, file: Option<FileAt>, cx: &mut Context<Self>) {
+        if self.current == file {
             return;
         }
-        self.current = path;
+        self.current = file;
         self.follow_marked(cx);
         self.open_to_marked();
         cx.notify();
@@ -568,10 +693,10 @@ impl Tree {
     /// Opens the folders the file marked is in, if it is in the folder
     /// shown, and scrolls to it.
     fn open_to_marked(&mut self) {
-        if let Some(path) = self.current.clone()
-            && let Ok(under) = path.strip_prefix(&self.root)
+        if let Some(path) = self.marked().map(Path::to_owned)
+            && let Ok(under) = path.strip_prefix(self.root.top())
         {
-            let mut folder = self.root.clone();
+            let mut folder = self.root.top().to_owned();
             for part in under.parent().into_iter().flat_map(Path::components) {
                 folder.push(part);
                 self.open_folder(folder.clone());
@@ -589,8 +714,9 @@ impl Tree {
     /// Opens the folder at `folder`, listing what is in it, unless it is
     /// the project's or open already.
     fn open_folder(&mut self, folder: PathBuf) {
-        if folder != self.root && !self.open.contains(&folder) {
-            self.listed.insert(folder.clone(), list(&folder));
+        if folder != self.root.top() && !self.open.contains(&folder) {
+            let listed = self.list(&folder);
+            self.listed.insert(folder.clone(), listed);
             self.open.insert(folder);
         }
     }
@@ -617,22 +743,30 @@ impl Tree {
     /// The tab looked at its folders again, and at what changed in them,
     /// and found what is in them now, and how each file that changed
     /// changed: draws them again if that changed.
-    fn looked(
-        &mut self,
-        root: &Path,
-        listed: HashMap<PathBuf, Result<Vec<Listed>, String>>,
-        hows: HashMap<PathBuf, How>,
-        cx: &mut Context<Self>,
-    ) {
+    fn looked(&mut self, looked: Looked, cx: &mut Context<Self>) {
+        let Looked {
+            root,
+            at,
+            listed,
+            hows,
+        } = looked;
+        // What was looked at before the human chose another to show.
+        if root != self.root {
+            return;
+        }
         let mut changed = false;
-        // What changed in the folder shown before the human chose another.
-        if root == self.root && self.hows != hows {
+        if self.at != at {
+            self.at = at;
+            changed = true;
+        }
+        if self.hows != hows {
+            let top = self.root.top();
             self.changed = hows
                 .keys()
                 .flat_map(|path| {
                     path.ancestors()
                         .skip(1)
-                        .take_while(|folder| folder.starts_with(&self.root))
+                        .take_while(|folder| folder.starts_with(top))
                 })
                 .map(Path::to_owned)
                 .collect();
@@ -673,7 +807,7 @@ impl Tree {
     /// the inner one's.
     fn all_rows(&self) -> Vec<Row<'_>> {
         let mut rows = Vec::new();
-        self.rows(&self.root, 0, None, &mut rows);
+        self.rows(self.root.top(), 0, None, &mut rows);
         rows
     }
 
@@ -695,8 +829,8 @@ impl Tree {
                         bright,
                     });
                     if open {
-                        let marked = self.current.as_deref().and_then(Path::parent)
-                            == Some(entry.path.as_path());
+                        let marked =
+                            self.marked().and_then(Path::parent) == Some(entry.path.as_path());
                         let bright = if marked { Some(depth) } else { bright };
                         self.rows(&entry.path, depth + 1, bright, rows);
                     }
@@ -735,7 +869,7 @@ impl Tree {
     fn picked_place(&self, rows: &[Row<'_>]) -> usize {
         let marked = || {
             rows.iter().position(|row| {
-                matches!(row, Row::Listed { entry, .. } if Some(&entry.path) == self.current.as_ref())
+                matches!(row, Row::Listed { entry, .. } if Some(entry.path.as_path()) == self.marked())
             })
         };
         self.picked.or_else(marked).unwrap_or(0).min(rows.len() - 1)
@@ -781,7 +915,12 @@ impl Tree {
         drop(rows);
         if !is_folder {
             self.picked = Some(place);
-            cx.emit(Chosen { path, apart: false });
+            let branch = self.root.branch().cloned();
+            cx.emit(Chosen {
+                path,
+                apart: false,
+                branch,
+            });
         } else if open {
             let last = self.all_rows().len() - 1;
             self.pick((place + 1).min(last), cx);
@@ -916,12 +1055,13 @@ impl Tree {
                     cx.emit(Chosen {
                         path: path.clone(),
                         apart: click.modifiers().secondary(),
+                        branch: tree.root.branch().cloned(),
                     });
                 }
             }));
         if matches!(at, At::Listed(number) if picked == Some(number - 1)) {
             row.bg(rgb(BUTTON_HOVER)).into_any_element()
-        } else if self.current.as_ref() == Some(&entry.path) {
+        } else if self.marked() == Some(entry.path.as_path()) {
             row.bg(rgb(ACCENT_GROUND)).into_any_element()
         } else {
             row.hover(|style| style.bg(rgb(HOVER))).into_any_element()
@@ -1097,9 +1237,47 @@ fn is_markdown(path: &Path) -> bool {
         .is_some_and(|extension| extension.eq_ignore_ascii_case("md"))
 }
 
-/// What is in `folder`, or why it could not be listed.
-fn list(folder: &Path) -> Result<Vec<Listed>, String> {
-    files::list(folder).map_err(|error| error.to_string())
+/// What the tree found as it looked at `root`: the commit a branch is at
+/// now, what is in each folder open, as far as it read them again, and
+/// how each file that changed changed.
+struct Looked {
+    root: Root,
+    at: Option<String>,
+    listed: HashMap<PathBuf, Result<Vec<Listed>, String>>,
+    hows: HashMap<PathBuf, How>,
+}
+
+/// Looks at `folders` of `root`, which the tree listed at the commit `at`
+/// if it is a branch: a folder's files on disk, and what changed in them;
+/// a branch's commit, and, if it moved, what is in its folders at the
+/// commit it is at now. Slow, as it reads the disk and runs Git.
+fn look_at(root: Root, at: Option<&str>, folders: Vec<PathBuf>) -> Looked {
+    let (at, folders) = match &root {
+        Root::Folder(_) => (None, folders),
+        // A branch's files change only as it moves.
+        Root::Branch(_) => {
+            let now = root::commit_of(&root);
+            let moved = now.as_deref() != at;
+            (now, if moved { folders } else { Vec::new() })
+        }
+    };
+    let listed = folders
+        .into_iter()
+        .map(|folder| {
+            let listed = root::list(&root, at.as_deref(), &folder);
+            (folder, listed)
+        })
+        .collect();
+    let hows = match &root {
+        Root::Folder(folder) => coxd::repositories::hows(folder),
+        Root::Branch(_) => HashMap::new(),
+    };
+    Looked {
+        root,
+        at,
+        listed,
+        hows,
+    }
 }
 
 /// Looks at the folders of the tab of `cx`, and at what changed in the
@@ -1119,29 +1297,25 @@ fn follow(cx: &mut Context<Tree>) -> Task<()> {
 /// folder shown, and lists the project's directories too, if `directories`
 /// and it has any; answers whether the tab is still there.
 async fn look(this: &gpui::WeakEntity<Tree>, directories: bool, cx: &mut gpui::AsyncApp) -> bool {
-    let Ok((root, folders, folder)) = this.read_with(cx, |tree, _| {
-        let folder = (directories && !tree.found.is_empty()).then(|| tree.folder.clone());
-        (tree.root.clone(), tree.folders(), folder)
+    let Ok((root, at, folders, folder)) = this.read_with(cx, |tree, _| {
+        let folder = (!tree.found.is_empty()).then(|| tree.folder.clone());
+        (tree.root.clone(), tree.at.clone(), tree.folders(), folder)
     }) else {
         return false;
     };
-    let asked = root.clone();
-    let (listed, hows, directories) = cx
+    let (looked, directories) = cx
         .background_executor()
         .spawn(async move {
-            let listed = folders
-                .into_iter()
-                .map(|folder| {
-                    let listed = list(&folder);
-                    (folder, listed)
-                })
-                .collect();
-            let directories = folder.as_deref().map(directories_of);
-            (listed, coxd::repositories::hows(&root), directories)
+            let looked = look_at(root, at.as_deref(), folders);
+            // A branch that is gone, or that a checkout has now, shows
+            // where its directory's files are now.
+            let gone = looked.root.branch().is_some() && looked.at.is_none();
+            let folder = folder.filter(|_| directories || gone);
+            (looked, folder.as_deref().map(directories_of))
         })
         .await;
     this.update(cx, |tree, cx| {
-        tree.looked(&asked, listed, hows, cx);
+        tree.looked(looked, cx);
         if let Some(directories) = directories {
             tree.listed_directories(directories, cx);
         }
@@ -1150,16 +1324,15 @@ async fn look(this: &gpui::WeakEntity<Tree>, directories: bool, cx: &mut gpui::A
 }
 
 /// The directories of the project in `folder` that are repositories, by
-/// their names, each with its checkouts that have their files: its own,
-/// then its worktrees (see [`repositories::listed`]), by their folders as
-/// the file system resolves them.
+/// their names, each with its checkouts: its own, then its worktrees, then
+/// its branches no checkout has (see [`repositories::listed`]), by their
+/// folders as the file system resolves them.
 fn directories_of(folder: &Path) -> Vec<Directory> {
     repositories::listed(folder)
         .into_iter()
         .filter_map(|(name, checkouts)| {
             let checkouts = checkouts
                 .into_iter()
-                .filter(|checkout| checkout.branch().is_none())
                 .map(|mut checkout| {
                     // As the tree names its folders, to tell which is shown.
                     match &mut checkout {
@@ -1174,6 +1347,27 @@ fn directories_of(folder: &Path) -> Vec<Directory> {
             Some((name?, checkouts))
         })
         .collect()
+}
+
+/// What the tree shows of `checkout`: its folder, or its branch, if no
+/// checkout has it.
+fn root_at(checkout: &Checkout) -> Root {
+    match checkout {
+        Checkout::Branch { folder, name } => Root::Branch(OnBranch {
+            repository: folder.clone(),
+            branch: name.clone(),
+        }),
+        _ => Root::Folder(checkout.folder().to_owned()),
+    }
+}
+
+/// The branch `checkout` has checked out, if it has one.
+fn checked_out(checkout: &Checkout) -> Option<&str> {
+    match checkout {
+        Checkout::Own { branch, .. } => branch.as_deref(),
+        Checkout::Worktree(worktree) => worktree.branch.as_deref(),
+        Checkout::Branch { .. } => None,
+    }
 }
 
 /// `path` as the file system resolves it, or as it is when it cannot.
@@ -1196,10 +1390,10 @@ impl Tree {
             .iter()
             .enumerate()
             .map(|(index, (name, checkouts))| {
-                let folder = self.checkout_of(name);
+                let root = self.root_of(name);
                 let checkout = checkouts
                     .iter()
-                    .find(|checkout| checkout.folder() == folder)
+                    .find(|checkout| root_at(checkout) == root)
                     .map(|checkout| (checkout.label(), matches!(checkout, Checkout::Worktree(_))));
                 Chip {
                     name: name.clone(),
@@ -1226,6 +1420,7 @@ impl Tree {
                     CheckoutsMenu,
                     open,
                     &checkouts[checkout],
+                    BRANCH_TAG,
                     cx,
                 );
                 let chosen = name.clone();
@@ -1239,8 +1434,16 @@ impl Tree {
                         Some(checkout),
                         &self.folder,
                         &self.counted,
-                        move |tree: &mut Self, checkout: &Checkout, cx| {
-                            tree.show_checkout(chosen.clone(), checkout.folder().to_owned(), cx);
+                        BRANCH_TAG,
+                        move |tree: &mut Self, checkout: &Checkout, cx| match checkout.branch() {
+                            Some(branch) => tree.show_branch(chosen.clone(), branch.to_owned(), cx),
+                            None => {
+                                tree.show_checkout(
+                                    chosen.clone(),
+                                    checkout.folder().to_owned(),
+                                    cx,
+                                );
+                            }
                         },
                         cx,
                     )
@@ -1267,6 +1470,7 @@ impl Tree {
         let folders: Vec<PathBuf> = self
             .checkouts()
             .iter()
+            .filter(|checkout| checkout.branch().is_none())
             .map(|checkout| checkout.folder().to_owned())
             .collect();
         self.counting = Some(cx.spawn(async move |this, cx| {
@@ -1336,10 +1540,7 @@ impl Tree {
 
     /// The name of the folder shown.
     fn name(&self) -> String {
-        self.root.file_name().map_or_else(
-            || self.root.display().to_string(),
-            |name| name.to_string_lossy().into_owned(),
-        )
+        self.root.name()
     }
 }
 
@@ -1456,6 +1657,7 @@ impl Shows for Unchosen {
         KeptTab::Files {
             open: Vec::new(),
             checkouts: Vec::new(),
+            branches: Vec::new(),
             shown: None,
         }
     }
