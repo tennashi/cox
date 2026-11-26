@@ -1,0 +1,302 @@
+{
+ "says": "How Cox is built and tried: the tasks a developer runs, the stand-ins that play the systems around Cox, and the tests.",
+ "nodes": {
+  "cox": {
+   "name": "Building Cox",
+   "icon": "apps",
+   "code": "xtask, stand-ins, tests"
+  },
+  "dev": {
+   "name": "Developer",
+   "icon": "person",
+   "kind": "outside",
+   "code": "a person, or an agent"
+  },
+  "ci": {
+   "name": "GitHub Actions",
+   "icon": "cycle",
+   "kind": "outside",
+   "code": "ci.yml, release.yml"
+  },
+  "cargo": {
+   "name": "Cargo",
+   "icon": "box",
+   "kind": "outside",
+   "code": "cargo, clippy, rustfmt, nextest"
+  },
+  "docker": {
+   "name": "Docker",
+   "icon": "server",
+   "kind": "outside",
+   "code": "the container of run --linux"
+  },
+  "keychain": {
+   "name": "macOS keychain",
+   "icon": "gear",
+   "kind": "outside",
+   "code": "security, codesign"
+  },
+  "cef": {
+   "name": "CEF",
+   "icon": "download",
+   "kind": "outside",
+   "code": "Chromium, as the cef crate gets it"
+  },
+  "tasks": {
+   "name": "Build tasks",
+   "icon": "run",
+   "code": "cargo xtask",
+   "claims": [
+    "xtask"
+   ],
+   "lines": "hand"
+  },
+  "app": {
+   "name": "Cox",
+   "icon": "window",
+   "open": false,
+   "code": "the app: see the map use",
+   "claims": [
+    "cox",
+    "coxd",
+    "cox-core",
+    "cox-acp",
+    "cox-android",
+    "cox-browser",
+    "cox-editor",
+    "cox-git",
+    "cox-mac"
+   ]
+  },
+  "fakeagent": {
+   "name": "Fake agent",
+   "icon": "agent",
+   "code": "cox-fake-agent",
+   "claims": [
+    "cox-fake-agent"
+   ],
+   "lines": "hand"
+  },
+  "fakeemu": {
+   "name": "Fake emulator",
+   "icon": "android",
+   "code": "cox-fake-emulator",
+   "files": [
+    "crates/cox-android/src/bin"
+   ],
+   "lines": "hand"
+  },
+  "scripts": {
+   "name": "Build scripts",
+   "icon": "gear",
+   "open": false,
+   "code": "build.rs",
+   "files": [
+    "crates/cox/build.rs",
+    "crates/coxd/build.rs",
+    "crates/cox-android/build.rs"
+   ]
+  },
+  "tests": {
+   "name": "Tests",
+   "icon": "check",
+   "code": "crates/*/tests",
+   "files": [
+    "crates/cox/tests",
+    "crates/coxd/tests",
+    "crates/cox-acp/tests",
+    "crates/cox-android/tests",
+    "crates/cox-fake-agent/tests"
+   ],
+   "lines": "hand"
+  },
+  "helpers": {
+   "name": "Test helpers",
+   "icon": "clock",
+   "claims": [
+    "coxd/testing"
+   ]
+  }
+ },
+ "top": {
+  "center": "cox",
+  "left": [
+   "dev",
+   "ci"
+  ],
+  "right": [
+   "cargo",
+   "docker",
+   "keychain",
+   "cef"
+  ],
+  "lines": [
+   {
+    "from": "dev",
+    "to": "cox",
+    "both": true
+   },
+   {
+    "from": "ci",
+    "to": "cox"
+   },
+   {
+    "from": "cox",
+    "to": "cargo",
+    "both": true
+   },
+   {
+    "from": "cox",
+    "to": "docker",
+    "both": true
+   },
+   {
+    "from": "cox",
+    "to": "keychain",
+    "both": true
+   },
+   {
+    "from": "cox",
+    "to": "cef"
+   }
+  ]
+ },
+ "levels": {
+  "cox": {
+   "box": [
+    0,
+    0,
+    1340,
+    420
+   ],
+   "outer": {
+    "dev": [
+     "left",
+     110
+    ],
+    "ci": [
+     "left",
+     310
+    ],
+    "cargo": [
+     "right",
+     60
+    ],
+    "docker": [
+     "right",
+     160
+    ],
+    "keychain": [
+     "right",
+     260
+    ],
+    "cef": [
+     "right",
+     360
+    ]
+   },
+   "parts": {
+    "tasks": [
+     60,
+     80
+    ],
+    "app": [
+     380,
+     80
+    ],
+    "fakeagent": [
+     700,
+     80
+    ],
+    "fakeemu": [
+     1020,
+     80
+    ],
+    "scripts": [
+     60,
+     280
+    ],
+    "tests": [
+     380,
+     280
+    ],
+    "helpers": [
+     700,
+     280
+    ]
+   },
+   "lines": [
+    {
+     "from": "dev",
+     "to": "tasks",
+     "both": true
+    },
+    {
+     "from": "ci",
+     "to": "tasks"
+    },
+    {
+     "from": "tasks",
+     "to": "cargo",
+     "both": true
+    },
+    {
+     "from": "tasks",
+     "to": "docker",
+     "both": true
+    },
+    {
+     "from": "tasks",
+     "to": "keychain",
+     "both": true
+    },
+    {
+     "from": "tasks",
+     "to": "app"
+    },
+    {
+     "from": "tasks",
+     "to": "fakeagent"
+    },
+    {
+     "from": "app",
+     "to": "fakeagent",
+     "both": true
+    },
+    {
+     "from": "app",
+     "to": "fakeemu",
+     "both": true
+    },
+    {
+     "from": "cargo",
+     "to": "scripts"
+    },
+    {
+     "from": "scripts",
+     "to": "cef"
+    },
+    {
+     "from": "cargo",
+     "to": "tests"
+    },
+    {
+     "from": "tests",
+     "to": "app"
+    },
+    {
+     "from": "tests",
+     "to": "fakeagent"
+    },
+    {
+     "from": "tests",
+     "to": "fakeemu"
+    },
+    {
+     "from": "tests",
+     "to": "helpers"
+    }
+   ]
+  }
+ }
+}
