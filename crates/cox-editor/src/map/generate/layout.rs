@@ -15,7 +15,8 @@ use super::Map;
 use crate::map::generated::{Level, Line};
 use crate::map::vocabulary::{self, Side};
 
-/// A card's width at least, and its height, as the page draws them.
+/// A card's width and its height, as the page draws them, whatever its
+/// name is long: the page fits the name to the card.
 const CARD_WIDTH: i32 = 216;
 const CARD_HEIGHT: i32 = 56;
 /// The card of a person or a system, as the page draws it.
@@ -345,14 +346,7 @@ fn lies(
 fn card(map: &Map<'_, '_>, id: &str) -> [i32; 2] {
     match map.vocabulary.nodes.get(id) {
         Some(node) if node.kind == vocabulary::Kind::Outside => OUTSIDE_CARD,
-        Some(node) => {
-            let drawn = super::drawn(node);
-            [
-                card_width(&drawn.name, drawn.code.as_deref().unwrap_or("")),
-                CARD_HEIGHT,
-            ]
-        }
-        None => [CARD_WIDTH, CARD_HEIGHT],
+        _ => [CARD_WIDTH, CARD_HEIGHT],
     }
 }
 
@@ -421,7 +415,6 @@ fn swapped(
 pub(super) struct Card<'t> {
     pub id: &'t str,
     pub name: &'t str,
-    pub code: &'t str,
 }
 
 /// Places the `cards` of a box sitting at `me`, with `lines` between
@@ -469,9 +462,9 @@ pub(super) fn types(
             ],
         );
     }
-    let right = cards
-        .iter()
-        .map(|card| parts[card.id][0] + card_width(card.name, card.code))
+    let right = parts
+        .values()
+        .map(|at| at[0] + CARD_WIDTH)
         .max()
         .unwrap_or(0);
     let bottom = parts.values().map(|at| at[1]).max().unwrap_or(0);
@@ -593,24 +586,6 @@ fn wanted(
         .partial_cmp(&pick(&want[b]))
         .unwrap_or(Ordering::Equal)
         .then(a.cmp(b))
-}
-
-/// How wide the page draws a card with `name` over `code`: by the
-/// letters' widths, a wide letter's 14.5 and an ASCII one's 0.6 of it.
-fn card_width(name: &str, code: &str) -> i32 {
-    let letters = |text: &str| -> f64 {
-        text.chars()
-            .map(|c| {
-                if (' '..='~').contains(&c) {
-                    0.6 * 14.5
-                } else {
-                    14.5
-                }
-            })
-            .fold(0.0, |sum, width| sum + width)
-    };
-    let text = letters(name).max(letters(code) * 0.8);
-    CARD_WIDTH.max(int(whole((58.0 + text + 18.0).ceil())))
 }
 
 fn distance(a: [i32; 2], b: [i32; 2]) -> f64 {

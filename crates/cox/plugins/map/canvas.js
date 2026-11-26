@@ -13,7 +13,8 @@
 
 import { ICON } from "./icons.js";
 
-// Sizes: an outside node's card, a part's card, the gap between cards in
+// Sizes: an outside node's card, a part's or a type's card, whatever
+// its name is long, the gap between cards in
 // a column of the top, the top's center, how far the top's columns stand
 // from it, and how far the outside nodes stand from a level's edge.
 const PW = 248;
@@ -116,11 +117,7 @@ export function chain(f) {
   return way;
 }
 
-function size(id) {
-  const n = node(id);
-  if (!inside(id)) return [PW, PH];
-  return [Math.max(IW, Math.ceil(58 + Math.max(textWidth(n.name), n.code ? textWidth(n.code) * 0.8 : 0) + 18)), IH];
-}
+const size = (id) => (inside(id) ? [IW, IH] : [PW, PH]);
 
 // Opening a box replaces the lines to it with those of the level inside
 // it; the other lines stay. A weak line shows only while one of its ends
@@ -274,6 +271,67 @@ function path(a, b) {
   return `M${a.x} ${a.y}C${a.x + a.n[0] * k} ${a.y + a.n[1] * k},${b.x + b.n[0] * k} ${b.y + b.n[1] * k},${b.x} ${b.y}`;
 }
 
+// A card's text is measured as the page draws it, to fit the card.
+const pen = document.createElement("canvas").getContext("2d");
+const fits = new Map();
+// `text` in the `font`, on `most` lines of `width` at most: broken
+// between words where it can be, and cut short, with an ellipsis, where
+// it is longer than that.
+function wrapped(text, font, width, most) {
+  const key = `${font}|${width}|${most}|${text}`;
+  if (fits.has(key)) return fits.get(key);
+  pen.font = `${font} ${getComputedStyle(W).fontFamily}`;
+  const wide = (part) => pen.measureText(part).width;
+  const lines = [];
+  let rest = String(text ?? "").trim();
+  while (rest && lines.length < most) {
+    if (wide(rest) <= width) {
+      lines.push(rest);
+      break;
+    }
+    const last = lines.length === most - 1;
+    const room = last ? width - wide("…") : width;
+    let end = rest.length - 1;
+    while (end > 1 && wide(rest.slice(0, end).trimEnd()) > room) end--;
+    if (last) {
+      lines.push(`${rest.slice(0, end).trimEnd()}…`);
+      break;
+    }
+    const space = rest.slice(0, end + 1).lastIndexOf(" ");
+    const cut = space > 0 ? space : end;
+    lines.push(rest.slice(0, cut));
+    rest = rest.slice(cut).trim();
+  }
+  fits.set(key, lines);
+  return lines;
+}
+const NAME = "600 14.5px";
+const CODE = "400 11.5px";
+// A card's name over what it is in the code, on three lines at most
+// between them, in the `room` right of `x`, around the middle of `h`;
+// where some was cut, all of it shows as the card is pointed at.
+function label(p, x, room, h) {
+  const name = wrapped(p.name, NAME, room, 2);
+  const code = p.code ? wrapped(p.code, CODE, room, 3 - name.length) : [];
+  const from = (h - 17 * name.length - 14 * code.length - (code.length ? 2 : 0)) / 2;
+  const cut = [...name, ...code].some((line) => line.endsWith("…"));
+  return (
+    (cut ? `<title>${esc(p.name)}${p.code ? `\n${esc(p.code)}` : ""}</title>` : "") +
+    name
+      .map(
+        (line, i) =>
+          `<text x="${x}" y="${from + 17 * i + 13.5}" font-size="14.5" font-weight="600" fill="var(--foreground)">${esc(line)}</text>`,
+      )
+      .join("") +
+    code
+      .map(
+        (line, i) =>
+          `<text x="${x}" y="${from + 17 * name.length + 14 * i + 12.5}" font-size="11.5" fill="var(--dim)">${esc(line)}</text>`,
+      )
+      .join("")
+  );
+}
+
 // What changed in a node's code, as a tab over its top left edge.
 function changedTab(id) {
   const changed = view.changed[id];
@@ -307,20 +365,19 @@ function card(id, r, op = 1, appearing = 0) {
     canOpen(id) && !anim
       ? `<g class="open" data-open="${esc(id)}" transform="translate(${w - 26},6)"><title>Open</title><rect width="20" height="20" rx="5" fill="transparent"/><g transform="translate(3,3) scale(.6)" fill="none" stroke="var(--dim)" stroke-width="2" stroke-linecap="round">${ICON.drill}</g></g>`
       : "";
-  const label = p.code
-    ? `<text x="58" y="${h / 2 - 3}" font-size="14.5" font-weight="600" fill="var(--foreground)">${esc(p.name)}</text><text x="58" y="${h / 2 + 15}" font-size="11.5" fill="var(--dim)">${esc(p.code)}</text>`
-    : `<text x="58" y="${h / 2 + 5}" font-size="14.5" font-weight="600" fill="var(--foreground)">${esc(p.name)}</text>`;
+  const text = label(p, 58, w - 58 - (canOpen(id) ? 30 : 12), h);
   return `<g class="obj${inn ? " in" : ""}" data-id="${esc(id)}" opacity="${op}" transform="${tf}">${stack}<rect class="body" width="${w}" height="${h}" rx="10" fill="var(--raised)" stroke="${on ? "var(--accent)" : inn ? "rgba(111,211,197,.45)" : "var(--border-strong)"}" stroke-width="${on ? 1.8 : 1}"/>
   <rect x="11" y="${(h - 36) / 2}" width="36" height="36" rx="8" fill="${inn ? "var(--accent-ground)" : "var(--button)"}"/>
   <g transform="translate(17,${(h - 36) / 2 + 6})" fill="none" stroke="${inn ? "var(--accent)" : "var(--dim)"}" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">${ICON[iconOf(id)] ?? ICON.box}</g>
-  ${label}${open}${anim ? "" : changedTab(id)}${driftBadge(id, w)}</g>`;
+  ${text}${open}${anim ? "" : changedTab(id)}${driftBadge(id, w)}</g>`;
 }
 
 // The node of the project, in the middle of the top.
 function centerCard(id, r, op) {
   const on = view.sel === id;
+  const name = wrapped(node(id).name, "700 22px", r.w - 64, 2);
   return `<g class="obj" data-id="${esc(id)}" opacity="${op}"><rect class="body" x="${r.x}" y="${r.y}" width="${r.w}" height="${r.h}" rx="16" fill="var(--accent-ground)" stroke="var(--accent)" stroke-width="${on ? 2.4 : 1.6}"/>
-  <text x="${r.x + r.w / 2}" y="${r.y + r.h / 2 + 8}" font-size="22" font-weight="700" fill="var(--foreground)" text-anchor="middle">${esc(node(id).name)}</text>
+  ${name.map((line, i) => `<text x="${r.x + r.w / 2}" y="${r.y + r.h / 2 + 8 + 28 * (i - (name.length - 1) / 2)}" font-size="22" font-weight="700" fill="var(--foreground)" text-anchor="middle">${esc(line)}</text>`).join("")}
   ${canOpen(id) && !anim ? `<g class="open" data-open="${esc(id)}" transform="translate(${r.x + r.w - 30},${r.y + 8})"><title>Open</title><rect width="22" height="22" rx="5" fill="transparent"/><g transform="translate(3,3) scale(.7)" fill="none" stroke="var(--dim)" stroke-width="2" stroke-linecap="round">${ICON.drill}</g></g>` : ""}
   ${anim ? "" : `<g transform="translate(${r.x},${r.y})">${changedTab(id)}${driftBadge(id, r.w)}</g>`}</g>`;
 }

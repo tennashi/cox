@@ -1326,11 +1326,7 @@ fn types_wired_to_nothing_follow_the_others_apart_in_name_order() {
 #[test]
 fn a_type_wired_to_nothing_leaves_those_wired_where_they_were() {
     use super::layout::{Card, types};
-    let card = |id: &'static str| Card {
-        id,
-        name: id,
-        code: "struct",
-    };
+    let card = |id: &'static str| Card { id, name: id };
     let wired = ["A", "B", "C", "D", "E", "F", "G"];
     let lines: BTreeSet<(String, String)> = [
         ("A", "B"),
