@@ -788,8 +788,9 @@ fn resolve_chat_tool() -> Value {
             for them may go. A line sent to it later reopens it; its report asked again with \
             agent_report does not, nor does CI that ends on a pull request it opened, as its \
             project holds those. Use it for a chat whose work is over, once you read \
-            with read_chat that it is; the chats told you as your session starts leave out \
-            those marked done already. It marks neither this chat, nor one at work, nor one \
+            with read_chat that it is, and for a subagent of yours that Cox left open, as its \
+            report says, once you have what you need of it; the chats told you as your \
+            session starts leave out those marked done already. It marks neither this chat, nor one at work, nor one \
             that waits for the human to answer it.",
         "inputSchema": {
             "type": "object",

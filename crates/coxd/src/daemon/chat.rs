@@ -1961,6 +1961,7 @@ impl Chat {
             unoffered: self.conversation.unoffered().map(str::to_owned),
             background: self.background(),
             ci: Vec::new(),
+            sketch: None,
         }
     }
 

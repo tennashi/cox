@@ -1,0 +1,1 @@
+Cox leaves the chat of "{name}" open, as it is a sketch, which the human ends. Once the human has seen what it made, as with show_changes, what it goes on to is agreed, and you have what you need of it, mark it done with resolve_chat, giving {number}, the number the project keeps its chat by: its folder stays as it is, and a line sent to it reopens it.

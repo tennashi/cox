@@ -528,7 +528,24 @@ impl Slot {
         if let Whose::Agent { .. } = self.whose {
             stands.ci.clone_from(&self.pulls.told);
         }
+        stands.sketch = self.left_open();
         Some(stands)
+    }
+
+    /// The number `resolve_chat` takes for the chat, when it is a sketch
+    /// an agent opened that Cox leaves open though its report was heard,
+    /// as the human ends a sketch: one neither done, nor at work, nor
+    /// asking the human, which the agent that opened it marks done.
+    fn left_open(&self) -> Option<i64> {
+        let sketch = self
+            .setup
+            .as_ref()
+            .is_some_and(|setup| setup.sketch.is_some());
+        let open = self.parent.is_some()
+            && sketch
+            && self.resolved.is_none()
+            && !self.at_work(Instant::now());
+        self.kept.filter(|_| open).map(ChatId::number)
     }
 
     /// Whether the chat is at work at `now`: in a turn, or with its agent
@@ -4978,6 +4995,73 @@ mod tests {
                 crate::testing::run_git(&folder, &["rev-parse", "HEAD"]).is_ok(),
                 "{}",
                 folder.display()
+            );
+        });
+    }
+
+    #[test]
+    fn a_sketch_an_agent_opened_stays_open_for_it_to_mark_done_and_keeps_its_folder() {
+        on_daemon(async {
+            let home = TempDir::new();
+            let agents = Rc::new(PlayedAgents::default());
+            let (mut daemon, mut heard, key) = shop_with_app(&home, &agents).await;
+            let (answer, mut opened) = oneshot::channel();
+            daemon.asked(
+                key,
+                ChatRequest::OpenChat {
+                    text: "try".to_owned(),
+                    title: Some("Try".to_owned()),
+                    setup: Setup::default(),
+                    model: None,
+                    goal: None,
+                    sketch: Some(Sketch::Empty),
+                    within: Box::default(),
+                    answer,
+                },
+            );
+            let opened = opened.try_recv().unwrap().unwrap();
+            let (sketch, folder) = (opened.number, opened.folder.unwrap());
+            pump(&mut daemon, &mut heard).await;
+            let stands = |daemon: &mut Daemon| {
+                let (answer, mut waited) = oneshot::channel();
+                daemon.wait_chat(key, sketch, answer);
+                waited.try_recv().ok().map(|waited| waited.unwrap().sketch)
+            };
+            assert_eq!(stands(&mut daemon), None, "at work, it waits");
+
+            tells(
+                &agents.0.borrow()[1],
+                [
+                    AgentEvent::ReplyText("Tried it.".to_owned()),
+                    AgentEvent::TurnEnded(cox_acp::StopReason::EndTurn),
+                ],
+            );
+            pump(&mut daemon, &mut heard).await;
+
+            // Its report heard, Cox leaves it open, and says which number
+            // marks it done.
+            let number = daemon.slot(sketch).unwrap().kept.unwrap().number();
+            assert_eq!(stands(&mut daemon), Some(Some(number)));
+            assert_eq!(resolved(&daemon, sketch), None);
+
+            let (answer, mut marked) = oneshot::channel();
+            daemon.asked(
+                key,
+                ChatRequest::ResolveChat {
+                    chat: number,
+                    answer,
+                },
+            );
+            marked.try_recv().unwrap().unwrap();
+            pump(&mut daemon, &mut heard).await;
+
+            assert_eq!(resolved(&daemon, sketch), Some(ResolvedBy::Agent));
+            assert!(folder.is_dir(), "its folder stays");
+            assert!(daemon.ends_sketch(sketch), "for the human to end yet");
+            assert_eq!(
+                stands(&mut daemon),
+                Some(None),
+                "done, it is not said again"
             );
         });
     }

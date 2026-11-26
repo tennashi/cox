@@ -131,12 +131,22 @@ pub const SUBAGENT_ASKS: Text = Text {
     own: include_str!("workflow/subagent/asks.md"),
 };
 
+/// What follows the report of a subagent in a sketch, in
+/// [`SUBAGENT_REPORTS`] or as `agent` or `agent_report` answers it, while
+/// the sketch is neither done nor at work: that Cox leaves its chat,
+/// `{name}`, open, and when the agent marks it done with `resolve_chat`,
+/// giving `{number}`, the number its project keeps it by.
+pub const SUBAGENT_SKETCH: Text = Text {
+    name: "subagent/sketch.md",
+    own: include_str!("workflow/subagent/sketch.md"),
+};
+
 /// How much of what a subagent last said its report in
 /// [`SUBAGENT_REPORTS`] holds, in characters, from the start.
 pub const REPORT_LENGTH: usize = 2000;
 
 /// The texts Cox has of its own, by where the human keeps theirs.
-const OWN: [&Text; 13] = [
+const OWN: [&Text; 14] = [
     &SKETCH_START,
     &SKETCH_OPENED,
     &SKETCH_DISCARD,
@@ -148,6 +158,7 @@ const OWN: [&Text; 13] = [
     &SUBAGENT_BACKGROUND,
     &SUBAGENT_SETTLED,
     &SUBAGENT_ASKS,
+    &SUBAGENT_SKETCH,
     &SUBAGENT_CI,
     &CI_ENDED,
 ];
@@ -157,7 +168,8 @@ const OWN: [&Text; 13] = [
 /// cut to [`REPORT_LENGTH`], and what it runs in the background, if
 /// anything runs, or, as `settled` says, that what the agent was told ran
 /// there ended; then how CI ended on the pull requests it opened, if it
-/// ended on any.
+/// ended on any, and that Cox leaves it open, if it is a sketch (see
+/// [`left_open`]).
 #[must_use]
 pub fn subagent_report(number: u64, name: &str, stands: &Waited, settled: bool) -> String {
     let said = match stands.said.as_deref() {
@@ -182,7 +194,19 @@ pub fn subagent_report(number: u64, name: &str, stands: &Waited, settled: bool) 
         None if settled => SUBAGENT_SETTLED.say(&values),
         None => SUBAGENT_ENDED.say(&values),
     };
-    stands.with_ci(report)
+    left_open(name, stands, stands.with_ci(report))
+}
+
+/// `told`, the report of the subagent named `name` that stands as
+/// `stands`, followed by what [`SUBAGENT_SKETCH`] says, if it is a sketch
+/// Cox leaves open for the agent that opened it to mark done.
+#[must_use]
+pub fn left_open(name: &str, stands: &Waited, mut told: String) -> String {
+    if let Some(number) = stands.sketch {
+        told.push_str("\n\n");
+        told.push_str(&SUBAGENT_SKETCH.say(&[("name", name), ("number", &number.to_string())]));
+    }
+    told
 }
 
 /// The text the human keeps as `name` in their workflow, or else Cox's
@@ -415,6 +439,47 @@ mod tests {
                 ]
             ),
             "in /t/{what}, a worktree: x {unknown} {"
+        );
+    }
+
+    #[test]
+    fn a_sketch_left_open_is_told_with_the_number_that_marks_it_done() {
+        let stands = Waited {
+            said: Some("Tried it.".to_owned()),
+            sketch: Some(12),
+            ..Waited::default()
+        };
+
+        let told = subagent_report(4, "Try", &stands, false);
+
+        assert!(
+            told.starts_with("The subagent \"Try\" ended its turn. It last said:\n\nTried it.\n\n"),
+            "{told}"
+        );
+        assert!(
+            told.ends_with(
+                "mark it done with resolve_chat, giving 12, the number the project keeps its \
+                 chat by: its folder stays as it is, and a line sent to it reopens it."
+            ),
+            "{told}"
+        );
+        let plain = Waited {
+            sketch: None,
+            ..stands
+        };
+        assert!(!subagent_report(4, "Try", &plain, false).contains("resolve_chat"));
+
+        // The human's own goes ahead of Cox's.
+        let folder = TempDir::new();
+        std::fs::create_dir_all(folder.join("subagent")).unwrap();
+        std::fs::write(
+            folder.join("subagent/sketch.md"),
+            "Close {number} ({name}).\n",
+        )
+        .unwrap();
+        assert_eq!(
+            SUBAGENT_SKETCH.say_in(Some(&folder), &[("name", "Try"), ("number", "12")]),
+            "Close 12 (Try)."
         );
     }
 

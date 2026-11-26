@@ -405,6 +405,11 @@ pub struct Waited {
     /// How CI ended on the pull requests it opened, since the agent that
     /// opened it last heard how it stands, a line for each.
     pub ci: Vec<String>,
+    /// The number `resolve_chat` takes for it, the one its project keeps
+    /// it by, when it is a sketch that is neither done, nor at work, nor
+    /// asking the human: Cox leaves a sketch open, as the human ends it,
+    /// so the agent that opened it is told to mark it done.
+    pub sketch: Option<i64>,
 }
 
 impl Waited {
