@@ -979,7 +979,9 @@ impl Page {
     /// `?kept=<number>`, as JSON, as the window's Map page is told it:
     /// the project's first, or the one the path names after `api/map/`,
     /// drawn again after a failed index when the path says `again/`
-    /// before the name (see [`map_asked`]).
+    /// before the name (see [`map_asked`]); without the map when the
+    /// query gives the tag of the map the page has, `seen=<tag>`, and it
+    /// is the same (see [`crate::map::since`]).
     async fn map(&self, request: &Request<Incoming>) -> Response<Body> {
         if !self.paired(request) {
             return answer(StatusCode::UNAUTHORIZED, TEXT, "Not paired");
@@ -1006,6 +1008,11 @@ impl Page {
         }
         let Ok(Some(told)) = drawn.await else {
             return answer(StatusCode::NOT_FOUND, TEXT, "No such chat");
+        };
+        let seen = text_asked(request, "seen");
+        let told = match crate::map::since(&told, seen.as_deref()) {
+            std::borrow::Cow::Borrowed(_) => told,
+            std::borrow::Cow::Owned(rest) => rest,
         };
         answer(StatusCode::OK, "application/json", told)
     }
@@ -1381,6 +1388,13 @@ fn number_asked(request: &Request<Incoming>, name: &str) -> Option<usize> {
     url::form_urlencoded::parse(query.as_bytes())
         .find_map(|(one, value)| (one == name).then(|| value.parse::<usize>().ok()))
         .flatten()
+}
+
+/// The text the query of `request` gives `name`, as `seen=<tag>`.
+fn text_asked(request: &Request<Incoming>, name: &str) -> Option<String> {
+    let query = request.uri().query()?;
+    url::form_urlencoded::parse(query.as_bytes())
+        .find_map(|(one, value)| (one == name).then(|| value.into_owned()))
 }
 
 /// What the human may do of sketches in a chat, as the page offers it:
@@ -2634,6 +2648,48 @@ mod tests {
             assert!(gone.starts_with("HTTP/1.1 404"), "{gone}");
             let deeper = ask(port, &get("/map/api/map/a/b?kept=12", cookie), "").await;
             assert!(deeper.starts_with("HTTP/1.1 404"), "{deeper}");
+        });
+        tokio::time::timeout(Duration::from_secs(30), test)
+            .await
+            .expect("the page answers in time");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn tells_a_phone_that_has_the_map_the_rest_alone() {
+        let local = tokio::task::LocalSet::new();
+        let test = local.run_until(async {
+            let listener = listen(0).await.unwrap();
+            let port = listener.local_addr().unwrap().port();
+            let (internal, mut heard) = unbounded_channel();
+            tokio::task::spawn_local(serve(
+                listener,
+                Rc::new(Phones::new("secret".to_owned(), None)),
+                None,
+                internal,
+            ));
+            let cookie = "Cookie: cox_phone=secret\r\n";
+            let get = |path: &str| {
+                format!("GET {path} HTTP/1.1\r\nHost: x\r\n{cookie}Connection: close\r\n\r\n")
+            };
+            let request = get("/map/api/map?kept=12&seen=0123456789abcdef");
+            let told = tokio::task::spawn_local(async move { ask(port, &request, "").await });
+            let Some(Internal::Key { number: 12, answer }) = heard.recv().await else {
+                panic!("coxd is not asked the key of the chat kept as 12");
+            };
+            answer.send(Some(7)).unwrap();
+            let Some(Internal::Map { answer, .. }) = heard.recv().await else {
+                panic!("coxd is not asked the map of the chat 7");
+            };
+            answer
+                .send(Some(
+                    r#"{"state":"ready","tag":"0123456789abcdef","map":{"nodes":{}}}"#.to_owned(),
+                ))
+                .unwrap();
+            let told = told.await.unwrap();
+            assert!(
+                told.ends_with(r#"{"state":"ready","tag":"0123456789abcdef"}"#),
+                "{told}"
+            );
         });
         tokio::time::timeout(Duration::from_secs(30), test)
             .await

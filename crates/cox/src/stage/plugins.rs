@@ -17,7 +17,9 @@
 //!   boxes, and the names of the project's other maps (see
 //!   [`crate::stage::map::told`]); `cox://api/map`, its first map; and
 //!   `cox://api/map/again/<name>`, the map, making again the indexes that
-//!   failed, which only a plugin's own `fetch` has done.
+//!   failed, which only a plugin's own `fetch` has done. Asked with
+//!   `?seen=<tag>`, the tag of the map the page has, it leaves the map
+//!   out while it is the same (see [`coxd::map::since`]).
 //! - `cox://api/wiki`: the human's wiki, its pages, each with what it
 //!   links to, what links to it, where it was used, and what is wrong
 //!   with it; and `cox://api/wiki/<page>`, a page, with its text as HTML,
@@ -81,6 +83,7 @@
 //! A plugin opens a file on a tab of the stage by going to
 //! `cox://open/<path>#L<line>`, as the Map plugin does for a box's code.
 
+use std::borrow::Cow;
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
@@ -247,7 +250,7 @@ impl Plugins {
                     body: coxd::theme::css().into_bytes(),
                 });
             }
-            return self.api(path);
+            return self.api(path, query(url));
         }
         let path = if path.is_empty() || path.ends_with('/') {
             format!("{path}index.html")
@@ -266,8 +269,9 @@ impl Plugins {
         })
     }
 
-    /// What Cox knows, as JSON, at `cox://api/<what>`.
-    fn api(&self, what: &str) -> Option<Resource> {
+    /// What Cox knows, as JSON, at `cox://api/<what>`, asked with
+    /// `query`.
+    fn api(&self, what: &str, query: &str) -> Option<Resource> {
         let (what, rest) = what.split_once('/').unwrap_or((what, ""));
         // A picture or a video shown in a conversation, which a click on
         // it opens on the stage.
@@ -279,7 +283,7 @@ impl Plugins {
             });
         }
         let json = match what {
-            "map" => return self.map(rest),
+            "map" => return self.map(rest, query),
             "wiki" => {
                 let root = coxd::settings::wiki();
                 if rest.is_empty() {
@@ -348,17 +352,25 @@ impl Plugins {
     }
 
     /// The map `cox://api/map/<rest>` asks for, as coxd draws it (see
-    /// [`map::told`]).
-    fn map(&self, rest: &str) -> Option<Resource> {
+    /// [`map::told`]), without the map itself when `query` gives the tag
+    /// of the map the page has, `seen=<tag>`, and it is the same (see
+    /// [`coxd::map::since`]).
+    fn map(&self, rest: &str, query: &str) -> Option<Resource> {
         let (again, name) = match rest.strip_prefix("again/") {
             Some(name) => (true, name),
             None if !rest.contains('/') => (false, rest),
             None => return None,
         };
         let name = (!name.is_empty()).then(|| percent_decoded(name));
+        let told = map::told(&self.root, name.as_deref(), again);
+        let seen = query.split('&').find_map(|pair| pair.strip_prefix("seen="));
+        let body = match coxd::map::since(&told, seen) {
+            Cow::Borrowed(_) => told,
+            Cow::Owned(rest) => rest,
+        };
         Some(Resource {
             mime: "application/json".to_owned(),
-            body: map::told(&self.root, name.as_deref(), again).into_bytes(),
+            body: body.into_bytes(),
         })
     }
 
@@ -544,6 +556,15 @@ fn split(url: &str) -> Option<(&str, &str)> {
     Some((host, path))
 }
 
+/// The query of a `cox:` address, without its fragment, or nothing:
+/// `cox://api/map?seen=1f#top` has `seen=1f`.
+fn query(url: &str) -> &str {
+    let Some((_, query)) = url.split_once('?') else {
+        return "";
+    };
+    query.split('#').next().unwrap_or(query)
+}
+
 /// Whether asking for `url` has the stage do something, not only tell:
 /// a new ask of the Triggers tab's does, until it is named here as one
 /// that only tells.
@@ -589,6 +610,8 @@ mod tests {
         assert_eq!(split("cox://map/app.js?x=1#top"), Some(("map", "app.js")));
         assert_eq!(split("cox://api/map"), Some(("api", "map")));
         assert_eq!(split("cox://map"), Some(("map", "")));
+        assert_eq!(query("cox://api/map/use?seen=1f#top"), "seen=1f");
+        assert_eq!(query("cox://api/map/use#top"), "");
         assert_eq!(split("cox:///x"), None);
         assert_eq!(split("https://map/"), None);
     }

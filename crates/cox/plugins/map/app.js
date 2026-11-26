@@ -14,6 +14,14 @@
 // The last alone will do: the boxes above it open for it. A box that
 // opens is opened, one that does not is chosen.
 //
+// The map itself, megabytes of JSON for a large project, is read only as
+// it changes: the page gives back the tag of the map it has, and is told
+// the rest alone, as what changed in the code, while the map is the same.
+// Each tool of the browser's for developers attached to the page, as the
+// one each agent's chat drives the stage with, keeps what the page read,
+// a few hundred megabytes of it each, so that the map read whole every
+// few seconds filled the page's memory by gigabytes.
+//
 // The page draws from the JSON alone: on the phone, where nothing else
 // of Cox's is there, it is the same, but for the JSON's address. On the
 // stage, a file of the code opens on a tab of its own; on the phone, its
@@ -40,6 +48,9 @@ const crumb = document.getElementById("crumb");
 
 let told = null;
 let lastText = null;
+// The tag of the map drawn, which coxd leaves the map out for while it is
+// the same.
+let tag = null;
 // The map the page has drawn, by its name, to tell a new one from the
 // same drawn again.
 let drawn = null;
@@ -69,8 +80,12 @@ function parsed(hash) {
 const mapAsked = () => parsed(location.hash).map;
 const address = (again) => {
   const name = mapAsked() ?? (again ? told?.name : null);
-  if (!name) return SOURCE + QUERY;
-  return `${SOURCE}/${again ? "again/" : ""}${encodeURIComponent(name)}${QUERY}`;
+  const path = name ? `${SOURCE}/${again ? "again/" : ""}${encodeURIComponent(name)}` : SOURCE;
+  // Another map's tag is not this one's: coxd tells all of it.
+  const query = new URLSearchParams(QUERY);
+  if (tag) query.set("seen", tag);
+  const asked = query.toString();
+  return asked ? `${path}?${asked}` : path;
 };
 
 // How many times the page asked for the map: only the last ask's answer
@@ -92,13 +107,24 @@ async function load(again = false) {
   // the answer is no longer the page's.
   if (ask !== asks || mapAsked() !== map) return;
   if (text === lastText) return;
-  lastText = text;
   let json;
   try {
     json = JSON.parse(text);
   } catch (error) {
     json = { state: "unanswered", problems: [String(error)] };
   }
+  if (json.tag && !json.map) {
+    // Of a map the page has no more, as one it left meanwhile: asked
+    // again, without a tag, it is told whole.
+    if (json.tag !== tag || !told?.map) {
+      tag = null;
+      lastText = null;
+      return load(again);
+    }
+    json.map = told.map;
+  }
+  lastText = text;
+  tag = json.map ? (json.tag ?? null) : null;
   shown(json);
 }
 
