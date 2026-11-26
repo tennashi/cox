@@ -785,8 +785,9 @@ fn resolve_chat_tool() -> Value {
             does: it folds away at the end of the human's list, is no longer counted among \
             what waits for them, and its agent closes; the chats it opened that are neither \
             at work nor asking the human are marked done with it, and the worktrees made \
-            for them may go. A line sent to it later, or its report asked again, reopens it; \
-            CI that ends on a pull request it opened does not, as its project holds those. Use it for a chat whose work is over, once you read \
+            for them may go. A line sent to it later reopens it; its report asked again with \
+            agent_report does not, nor does CI that ends on a pull request it opened, as its \
+            project holds those. Use it for a chat whose work is over, once you read \
             with read_chat that it is; the chats told you as your session starts leave out \
             those marked done already. It marks neither this chat, nor one at work, nor one \
             that waits for the human to answer it.",

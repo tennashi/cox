@@ -3,10 +3,11 @@
 //! agent that opened it, or a chat whose merge ended. A chat marked done
 //! stays in the list, folded away at its end; it is not unread, nor
 //! counted among what waits for the human, and its agent closes, its
-//! turn stopped first if one runs. What is sent to it reopens it, as a
-//! line or a report asked again, and a line starts its agent again,
-//! going on with its session. CI that ends on a pull request it opened
-//! does not: its project holds that (see [`super::pulls`]).
+//! turn stopped first if one runs. A line sent to it reopens it, and
+//! starts its agent again, going on with its session. Its report asked
+//! again does not, as nothing is sent to it, nor does CI that ends on a
+//! pull request it opened: its project holds that (see
+//! [`super::pulls`]).
 
 use std::rc::Rc;
 use std::time::Instant;

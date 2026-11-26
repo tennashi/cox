@@ -2840,7 +2840,8 @@ impl Daemon {
 
     /// Answers `answer` with how the chat that goes by `key`, of the
     /// project of the chat `asking`, stands once it is not at work, or at
-    /// once when it is not.
+    /// once when it is not. Asking sends the chat nothing, so one marked
+    /// done stays done, as its agent heard its report already.
     fn wait_chat(
         &mut self,
         asking: u64,
@@ -2854,8 +2855,6 @@ impl Daemon {
             answer.send(Err(format!("no chat {key}"))).ok();
             return;
         }
-        // Asked again, it is not done.
-        self.reopen(key);
         let Some(chat) = self.chat(key) else {
             answer.send(Ok(Waited::default())).ok();
             return;
@@ -6511,7 +6510,7 @@ mod tests {
     }
 
     #[test]
-    fn a_subagent_is_done_once_its_report_reached_its_opener_and_reopens_asked_again() {
+    fn a_subagent_is_done_once_its_report_reached_its_opener_and_stays_done_asked_again() {
         on_daemon(async {
             let mut opener = Opener::new(&["Look"]).await;
             opener.prompts();
@@ -6525,9 +6524,75 @@ mod tests {
             assert!(!runs(&mut opener.daemon, look), "its agent closed");
             assert_eq!(resolved(&opener.daemon, opener.key), None);
 
+            // Told by Cox, then asked with agent_report: nothing was sent
+            // to it, so it stays done.
             let again = opener.wait(0).await.unwrap().unwrap();
             assert_eq!(again.said.as_deref(), Some("Found it."));
-            assert_eq!(resolved(&opener.daemon, look), None, "asked again");
+            assert_eq!(
+                resolved(&opener.daemon, look),
+                Some(ResolvedBy::Agent),
+                "asked again"
+            );
+            opener.pump().await;
+            assert!(!runs(&mut opener.daemon, look), "not started again");
+        });
+    }
+
+    #[test]
+    fn a_subagent_asked_for_its_report_first_is_done_and_stays_done_asked_again() {
+        on_daemon(async {
+            let mut opener = Opener::new(&["Look"]).await;
+            opener.prompts();
+            let look = opener.subagents[0];
+            let waited = opener.wait(0);
+            assert_eq!(resolved(&opener.daemon, look), None, "at work");
+
+            opener.ends(0, "Found it.");
+            opener.pump().await;
+
+            assert_eq!(
+                waited.await.unwrap().unwrap().said.as_deref(),
+                Some("Found it.")
+            );
+            assert_eq!(resolved(&opener.daemon, look), Some(ResolvedBy::Agent));
+            opener.wait(0).await.unwrap().unwrap();
+            assert_eq!(resolved(&opener.daemon, look), Some(ResolvedBy::Agent));
+        });
+    }
+
+    #[test]
+    fn a_subagent_sent_a_line_with_agent_continue_reopens_and_is_done_after_its_next_report() {
+        on_daemon(async {
+            let mut opener = Opener::new(&["Look"]).await;
+            opener.prompts();
+            let look = opener.subagents[0];
+            opener.ends(0, "Found it.");
+            opener.pump().await;
+            assert_eq!(opener.prompts().len(), 1, "the report");
+            tells(
+                &opener.agent(None),
+                [AgentEvent::TurnEnded(cox_acp::StopReason::EndTurn)],
+            );
+            opener.pump().await;
+            assert_eq!(resolved(&opener.daemon, look), Some(ResolvedBy::Agent));
+
+            opener
+                .continues(Subagent::Title("Look".to_owned()), "Look again.")
+                .unwrap();
+            opener.pump().await;
+            assert_eq!(resolved(&opener.daemon, look), None, "sent a line");
+
+            // Its agent started again, as the last of those played.
+            let again = opener.agents.0.borrow().len() - 1;
+            tells(
+                &opener.agents.0.borrow()[again],
+                [
+                    AgentEvent::ReplyText("Nothing more.".to_owned()),
+                    AgentEvent::TurnEnded(cox_acp::StopReason::EndTurn),
+                ],
+            );
+            opener.pump().await;
+            assert_eq!(resolved(&opener.daemon, look), Some(ResolvedBy::Agent));
         });
     }
 
