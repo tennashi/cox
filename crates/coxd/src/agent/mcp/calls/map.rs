@@ -77,6 +77,59 @@ types only, not free functions. A rule that picks nothing is drift.\n\
 the map gives it.\n\
 Change the vocabulary as you move the code it claims.";
 
+/// The prompt that has the agent make a map with the human, as the
+/// agent's client offers it, as a slash command; its text is in
+/// `make_map.md`, with `{name}` and `{viewpoint}` for its arguments.
+pub(super) const MAKE_MAP: &str = "make_map";
+const MAKE_MAP_TEXT: &str = include_str!("map/make_map.md");
+const MAP_NAMED: &str = "use";
+const ANY_VIEWPOINT: &str = "the viewpoint we settle on together";
+
+/// The prompt `make_map`, as `prompts/list` lists it.
+pub(super) fn prompt() -> Value {
+    json!({
+        "name": MAKE_MAP,
+        "title": "Make a map of the project",
+        "description": "Has the agent survey the project, write a map's vocabulary, and \
+            work its drift down with you.",
+        "arguments": [
+            {
+                "name": "name",
+                "description": "The map's name, its file in `maps` without `.json`; `use` \
+                    when not given.",
+            },
+            {
+                "name": "viewpoint",
+                "description": "Whose view of the project the map takes, as \"using it\" \
+                    or \"building it\"; settled with you when not given.",
+            },
+        ],
+    })
+}
+
+/// The prompt `make_map`, as `prompts/get` answers it, with its
+/// `arguments` filled in, and the form of a vocabulary after it.
+pub(super) fn make_map(arguments: &Value) -> Result<Value, String> {
+    let argument = |name: &str, otherwise: &'static str| match arguments.get(name) {
+        None | Some(Value::Null) => Ok(otherwise),
+        Some(Value::String(given)) if given.trim().is_empty() => Ok(otherwise),
+        Some(Value::String(given)) => Ok(given.trim()),
+        Some(_) => Err(format!("{name} is to be a string")),
+    };
+    let name = argument("name", MAP_NAMED)?;
+    let viewpoint = argument("viewpoint", ANY_VIEWPOINT)?;
+    let text = MAKE_MAP_TEXT
+        .replace("{name}", name)
+        .replace("{viewpoint}", viewpoint);
+    Ok(json!({
+        "description": format!("Make the map `{name}` of the project"),
+        "messages": [{
+            "role": "user",
+            "content": { "type": "text", "text": format!("{text}\n{MAP_FORMAT}") },
+        }],
+    }))
+}
+
 /// How many places in the code an item of drift is told with, at most.
 const SITES: usize = 3;
 

@@ -89,6 +89,25 @@ pub(super) fn tools(only: Option<&[String]>, replaces_agent: bool) -> Value {
     tools
 }
 
+/// The prompts, as the agent's client lists them, as slash commands.
+pub(super) fn prompts() -> Value {
+    json!([map::prompt()])
+}
+
+/// The prompt `params`, those of `prompts/get`, name, with its arguments
+/// filled in.
+pub(super) fn prompt(params: &Value) -> Answered {
+    let name = params
+        .get("name")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let arguments = params.get("arguments").unwrap_or(&Value::Null);
+    match name {
+        map::MAKE_MAP => map::make_map(arguments).map_err(|why| (INVALID_PARAMS, why)),
+        _ => Err((INVALID_PARAMS, format!("no prompt {name}"))),
+    }
+}
+
 /// The names of the tools a chat gets, in a project or in none, as
 /// `in_project` says: those named in `only`, or all of them, but the ones
 /// that propose a name for the chat's project, what it is and its icon,
