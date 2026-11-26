@@ -420,7 +420,7 @@ impl Daemon {
             Whose::Agent { parent, .. } => self
                 .slot(parent)
                 .is_some_and(|parent| parent.resolved.is_none()),
-            Whose::Human => false,
+            Whose::Human | Whose::Sketch { .. } => false,
         });
         let shown = self.shown;
         let Some(slot) = self.slot_mut(key) else {
@@ -441,8 +441,10 @@ impl Daemon {
                 slot.pulls.told.push(workflow::SUBAGENT_CI.say(&values));
                 report.ci_ended();
             }
-            Whose::Human if open => slot.pulls.told.push(workflow::CI_ENDED.say(&values)),
-            Whose::Agent { .. } | Whose::Human => {}
+            Whose::Human | Whose::Sketch { .. } if open => {
+                slot.pulls.told.push(workflow::CI_ENDED.say(&values));
+            }
+            Whose::Agent { .. } | Whose::Human | Whose::Sketch { .. } => {}
         }
         self.tell_news(news);
     }
@@ -469,7 +471,7 @@ impl Daemon {
             .chats
             .iter()
             .chain(&self.archived)
-            .filter(|slot| slot.whose == Whose::Human && !slot.pulls.told.is_empty())
+            .filter(|slot| slot.whose.waits() && !slot.pulls.told.is_empty())
             .map(|slot| slot.key)
             .collect();
         let mut told = false;

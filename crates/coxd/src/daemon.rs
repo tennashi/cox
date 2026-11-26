@@ -375,6 +375,11 @@ enum Whose {
     /// stands, as `report` says. The human still hears of what it asks
     /// them.
     Agent { parent: u64, report: Report },
+    /// The human's, as a sketch the agent of the chat `parent` ran with
+    /// `agent` is, which the human ends: a turn that ends waits for them,
+    /// and that agent hears its report too, as `report` says, though Cox
+    /// does not mark it done on it.
+    Sketch { parent: u64, report: Report },
 }
 
 impl Whose {
@@ -388,6 +393,37 @@ impl Whose {
                 report: Report::Working,
             },
             _ => Self::Human,
+        }
+    }
+
+    /// Whose a chat the agent of the chat `parent` ran with `agent`, or
+    /// went on with with `agent_continue`, set up as `setup`, is: that
+    /// agent's, or, a sketch, the human's, with that agent hearing its
+    /// report too.
+    fn ran(parent: u64, setup: Option<&Setup>) -> Self {
+        match Self::opened(Some(parent), setup) {
+            Self::Human => Self::Sketch {
+                parent,
+                report: Report::Working,
+            },
+            whose => whose,
+        }
+    }
+
+    /// Whether a turn that ends waits for the human: the chat is theirs,
+    /// or a sketch, which they end.
+    fn waits(self) -> bool {
+        matches!(self, Self::Human | Self::Sketch { .. })
+    }
+
+    /// The agent that opened the chat and hears its report, and the
+    /// report, unless the chat is the human's alone.
+    fn reports(&mut self) -> Option<(u64, &mut Report)> {
+        match self {
+            Self::Agent { parent, report } | Self::Sketch { parent, report } => {
+                Some((*parent, report))
+            }
+            Self::Human => None,
         }
     }
 }
@@ -2890,8 +2926,8 @@ impl Daemon {
     /// to the list if archived, and its agent started again on its session
     /// first if it is closed, as one cut off by a stop, or by coxd going,
     /// is. The chat `asking` hears its report once it ends, as it heard
-    /// the first, even if the human took the chat meanwhile, unless it is
-    /// a sketch, which stays the human's. Answers its
+    /// the first, even if the human took the chat meanwhile; a sketch
+    /// stays the human's to end. Answers its
     /// number and title, or why it cannot go on: at work still, or waiting
     /// for the human, it is not cut off, and the agent waits for its
     /// report first.
@@ -2949,9 +2985,9 @@ impl Daemon {
         }
         chat.told(text);
         // Whose it is goes back to what it was opened as: a sketch stays
-        // the human's to end.
+        // the human's to end, its report heard by the agent too.
         if let Some(slot) = self.slot_mut(child) {
-            slot.whose = Whose::opened(Some(asking), slot.setup.as_ref());
+            slot.whose = Whose::ran(asking, slot.setup.as_ref());
         }
         Ok((child, name))
     }
@@ -3069,8 +3105,9 @@ impl Daemon {
     }
 
     /// Marks the report of the chat `key` heard by the agent that opened
-    /// it, so that Cox does not tell it again, and the chat done, once
-    /// its report reached that agent and nothing of it runs: the pull
+    /// it, so that Cox does not tell it again, and the chat done, unless
+    /// it is a sketch, once its report reached that agent and nothing of
+    /// it runs: the pull
     /// requests it opened do not hold it open, as its project holds them
     /// (see [`pulls`]).
     /// What it heard of what the chat runs in the background, it hears
@@ -3085,17 +3122,17 @@ impl Daemon {
             Behind::Untold
         };
         let mut done = false;
-        if let Some(Slot {
-            whose: Whose::Agent { report, .. },
-            behind: heard,
-            ..
-        }) = self.slot_mut(key)
-        {
-            if *report == Report::Pending {
-                *report = Report::Heard;
-                done = behind == Behind::Untold;
+        if let Some(slot) = self.slot_mut(key) {
+            // A sketch is the human's to end: its report heard, it is not
+            // done.
+            let sketch = matches!(slot.whose, Whose::Sketch { .. });
+            if let Some((_, report)) = slot.whose.reports() {
+                if *report == Report::Pending {
+                    *report = Report::Heard;
+                    done = behind == Behind::Untold && !sketch;
+                }
+                slot.behind = behind;
             }
-            *heard = behind;
         }
         if done
             && self
@@ -3123,6 +3160,10 @@ impl Daemon {
         let mut pending: Vec<(u64, Vec<u64>)> = Vec::new();
         for slot in self.chats.iter().chain(&self.archived) {
             if let Whose::Agent {
+                parent,
+                report: Report::Pending,
+            }
+            | Whose::Sketch {
                 parent,
                 report: Report::Pending,
             } = slot.whose
@@ -3185,14 +3226,16 @@ impl Daemon {
         let shown = self.shown;
         let mut news = Vec::new();
         for slot in self.chats.iter_mut().chain(&mut self.archived) {
-            let Whose::Agent { parent: of, report } = slot.whose else {
+            let (sketch, Some((of, &mut report))) = (slot.whose.waits(), slot.whose.reports())
+            else {
                 continue;
             };
             if of != parent {
                 continue;
             }
             slot.whose = Whose::Human;
-            if report != Report::Pending || slot.resolved.is_some() {
+            // A sketch waited for the human already as its turn ended.
+            if sketch || report != Report::Pending || slot.resolved.is_some() {
                 continue;
             }
             if shown != Some(slot.key) {
@@ -3275,6 +3318,9 @@ impl Daemon {
             (None, None) => folder,
         };
         let mut opened = self.open_under(key, text, setup, model, goal)?;
+        if let Some(slot) = self.slot_mut(opened.number) {
+            slot.whose = Whose::ran(key, slot.setup.as_ref());
+        }
         if let Some(made) = &worktree
             && let Some(kept) = self.slot(opened.number).and_then(|slot| slot.kept)
             && let Err(error) = worktrees::claim(made, kept.number())
@@ -3525,8 +3571,8 @@ impl Daemon {
             let turned = resolve::Turned::of(slot, conversation);
             let quiet = slot.resolved.is_some() || turned == Some(resolve::Turned::Merged);
             turns.extend(turned.map(|turned| (slot.key, turned)));
-            let ended = working(slot.state) && !working(state) && slot.whose == Whose::Human;
-            if let Whose::Agent { report, .. } = &mut slot.whose {
+            let ended = working(slot.state) && !working(state) && slot.whose.waits();
+            if let Some((_, report)) = slot.whose.reports() {
                 let settled = chat.background_settled();
                 (*report, slot.behind) = report.as_it_goes(slot.state, state, slot.behind, settled);
             }
@@ -4999,8 +5045,31 @@ mod tests {
         });
     }
 
+    /// The lines the agent `index` of those `agents` plays was sent since
+    /// last asked.
+    fn prompts_of(agents: &PlayedAgents, index: usize) -> Vec<String> {
+        let mut agents = agents.0.borrow_mut();
+        let mut prompts = Vec::new();
+        while let Ok(command) = agents[index].commands.try_recv() {
+            if let crate::agent::Command::Prompt(prompt) = command {
+                prompts.push(prompt.text);
+            }
+        }
+        prompts
+    }
+
+    /// Has the agent `index` of those `agents` plays end its turn, saying
+    /// `said`, if anything.
+    fn turn_ends(agents: &PlayedAgents, index: usize, said: Option<&str>) {
+        let events = said
+            .map(|said| AgentEvent::ReplyText(said.to_owned()))
+            .into_iter()
+            .chain([AgentEvent::TurnEnded(cox_acp::StopReason::EndTurn)]);
+        tells(&agents.0.borrow()[index], events);
+    }
+
     #[test]
-    fn a_sketch_an_agent_opened_stays_open_for_it_to_mark_done_and_keeps_its_folder() {
+    fn a_sketch_an_agent_ran_reports_to_it_once_and_stays_open_for_it_to_mark_done() {
         on_daemon(async {
             let home = TempDir::new();
             let agents = Rc::new(PlayedAgents::default());
@@ -5022,6 +5091,7 @@ mod tests {
             let opened = opened.try_recv().unwrap().unwrap();
             let (sketch, folder) = (opened.number, opened.folder.unwrap());
             pump(&mut daemon, &mut heard).await;
+            prompts_of(&agents, 0);
             let stands = |daemon: &mut Daemon| {
                 let (answer, mut waited) = oneshot::channel();
                 daemon.wait_chat(key, sketch, answer);
@@ -5029,20 +5099,41 @@ mod tests {
             };
             assert_eq!(stands(&mut daemon), None, "at work, it waits");
 
-            tells(
-                &agents.0.borrow()[1],
-                [
-                    AgentEvent::ReplyText("Tried it.".to_owned()),
-                    AgentEvent::TurnEnded(cox_acp::StopReason::EndTurn),
-                ],
-            );
+            turn_ends(&agents, 1, Some("Tried it."));
             pump(&mut daemon, &mut heard).await;
 
-            // Its report heard, Cox leaves it open, and says which number
-            // marks it done.
+            // Its report is told to the agent that ran it, with the number
+            // that marks it done, and it waits for the human too.
             let number = daemon.slot(sketch).unwrap().kept.unwrap().number();
+            let told = prompts_of(&agents, 0);
+            assert_eq!(told.len(), 1, "{told:?}");
+            assert!(
+                told[0].starts_with(
+                    "The subagent \"Try\" ended its turn. It last said:\n\nTried it.\n\n"
+                ),
+                "{told:?}"
+            );
+            assert!(
+                told[0].contains(&format!("mark it done with resolve_chat, giving {number},")),
+                "{told:?}"
+            );
+            assert_eq!(resolved(&daemon, sketch), None, "the human ends it");
+            assert!(
+                daemon.slot(sketch).unwrap().unread,
+                "it waits for the human"
+            );
             assert_eq!(stands(&mut daemon), Some(Some(number)));
-            assert_eq!(resolved(&daemon, sketch), None);
+            turn_ends(&agents, 0, None);
+            pump(&mut daemon, &mut heard).await;
+            assert_eq!(prompts_of(&agents, 0), Vec::<String>::new(), "told once");
+
+            // Once the human talks with it, it is theirs: what it comes to
+            // is not told to the agent.
+            submit(&mut daemon, sketch);
+            pump(&mut daemon, &mut heard).await;
+            turn_ends(&agents, 1, Some("Changed it."));
+            pump(&mut daemon, &mut heard).await;
+            assert_eq!(prompts_of(&agents, 0), Vec::<String>::new(), "the human's");
 
             let (answer, mut marked) = oneshot::channel();
             daemon.asked(
@@ -5062,6 +5153,31 @@ mod tests {
                 stands(&mut daemon),
                 Some(None),
                 "done, it is not said again"
+            );
+        });
+    }
+
+    #[test]
+    fn a_sketch_started_beside_a_chat_is_the_human_s_and_reports_to_no_agent() {
+        on_daemon(async {
+            let home = TempDir::new();
+            let agents = Rc::new(PlayedAgents::default());
+            let (mut daemon, mut heard, key) = shop_with_app(&home, &agents).await;
+            let sketch = daemon
+                .start_sketch(key, Sketch::Empty, None, "try")
+                .unwrap()
+                .number;
+            pump(&mut daemon, &mut heard).await;
+            prompts_of(&agents, 0);
+
+            turn_ends(&agents, 1, Some("Tried it."));
+            pump(&mut daemon, &mut heard).await;
+
+            assert_eq!(prompts_of(&agents, 0), Vec::<String>::new());
+            assert_eq!(resolved(&daemon, sketch), None);
+            assert!(
+                daemon.slot(sketch).unwrap().unread,
+                "it waits for the human"
             );
         });
     }

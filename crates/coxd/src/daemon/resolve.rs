@@ -14,7 +14,7 @@ use std::time::Instant;
 
 use cox_core::store::{Resolved, ResolvedBy};
 
-use super::{Daemon, Slot, State, Whose, at_work, working};
+use super::{Daemon, Slot, State, at_work, working};
 use crate::chat::conversation::Conversation;
 
 /// How a chat's turn bears on whether it is done, as its conversation
@@ -60,7 +60,7 @@ impl Daemon {
         slot.unread = false;
         slot.pulls.seen();
         // Its agent no longer hears of CI that ended in a line of its own.
-        if slot.whose == Whose::Human {
+        if slot.whose.waits() {
             slot.pulls.told.clear();
         }
         if let Some(kept) = slot.kept
