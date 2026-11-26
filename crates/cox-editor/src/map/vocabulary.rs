@@ -168,7 +168,10 @@ pub struct Level {
     #[serde(default)]
     pub outer: BTreeMap<String, Outer>,
     /// The nodes of the levels above around it, by where each sits, for
-    /// a level further down.
+    /// a level further down: those the code's lines go on to. With none,
+    /// here or in `outer`, the map places around the box every box above
+    /// that the code of its parts meets; and it places each end of the
+    /// level's lines that is placed nowhere in it.
     #[serde(default)]
     pub at: BTreeMap<String, [i32; 2]>,
     /// The edges of the nodes above that it is inside of, by node, as
@@ -188,7 +191,7 @@ pub struct Level {
 pub struct Outer(pub Side, pub i32);
 
 /// A side of a box.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Side {
     Left,
