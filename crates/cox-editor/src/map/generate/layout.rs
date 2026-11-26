@@ -1,9 +1,11 @@
 //! Where things sit on the map. A person places the levels the
 //! vocabulary has; the map adds the lines the code gives between their
 //! boxes, and swaps two boxes' places when that shortens those lines, so
-//! that a box moves only to untangle them. What a level's lines reach
-//! around its box, and the person did not place, the map places beside
-//! the box, on the side it lies on in the level above. The types inside
+//! that a box moves only to untangle them. A level the person placed
+//! nothing around opens where its box sits in the level above, which
+//! stays around it. Around another, what its lines reach and the person
+//! did not place, the map places beside the box, on the side it lies on
+//! in the level above. The types inside
 //! a box are placed on a grid, each near what it is wired to, and pulled
 //! toward the side of the box that the boxes it is wired to are on; those
 //! wired to nothing after them, in name order.
@@ -15,7 +17,8 @@ use super::Map;
 use crate::map::generated::{Level, Line};
 use crate::map::vocabulary::{self, Side};
 
-/// A card's width at least, and its height, as the page draws them.
+/// A card's width and its height, as the page draws them, whatever its
+/// name is long: the page fits the name to the card.
 const CARD_WIDTH: i32 = 216;
 const CARD_HEIGHT: i32 = 56;
 /// The card of a person or a system, as the page draws it.
@@ -62,9 +65,11 @@ pub(super) struct Placed<'c> {
 /// while that shortens the lines. A box drawn closed stands for the
 /// boxes inside it, its lines for theirs.
 ///
-/// A level that places none of those around it has the code's lines go
-/// on to the boxes the levels above show closed. Every end of a level's
-/// lines that the person did not place, the map places around its box.
+/// A level that places nothing around its box shows the level above
+/// around it, moved aside for the box to grow where it sits there, and
+/// has the code's lines go on to the boxes the levels above show closed.
+/// Every end of a level's lines that is placed nowhere then, the map
+/// places around its box.
 pub(super) fn place<'c>(map: &Map<'c, '_>) -> Placed<'c> {
     let vocabulary = map.vocabulary;
     let mut levels = BTreeMap::new();
@@ -112,19 +117,31 @@ pub(super) fn place<'c>(map: &Map<'c, '_>) -> Placed<'c> {
             }
         }
         let mut at = level.at.clone();
-        at.extend(around(map, &slots, opened, level, &parts, &lines));
-        levels.insert(
-            opened.clone(),
-            Level {
-                area: Some(level.area),
-                size: None,
-                outer: level.outer.clone(),
-                at,
-                frames: level.frames.clone(),
-                parts,
-                lines,
-            },
-        );
+        let mut frames = level.frames.clone();
+        // A level that places nothing around its box opens where the box
+        // sits in the level above, which stays around it.
+        if level.at.is_empty()
+            && level.outer.is_empty()
+            && level.frames.is_empty()
+            && let Some(&outer) = map.inside_of.get(opened.as_str())
+            && let Some(above) = levels.get(outer)
+            && let Some(&(_, slot)) = slots.get(opened.as_str())
+        {
+            (at, frames) =
+                above_moved_aside(map, (outer, above), (opened.as_str(), slot), level.area);
+        }
+        let mut placed = Level {
+            area: Some(level.area),
+            size: None,
+            outer: level.outer.clone(),
+            at,
+            frames,
+            parts,
+            lines,
+        };
+        let more = around(map, &slots, opened, &placed);
+        placed.at.extend(more);
+        levels.insert(opened.clone(), placed);
     }
     let mut standing = BTreeMap::new();
     for counts in found.values() {
@@ -197,21 +214,23 @@ fn meeting<'c>(
 }
 
 /// Where the map places, around the box of the level inside `opened`,
-/// each end of its `lines` that `level` does not place: beside the box,
-/// past what the person placed there, on the side the end lies on in the
-/// level above (see [`lies`]); those of one side in the order of the
-/// `parts` their lines go to. Not the boxes `opened` is inside of, whose
-/// edges are drawn, nor what is inside it.
+/// each end of its lines that `level`, as placed so far, places
+/// nowhere: beside the box, past what is placed there, on the side the end lies on in the level above (see
+/// [`lies`]); those of one side in the order of the `parts` their lines
+/// go to. Not the boxes `opened` is inside of, whose edges are drawn, nor
+/// what is inside it.
 fn around(
     map: &Map<'_, '_>,
     slots: &HashMap<&str, (&str, [i32; 2])>,
     opened: &str,
-    level: &vocabulary::Level,
-    parts: &BTreeMap<String, [i32; 2]>,
-    lines: &[Line],
+    level: &Level,
 ) -> BTreeMap<String, [i32; 2]> {
+    let Some(area) = level.area else {
+        return BTreeMap::new();
+    };
+    let (parts, lines) = (&level.parts, &level.lines);
     let above = map.and_around(opened);
-    let [left, top, width, height] = level.area;
+    let [left, top, width, height] = area;
     let middle = [left + width / 2, top + height / 2];
     let placed = |id: &str| {
         parts.contains_key(id)
@@ -237,7 +256,7 @@ fn around(
             ends.entry(end).or_default().push(to);
         }
     }
-    // The edges of what the person placed, which the map places past.
+    // The edges of what is placed, which the map places past.
     let mut edges = [
         left - BESIDE,
         top - ABOVE,
@@ -253,14 +272,8 @@ fn around(
                 .outer
                 .iter()
                 .map(|(id, &vocabulary::Outer(side, along))| {
-                    let [w, h] = card(map, id);
-                    let at = match side {
-                        Side::Left => [left - BESIDE - w, along],
-                        Side::Right => [left + width + BESIDE, along],
-                        Side::Top => [along, top - ABOVE - h],
-                        Side::Bottom => [along, top + height + ABOVE],
-                    };
-                    ([w, h], at)
+                    let size = card(map, id);
+                    (size, beside(area, side, along, size))
                 }),
         );
     for ([w, h], [x, y]) in by_hand {
@@ -298,6 +311,83 @@ fn around(
         }
     }
     at
+}
+
+/// Where the page draws a card of `size` that a level places by `side`
+/// of its box, at `area`, `along` it.
+fn beside(area: [i32; 4], side: Side, along: i32, [w, h]: [i32; 2]) -> [i32; 2] {
+    let [left, top, width, height] = area;
+    match side {
+        Side::Left => [left - BESIDE - w, along],
+        Side::Right => [left + width + BESIDE, along],
+        Side::Top => [along, top - ABOVE - h],
+        Side::Bottom => [along, top + height + ABOVE],
+    }
+}
+
+/// What the level `above`, inside `outer`, shows, as the level inside
+/// `opened` shows it around its box, at `area`: the box grows from the
+/// middle of its card, which sits at `slot` there, and what is beside
+/// the card moves aside by as much as the box grows that way, as the
+/// page has a level of types grow. Gives where each node above sits,
+/// and the edges of the boxes above, grown as much.
+fn above_moved_aside(
+    map: &Map<'_, '_>,
+    (outer, above): (&str, &Level),
+    (opened, slot): (&str, [i32; 2]),
+    area: [i32; 4],
+) -> (BTreeMap<String, [i32; 2]>, BTreeMap<String, [i32; 4]>) {
+    let Some(above_area) = above.area else {
+        return (BTreeMap::new(), BTreeMap::new());
+    };
+    let [w, h] = card(map, opened);
+    let [left, top, width, height] = area;
+    let more = [(width - w) / 2, (height - h) / 2];
+    // The level keeps its own places: those above are told from its box.
+    let from = [left + more[0] - slot[0], top + more[1] - slot[1]];
+    let aside = |at: [i32; 2], size: [i32; 2]| {
+        [0, 1].map(|axis| {
+            let way = if at[axis] >= slot[axis] + [w, h][axis] {
+                more[axis]
+            } else if at[axis] + size[axis] <= slot[axis] {
+                -more[axis]
+            } else {
+                0
+            };
+            at[axis] + way + from[axis]
+        })
+    };
+    let grown = |[x, y, width, height]: [i32; 4]| {
+        [
+            x - more[0] + from[0],
+            y - more[1] + from[1],
+            width + 2 * more[0],
+            height + 2 * more[1],
+        ]
+    };
+    let placed = above
+        .parts
+        .iter()
+        .chain(&above.at)
+        .map(|(id, &at)| (id, at));
+    let by_side = above
+        .outer
+        .iter()
+        .map(|(id, &vocabulary::Outer(side, along))| {
+            (id, beside(above_area, side, along, card(map, id)))
+        });
+    let at = placed
+        .chain(by_side)
+        .filter(|(id, _)| id.as_str() != opened)
+        .map(|(id, at)| (id.clone(), aside(at, card(map, id))))
+        .collect();
+    let mut frames: BTreeMap<String, [i32; 4]> = above
+        .frames
+        .iter()
+        .map(|(id, &edge)| (id.clone(), grown(edge)))
+        .collect();
+    frames.insert(outer.to_owned(), grown(above_area));
+    (at, frames)
 }
 
 /// The side of a level's box that `node` lies on, `above` being the box
@@ -345,14 +435,7 @@ fn lies(
 fn card(map: &Map<'_, '_>, id: &str) -> [i32; 2] {
     match map.vocabulary.nodes.get(id) {
         Some(node) if node.kind == vocabulary::Kind::Outside => OUTSIDE_CARD,
-        Some(node) => {
-            let drawn = super::drawn(node);
-            [
-                card_width(&drawn.name, drawn.code.as_deref().unwrap_or("")),
-                CARD_HEIGHT,
-            ]
-        }
-        None => [CARD_WIDTH, CARD_HEIGHT],
+        _ => [CARD_WIDTH, CARD_HEIGHT],
     }
 }
 
@@ -421,7 +504,6 @@ fn swapped(
 pub(super) struct Card<'t> {
     pub id: &'t str,
     pub name: &'t str,
-    pub code: &'t str,
 }
 
 /// Places the `cards` of a box sitting at `me`, with `lines` between
@@ -469,9 +551,9 @@ pub(super) fn types(
             ],
         );
     }
-    let right = cards
-        .iter()
-        .map(|card| parts[card.id][0] + card_width(card.name, card.code))
+    let right = parts
+        .values()
+        .map(|at| at[0] + CARD_WIDTH)
         .max()
         .unwrap_or(0);
     let bottom = parts.values().map(|at| at[1]).max().unwrap_or(0);
@@ -593,24 +675,6 @@ fn wanted(
         .partial_cmp(&pick(&want[b]))
         .unwrap_or(Ordering::Equal)
         .then(a.cmp(b))
-}
-
-/// How wide the page draws a card with `name` over `code`: by the
-/// letters' widths, a wide letter's 14.5 and an ASCII one's 0.6 of it.
-fn card_width(name: &str, code: &str) -> i32 {
-    let letters = |text: &str| -> f64 {
-        text.chars()
-            .map(|c| {
-                if (' '..='~').contains(&c) {
-                    0.6 * 14.5
-                } else {
-                    14.5
-                }
-            })
-            .fold(0.0, |sum, width| sum + width)
-    };
-    let text = letters(name).max(letters(code) * 0.8);
-    CARD_WIDTH.max(int(whole((58.0 + text + 18.0).ceil())))
 }
 
 fn distance(a: [i32; 2], b: [i32; 2]) -> f64 {

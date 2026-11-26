@@ -69,7 +69,6 @@ impl<'c> Map<'c, '_> {
                 .map(|&index| layout::Card {
                     id: &self.types[index].id,
                     name: &self.types[index].name,
-                    code: self.types[index].kind,
                 })
                 .collect();
             // A box the level shows only by its edge, as `outer`, has no

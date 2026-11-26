@@ -13,7 +13,8 @@
 
 import { ICON } from "./icons.js";
 
-// Sizes: an outside node's card, a part's card, the gap between cards in
+// Sizes: an outside node's card, a part's or a type's card, whatever
+// its name is long, the gap between cards in
 // a column of the top, the top's center, how far the top's columns stand
 // from it, and how far the outside nodes stand from a level's edge.
 const PW = 248;
@@ -38,8 +39,8 @@ export const view = {
   sel: null,
   /// The nodes pointed at from a list, which light up as the chosen one.
   mark: new Set(),
-  /// The lines lit, as "a>b", when a function is chosen: from its type
-  /// to what it reaches.
+  /// The lines lit, each as its two ends, when a function is chosen:
+  /// from its type to what it reaches.
   litPairs: null,
   /// Drift drawn as lines, between two nodes each, while the drift is
   /// shown, and the one pointed at, as "a|b".
@@ -116,23 +117,34 @@ export function chain(f) {
   return way;
 }
 
-function size(id) {
-  const n = node(id);
-  if (!inside(id)) return [PW, PH];
-  return [Math.max(IW, Math.ceil(58 + Math.max(textWidth(n.name), n.code ? textWidth(n.code) * 0.8 : 0) + 18)), IH];
-}
+const size = (id) => (inside(id) ? [IW, IH] : [PW, PH]);
+
+// The card that stands for the node `id` among those at `r` in the level
+// inside `f`: its own, or that of the nearest box it is inside of which
+// is drawn closed there.
+const standsFor = (id, r, f) =>
+  chain(id)
+    .reverse()
+    .find((at) => at !== f && r[at]);
+// The cards lit as the chosen one is: those of the nodes pointed at.
+const marked = (r, f) => new Set([...view.mark].map((id) => standsFor(id, r, f)).filter(Boolean));
 
 // Opening a box replaces the lines to it with those of the level inside
 // it; the other lines stay. A weak line shows only while one of its ends
 // is chosen or pointed at.
-const showWeak = (e) => !e[4] || [e[0], e[1]].some((n) => n === view.sel || view.mark.has(n));
+const showWeak = (mark) => (e) => !e[4] || [e[0], e[1]].some((n) => n === view.sel || mark.has(n));
 // A level a person placed shows, of the levels above, only what it
 // places around its box, so of their lines only those between what
 // `shown` there, by id.
-function wiresOf(f, shown) {
+function wiresOf(f, shown, mark) {
   let wires = top.wires;
   for (const g of chain(f)) wires = wires.filter(([x, y]) => x !== g && y !== g).concat(levels[g].wires);
-  return wires.filter(([x, y]) => x in shown && y in shown).filter(showWeak);
+  return wires.filter(([x, y]) => x in shown && y in shown).filter(showWeak(mark));
+}
+// A level laid out, with its lines and the cards lit in it.
+function laid(f, r, box, frames, parts) {
+  const mark = marked(r, f);
+  return { id: f, r, box, frames, mark, wires: wiresOf(f, { ...r, ...frames }, mark), parts };
 }
 
 /// The level inside `f`, or the top for "root", laid out: where each node
@@ -147,7 +159,8 @@ export function geo(f) {
     column(top.left, -GX - PW);
     column(top.right, GX);
     r[top.center] = R(-CW / 2, -CH / 2, CW, CH);
-    return { id: f, r, box: null, frames: {}, wires: top.wires.filter(showWeak), parts: [] };
+    const mark = marked(r, f);
+    return { id: f, r, box: null, frames: {}, mark, wires: top.wires.filter(showWeak(mark)), parts: [] };
   }
   const d = levels[f];
   // A level gone as the map was read again draws as the top until the
@@ -176,7 +189,13 @@ export function geo(f) {
     frames[parentOf(f)] = grown(above.box);
     for (const [id, x, y] of d.parts) r[id] = R(box.x + x, box.y + y, ...size(id));
     r[f] = box;
-    return { id: f, r, box, frames, wires: wiresOf(f, { ...r, ...frames }), parts: d.parts.map((p) => p[0]) };
+    return laid(
+      f,
+      r,
+      box,
+      frames,
+      d.parts.map((p) => p[0]),
+    );
   }
   const [bx, by, bw, bh] = d.box;
   const box = R(bx, by, bw, bh);
@@ -196,7 +215,13 @@ export function geo(f) {
   r[f] = box;
   const frames = {};
   for (const [k, v] of Object.entries(d.frames)) frames[k] = R(...v);
-  return { id: f, r, box, frames, wires: wiresOf(f, { ...r, ...frames }), parts: d.parts.map((p) => p[0]) };
+  return laid(
+    f,
+    r,
+    box,
+    frames,
+    d.parts.map((p) => p[0]),
+  );
 }
 
 const outline = (rects) => ({
@@ -274,6 +299,67 @@ function path(a, b) {
   return `M${a.x} ${a.y}C${a.x + a.n[0] * k} ${a.y + a.n[1] * k},${b.x + b.n[0] * k} ${b.y + b.n[1] * k},${b.x} ${b.y}`;
 }
 
+// A card's text is measured as the page draws it, to fit the card.
+const pen = document.createElement("canvas").getContext("2d");
+const fits = new Map();
+// `text` in the `font`, on `most` lines of `width` at most: broken
+// between words where it can be, and cut short, with an ellipsis, where
+// it is longer than that.
+function wrapped(text, font, width, most) {
+  const key = `${font}|${width}|${most}|${text}`;
+  if (fits.has(key)) return fits.get(key);
+  pen.font = `${font} ${getComputedStyle(W).fontFamily}`;
+  const wide = (part) => pen.measureText(part).width;
+  const lines = [];
+  let rest = String(text ?? "").trim();
+  while (rest && lines.length < most) {
+    if (wide(rest) <= width) {
+      lines.push(rest);
+      break;
+    }
+    const last = lines.length === most - 1;
+    const room = last ? width - wide("…") : width;
+    let end = rest.length - 1;
+    while (end > 1 && wide(rest.slice(0, end).trimEnd()) > room) end--;
+    if (last) {
+      lines.push(`${rest.slice(0, end).trimEnd()}…`);
+      break;
+    }
+    const space = rest.slice(0, end + 1).lastIndexOf(" ");
+    const cut = space > 0 ? space : end;
+    lines.push(rest.slice(0, cut));
+    rest = rest.slice(cut).trim();
+  }
+  fits.set(key, lines);
+  return lines;
+}
+const NAME = "600 14.5px";
+const CODE = "400 11.5px";
+// A card's name over what it is in the code, on three lines at most
+// between them, in the `room` right of `x`, around the middle of `h`;
+// where some was cut, all of it shows as the card is pointed at.
+function label(p, x, room, h) {
+  const name = wrapped(p.name, NAME, room, 2);
+  const code = p.code ? wrapped(p.code, CODE, room, 3 - name.length) : [];
+  const from = (h - 17 * name.length - 14 * code.length - (code.length ? 2 : 0)) / 2;
+  const cut = [...name, ...code].some((line) => line.endsWith("…"));
+  return (
+    (cut ? `<title>${esc(p.name)}${p.code ? `\n${esc(p.code)}` : ""}</title>` : "") +
+    name
+      .map(
+        (line, i) =>
+          `<text x="${x}" y="${from + 17 * i + 13.5}" font-size="14.5" font-weight="600" fill="var(--foreground)">${esc(line)}</text>`,
+      )
+      .join("") +
+    code
+      .map(
+        (line, i) =>
+          `<text x="${x}" y="${from + 17 * name.length + 14 * i + 12.5}" font-size="11.5" fill="var(--dim)">${esc(line)}</text>`,
+      )
+      .join("")
+  );
+}
+
 // What changed in a node's code, as a tab over its top left edge.
 function changedTab(id) {
   const changed = view.changed[id];
@@ -293,7 +379,7 @@ function card(id, r, op = 1, appearing = 0) {
   const w = r.w;
   const h = r.h;
   const sc = appearing ? lerp(0.85, 1, op) : 1;
-  const on = id === view.sel || view.mark.has(id);
+  const on = id === view.sel || lit.has(id);
   const tf = `translate(${r.x + w / 2},${r.y + h / 2}) scale(${sc}) translate(${-w / 2},${-h / 2})`;
   const stack = p.many
     ? [8, 4]
@@ -307,20 +393,19 @@ function card(id, r, op = 1, appearing = 0) {
     canOpen(id) && !anim
       ? `<g class="open" data-open="${esc(id)}" transform="translate(${w - 26},6)"><title>Open</title><rect width="20" height="20" rx="5" fill="transparent"/><g transform="translate(3,3) scale(.6)" fill="none" stroke="var(--dim)" stroke-width="2" stroke-linecap="round">${ICON.drill}</g></g>`
       : "";
-  const label = p.code
-    ? `<text x="58" y="${h / 2 - 3}" font-size="14.5" font-weight="600" fill="var(--foreground)">${esc(p.name)}</text><text x="58" y="${h / 2 + 15}" font-size="11.5" fill="var(--dim)">${esc(p.code)}</text>`
-    : `<text x="58" y="${h / 2 + 5}" font-size="14.5" font-weight="600" fill="var(--foreground)">${esc(p.name)}</text>`;
+  const text = label(p, 58, w - 58 - (canOpen(id) ? 30 : 12), h);
   return `<g class="obj${inn ? " in" : ""}" data-id="${esc(id)}" opacity="${op}" transform="${tf}">${stack}<rect class="body" width="${w}" height="${h}" rx="10" fill="var(--raised)" stroke="${on ? "var(--accent)" : inn ? "rgba(111,211,197,.45)" : "var(--border-strong)"}" stroke-width="${on ? 1.8 : 1}"/>
   <rect x="11" y="${(h - 36) / 2}" width="36" height="36" rx="8" fill="${inn ? "var(--accent-ground)" : "var(--button)"}"/>
   <g transform="translate(17,${(h - 36) / 2 + 6})" fill="none" stroke="${inn ? "var(--accent)" : "var(--dim)"}" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">${ICON[iconOf(id)] ?? ICON.box}</g>
-  ${label}${open}${anim ? "" : changedTab(id)}${driftBadge(id, w)}</g>`;
+  ${text}${open}${anim ? "" : changedTab(id)}${driftBadge(id, w)}</g>`;
 }
 
 // The node of the project, in the middle of the top.
 function centerCard(id, r, op) {
   const on = view.sel === id;
+  const name = wrapped(node(id).name, "700 22px", r.w - 64, 2);
   return `<g class="obj" data-id="${esc(id)}" opacity="${op}"><rect class="body" x="${r.x}" y="${r.y}" width="${r.w}" height="${r.h}" rx="16" fill="var(--accent-ground)" stroke="var(--accent)" stroke-width="${on ? 2.4 : 1.6}"/>
-  <text x="${r.x + r.w / 2}" y="${r.y + r.h / 2 + 8}" font-size="22" font-weight="700" fill="var(--foreground)" text-anchor="middle">${esc(node(id).name)}</text>
+  ${name.map((line, i) => `<text x="${r.x + r.w / 2}" y="${r.y + r.h / 2 + 8 + 28 * (i - (name.length - 1) / 2)}" font-size="22" font-weight="700" fill="var(--foreground)" text-anchor="middle">${esc(line)}</text>`).join("")}
   ${canOpen(id) && !anim ? `<g class="open" data-open="${esc(id)}" transform="translate(${r.x + r.w - 30},${r.y + 8})"><title>Open</title><rect width="22" height="22" rx="5" fill="transparent"/><g transform="translate(3,3) scale(.7)" fill="none" stroke="var(--dim)" stroke-width="2" stroke-linecap="round">${ICON.drill}</g></g>` : ""}
   ${anim ? "" : `<g transform="translate(${r.x},${r.y})">${changedTab(id)}${driftBadge(id, r.w)}</g>`}</g>`;
 }
@@ -341,6 +426,8 @@ const W = document.getElementById("w");
 let pair = null;
 let s = 0;
 let anim = false;
+// The cards lit in what is being drawn, as the chosen one is.
+let lit = new Set();
 let cam = { x: 0, y: 0, k: 1 };
 let world = { x0: -100, x1: 100, y0: -100, y1: 100 };
 const hooks = [];
@@ -374,8 +461,16 @@ export function draw() {
   const onlyA = (id) => gB && !(id in gB.r);
   const onlyB = (id) => !(id in gA.r);
   const rect = (id) => g[id];
-  const isLit = (x, y) =>
-    view.litPairs ? view.litPairs.has(`${x}>${y}`) || view.litPairs.has(`${y}>${x}`) : view.sel && (x === view.sel || y === view.sel);
+  const here = gB ?? gA;
+  lit = here.mark;
+  // The lines a function chosen lights go between the cards that stand
+  // for their ends here.
+  const reached = new Map();
+  for (const ends of view.litPairs ?? []) {
+    const [x, y] = ends.map((id) => standsFor(id, here.r, here.id));
+    if (x && y && x !== y) reached.set(pairKey(x, y), [x, y]);
+  }
+  const isLit = (x, y) => (view.litPairs ? reached.has(pairKey(x, y)) : view.sel && (x === view.sel || y === view.sel));
   const edgesOf = (gg, f) => (gg ? { ...gg.frames, ...(gg.box ? { [f]: gg.box } : {}) } : {});
   const bA = edgesOf(gA, a);
   const bB = edgesOf(gB, b);
@@ -398,8 +493,8 @@ export function draw() {
   };
   const nA = near(gA);
   const nB = near(gB);
-  const wires = (gB ?? gA).wires;
-  const litNodes = new Set(view.sel ? [view.sel, ...wires.filter(([x, y]) => x === view.sel || y === view.sel).flat()] : []);
+  const wires = here.wires;
+  const litNodes = new Set([...lit, ...(view.sel ? [view.sel, ...wires.filter(([x, y]) => x === view.sel || y === view.sel).flat()] : [])]);
   const dim = (id) => (litNodes.has(id) ? 1 : lerp(nA && !nA.has(id) ? FAR : 1, nB && !nB.has(id) ? FAR : 1, t1));
   const inA = within(gA);
   const inB = gB && within(gB);
@@ -445,6 +540,12 @@ export function draw() {
       wire(path(mix(A0[E + j].a, A1[E + I + j].a), mix(A0[E + j].b, A1[E + I + j].b)), e[0], e[1], e[2], onlyB(e[0]) || onlyB(e[1]) ? t2 : 1),
     );
     int.forEach((e, i) => wire(path(A1[E + i].a, A1[E + i].b), e[0], e[1], e[2], t2));
+  }
+  // What a function chosen reaches where the level draws no line.
+  if (!between) {
+    const drawn = new Set(wires.map(([x, y]) => pairKey(x, y)));
+    const more = [...reached].filter(([key]) => !drawn.has(key)).map(([, ends]) => ends);
+    anchors(more, rect).forEach((P, i) => wire(path(P.a, P.b), ...more[i], false));
   }
   if (!between)
     for (const [x, y] of view.ghost) {

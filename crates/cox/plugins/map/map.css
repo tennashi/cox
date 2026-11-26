@@ -93,6 +93,12 @@ button {
   background: var(--hover);
   color: var(--foreground);
 }
+.crumb .map {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex-shrink: 0;
+}
 .crumb .here {
   color: var(--foreground);
   font-weight: 600;

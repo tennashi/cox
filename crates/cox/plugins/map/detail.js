@@ -239,11 +239,11 @@ function restore(kept) {
 // and the nodes those fields' types name; lit from its type.
 function reach(fn) {
   const { t: own } = functions[fn];
-  const pairs = new Set();
+  const pairs = [];
   const nodes = new Set();
   const add = (a, b) => {
     if (a && b && a !== b) {
-      pairs.add(`${a}>${b}`);
+      pairs.push([a, b]);
       nodes.add(b);
     }
   };

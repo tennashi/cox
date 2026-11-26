@@ -194,7 +194,7 @@ function bar() {
   const here = told.maps.find((m) => m.name === told.name);
   crumb.innerHTML =
     project +
-    `<button data-up="0">${esc(here ? label(here) : told.name)}</button>` +
+    `<button class="map" data-up="0" title="${esc(here ? label(here) : told.name)}">${esc(here ? label(here) : told.name)}</button>` +
     view.stack
       .slice(1)
       .map((f, i) =>
