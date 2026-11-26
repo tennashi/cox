@@ -32,7 +32,7 @@ use coxd::github::CheckState;
 use jiff::tz::TimeZone;
 use serde_json::{Value, json};
 
-use super::Told;
+use super::{Told, cut_off_says};
 use crate::stage::commands;
 
 /// How long a command runs, in milliseconds, before the story tells it.
@@ -283,13 +283,24 @@ pub fn story(kept: &Kept, told: &Told, zone: &TimeZone, now: i64) -> Value {
         events.extend(of_pull(row));
     }
     for turn in &kept.turns {
-        events.push(Event::new(turn.at, "turn_end", turn.how.word().to_owned()));
+        let event = Event::new(turn.at, "turn_end", turn.how.word().to_owned());
+        events.push(if turn.how.cuts_off() {
+            event.with(json!({ "cut": cut_off_says(turn.how, turn.why.as_deref()) }))
+        } else {
+            event
+        });
     }
     // After the turn's end they ran after, though kept as soon.
     events.extend(of_checks(kept));
     events.extend(kept.ran.iter().filter_map(of_run));
     events.sort_by_key(|event| event.at);
     let ended = ended(kept, shown, &events);
+    // What the page says of a last turn that was cut off.
+    let cut = kept
+        .turns
+        .last()
+        .filter(|turn| turn.how.cuts_off())
+        .map(|turn| (turn.how.word(), cut_off_says(turn.how, turn.why.as_deref())));
     json!({
         "chat": kept.chat,
         "started": time(kept.opened, zone, now),
@@ -298,6 +309,9 @@ pub fn story(kept: &Kept, told: &Told, zone: &TimeZone, now: i64) -> Value {
             ended["how"] = json!(how);
             if let Some(by) = by {
                 ended["by"] = json!(by);
+            }
+            if let Some((_, cut)) = cut.as_ref().filter(|(word, _)| *word == how) {
+                ended["cut"] = json!(cut);
             }
             ended
         }),
@@ -666,6 +680,7 @@ mod tests {
             steers: false,
             on_steps: Vec::new(),
             active: 0,
+            cut_off: None,
         }
     }
 
@@ -762,6 +777,7 @@ mod tests {
             turns: vec![TurnEnd {
                 at: at(14, 29),
                 how: Ended::Done,
+                why: None,
             }],
             threads: vec![(
                 "Cache the dependencies in CI".to_owned(),
@@ -1042,6 +1058,7 @@ mod tests {
             turns: vec![TurnEnd {
                 at: at(10, 9),
                 how: Ended::Done,
+                why: None,
             }],
         };
 
@@ -1154,10 +1171,12 @@ mod tests {
                 TurnEnd {
                     at: at(10, 5),
                     how: Ended::Done,
+                    why: None,
                 },
                 TurnEnd {
                     at: at(10, 9),
                     how: Ended::Done,
+                    why: None,
                 },
             ],
         };
@@ -1196,6 +1215,53 @@ mod tests {
     }
 
     #[test]
+    fn a_chat_cut_off_at_a_limit_ends_so_with_what_the_agent_said_of_it() {
+        let chat = kept(7);
+        let kept = Kept {
+            chat,
+            ran: Vec::new(),
+            name: String::new(),
+            opened: at(10, 0),
+            resolved: None,
+            threads: Vec::new(),
+            subagents: Vec::new(),
+            steps: Vec::new(),
+            milestones: Vec::new(),
+            turns: vec![
+                TurnEnd {
+                    at: at(10, 2),
+                    how: Ended::Stopped,
+                    why: None,
+                },
+                TurnEnd {
+                    at: at(10, 7),
+                    how: Ended::Limited,
+                    why: Some("You've hit your limit · resets 3pm".to_owned()),
+                },
+            ],
+        };
+        let story = story(
+            &kept,
+            &Told {
+                chats: vec![shown(3, chat)],
+                ..Told::default()
+            },
+            &TimeZone::UTC,
+            at(12, 0),
+        );
+        assert_eq!(
+            (&story["ended"]["how"], &story["ended"]["cut"]),
+            (
+                &json!("limited"),
+                &json!("You've hit your limit · resets 3pm")
+            )
+        );
+        let events = story["events"].as_array().unwrap();
+        assert_eq!(events[1]["cut"], "You've hit your limit · resets 3pm");
+        assert_eq!(events[0].get("cut"), None, "a stop is not cut off");
+    }
+
+    #[test]
     fn a_chat_ends_marked_done_asking_or_stopped_and_goes_on_while_at_work() {
         let chat = kept(7);
         let mut kept = Kept {
@@ -1219,6 +1285,7 @@ mod tests {
             turns: vec![TurnEnd {
                 at: at(10, 2),
                 how: Ended::Stopped,
+                why: None,
             }],
         };
         let mut row = shown(3, chat);
@@ -1261,6 +1328,7 @@ mod tests {
         );
 
         row.asking = false;
+
         row.working = true;
         assert_eq!(story_of(&kept, &row)["ended"], Value::Null);
 

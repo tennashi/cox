@@ -13,7 +13,11 @@
 // as a badge, its plan as a bar, how far it got, what it does now, in the
 // color of how it stands, when it last moved, where it is in the home, and,
 // when it waits for the human, a button that shows it, to answer or reply
-// there; under it, stepped in, the subagents its agent opened, a line
+// there. A chat whose turn was cut off, as by a usage limit, a failure, or
+// its agent or Cox going as it ran, waits for the human too, with why, in
+// red, and a button that has it go on, as the line the human would send,
+// from `cox://api/activity/resume/<chat>`, and its card is marked red. Under
+// it, stepped in, the subagents its agent opened, a line
 // each, those that came from a step of its plan under the step, and
 // theirs under them, as deep as they go, which a click on how many there
 // are folds away, as those three deep are at first, but for those over
@@ -51,6 +55,9 @@
 // merged or closed show a while, folded away, as a chat done does.
 
 const API = "cox://api/activity";
+/// What the button that has a chat cut off go on sends it, as Cox's
+/// `activity::RESUME` says.
+const RESUME = "Go on from where you were cut off.";
 const EVERY = 2000;
 
 const app = document.getElementById("app");
@@ -148,10 +155,11 @@ function long(from, to) {
 const hint = (chat) => (chat.hint ? ` <span class="hint">${esc(chat.hint)}</span>` : "");
 
 /// How a chat stands, in the words the page uses for it everywhere, and
-/// the class that colors it: the human's turn, at work, waiting on CI,
-/// stopped with its plan not done, or done.
+/// the class that colors it: at work, cut off, the human's turn, waiting
+/// on CI, stopped with its plan not done, or done.
 function standing(chat) {
   if (chat.working) return { as: "work", says: "at work" };
+  if (chat.cut_off) return { as: "cut", says: "cut off" };
   const waits = chat.waits ?? chat.why;
   if (waits === "asks you" || waits === "finished a turn") return { as: "yours", says: waits };
   if (waits === "waits on CI") return { as: "ci", says: waits };
@@ -194,13 +202,14 @@ function chats() {
 
 /// The order chats stand in: the human's turn first, done or stopped
 /// last.
-const ORDER = { yours: 0, work: 1, subs: 2, ci: 3, stopped: 4, done: 5 };
+const ORDER = { cut: 0, yours: 0, work: 1, subs: 2, ci: 3, stopped: 4, done: 5 };
 
 /// How many of the subagents under `chat`, at any depth, are at work.
 const busyUnder = (chat) => chat.below.filter((sub) => sub.working).length;
 
 /// What `chat` does now, in a line.
 function now(chat) {
+  if (chat.stands.as === "cut") return `Cut off: ${chat.cut_off.says}`;
   if (chat.stands.as === "yours" && chat.asks) return chat.asks;
   if (chat.running) return `$ ${chat.running.called}`;
   if (chat.stands.as === "work" && chat.under) return chat.under.text;
@@ -239,6 +248,8 @@ function ago(at) {
 /// it: what asks the human first, as the group it leads its card to.
 function badge(chat) {
   switch (chat.stands.as) {
+    case "cut":
+      return { as: "bad", says: "Cut off", group: "yours" };
     case "yours":
       if (chat.asks || chat.waits === "asks you" || chat.why === "asks you") return { as: "ask", says: "Asking", group: "yours" };
       if (chat.waits === "finished a turn" || chat.why === "finished a turn") return { as: "ask", says: "Your turn", group: "yours" };
@@ -258,8 +269,12 @@ function badge(chat) {
 
 /// What `chat` asks of the human, as a button that shows the chat for
 /// them to do it there: to answer what it asks, or to reply once its
-/// turn ended.
+/// turn ended; or, once its turn was cut off, one that has it go on.
 function act(chat) {
+  if (chat.stands.as === "cut") {
+    if (!chat.resume) return "";
+    return `<button class="btn bad" data-resume="${esc(JSON.stringify({ key: chat.key }))}" title="sends the chat “${esc(RESUME)}”, as you would">Resume</button>`;
+  }
   if (chat.stands.as !== "yours") return "";
   const says = badge(chat).says === "Asking" ? "Answer" : "Reply";
   return `<a class="btn" href="cox://chat/${chat.key}" title="shows the chat, to ${says.toLowerCase()} there">${says}</a>`;
@@ -270,14 +285,14 @@ function act(chat) {
 function planBar(chat) {
   const plan = chat.plan ?? [];
   if (!plan.length) return "";
-  const under = chat.stands.as === "yours" ? "a" : "r";
+  const under = { yours: "a", cut: "f" }[chat.stands.as] ?? "r";
   const as = { completed: "p", in_progress: under };
   return `<span class="ci">${blocks(plan.map((step) => [as[step.state] ?? "", step.text]))}<span>${counted(chat.progress)}</span></span>`;
 }
 
 /// What `chat` does now, in the color of how it stands.
 function nowLine(chat) {
-  const as = { ask: "ask", work: "run", quiet: "quiet" }[badge(chat).as];
+  const as = { ask: "ask", bad: "bad", work: "run", quiet: "quiet" }[badge(chat).as];
   return `<span class="chip ${as} now" title="${esc(now(chat))}">${esc(now(chat))}</span>`;
 }
 
@@ -293,7 +308,7 @@ function row(chat, indent) {
   const open = opened.has(chat.key);
   const hidden = folded(chat);
   const busy = busyUnder(chat);
-  const yours = chat.below.filter((sub) => sub.stands.as === "yours").length;
+  const yours = chat.below.filter((sub) => badge(sub).group === "yours").length;
   const title = `${hidden ? "shows" : "folds away"} ${many(chat.below.length, "subagent", "subagents")} under it`;
   const fold = chat.subs.length
     ? `<button class="fold" data-fold="${chat.key}" title="${title}">${hidden ? "▸" : "▾"}</button>`
@@ -357,8 +372,10 @@ function treeGroup(chat) {
   return groups.includes("work") ? "work" : "rest";
 }
 
-/// The card of the chat at the top, `chat`, with its subagents.
-const card = (chat) => `<div class="card tree ${treeGroup(chat)}">${lines(chat, 0)}</div>`;
+/// The card of the chat at the top, `chat`, with its subagents, marked
+/// red when a chat of it was cut off.
+const card = (chat) =>
+  `<div class="card tree ${treeGroup(chat)}${tree(chat).some((one) => one.stands.as === "cut") ? " failed" : ""}">${lines(chat, 0)}</div>`;
 
 /// The folds the human opened, of the chats stopped or done and the pull
 /// requests merged or closed, by their name.
@@ -407,6 +424,7 @@ const TURN_ENDS = {
   too_many_requests: "Ended its turn: too many requests",
   refused: "Refused to go on",
   failed: "The turn failed",
+  limited: "Stopped at a usage limit",
   closed: "The agent closed",
   other: "Ended its turn",
 };
@@ -543,7 +561,7 @@ function says(event, chat) {
     case "check":
       return `Check <b>${esc(event.text)}</b> ${esc(CHECKED[event.state] ?? event.state)}${event.on ? ` on ${esc(event.on)}` : ""}${printed(event, chat)}`;
     case "turn_end":
-      return esc(TURN_ENDS[event.text] ?? "Ended its turn");
+      return esc(event.cut != null ? `Cut off: ${event.cut}` : (TURN_ENDS[event.text] ?? "Ended its turn"));
     default:
       return esc(event.text);
   }
@@ -568,6 +586,7 @@ function revised(event) {
 /// check that failed or could not run.
 const failed = (event) =>
   ((event.kind === "ci" || event.kind === "turn_end") && event.text === "failed") ||
+  (event.kind === "turn_end" && event.cut != null) ||
   (event.kind === "check" && (event.state === "failed" || event.state === "broken"));
 
 /// A line of the day `time` is of, before the first line of the story
@@ -609,7 +628,7 @@ function ending(chat, story, days) {
     case "stopped":
       return line("stopped", "■", "Stopped", `after ${long(since, ended.at)} · ${ago}`, ended.clock ?? ended.when);
     default:
-      return line("failed", "×", esc(TURN_ENDS[ended.how] ?? "Ended"), ago, ended.clock ?? ended.when);
+      return line("failed", "×", esc(ended.cut != null ? `Cut off: ${ended.cut}` : (TURN_ENDS[ended.how] ?? "Ended")), ago, ended.clock ?? ended.when);
   }
 }
 
@@ -735,7 +754,7 @@ function numbers(all) {
   const picks = summaries
     .map((summary) => `<button class="pick${summary === shown ? " picked" : ""}" data-window="${esc(summary.window)}">${esc(summary.window)}</button>`)
     .join("");
-  const yours = all.filter((chat) => chat.stands.as === "yours").length;
+  const yours = all.filter((chat) => badge(chat).group === "yours").length;
   // Every plan on the page, the subagents' at any depth too.
   const planned = all.filter((chat) => (chat.plan ?? []).length);
   const steps = planned.flatMap((chat) => chat.plan);
@@ -997,6 +1016,13 @@ app.addEventListener("click", (event) => {
     const chat = chats().find((chat) => chat.key === Number(fold.dataset.fold));
     if (chat) folds.set(chat.key, !folded(chat));
     draw();
+    return;
+  }
+  const resuming = event.target.closest("[data-resume]");
+  if (resuming) {
+    resuming.disabled = true;
+    resuming.textContent = "Asked";
+    load(`${API}/resume/${encodeURIComponent(resuming.dataset.resume)}`);
     return;
   }
   const fixing = event.target.closest("[data-fix]");

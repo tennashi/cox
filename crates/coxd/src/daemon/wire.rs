@@ -8,7 +8,7 @@ use std::path::PathBuf;
 
 use cox_core::entry::{Attachment, OnStep};
 use cox_core::goal::Goal;
-use cox_core::store::{ChatId, Named, ProjectId, Resolved};
+use cox_core::store::{ChatId, Named, ProjectId, Resolved, TurnEnd};
 use cox_core::tabs::{KeptTabs, Lines};
 use serde::{Deserialize, Serialize};
 
@@ -113,6 +113,11 @@ pub struct ChatRow {
     /// last entry of its conversation was kept, or it was opened.
     #[serde(default)]
     pub active: i64,
+    /// How its last turn was cut off, as one that failed, hit a limit, or
+    /// whose agent, or coxd, went as it ran, while it waits to go on: not
+    /// at work again, nor marked done.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cut_off: Option<TurnEnd>,
 }
 
 /// A line the human wrote on a step of a chat's plan, which waits for the
@@ -841,12 +846,14 @@ mod tests {
             steers: false,
             on_steps: Vec::new(),
             active: 0,
+            cut_off: None,
         };
         let line = serde_json::to_string(&row).unwrap();
         assert!(!line.contains("background"), "{line}");
         assert!(!line.contains("pulls"), "{line}");
         assert!(!line.contains("resolved"), "{line}");
         assert!(!line.contains("on_steps"), "{line}");
+        assert!(!line.contains("cut_off"), "{line}");
         assert_eq!(serde_json::from_str::<ChatRow>(&line).unwrap(), row);
     }
 

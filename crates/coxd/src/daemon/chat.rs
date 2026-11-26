@@ -222,7 +222,7 @@ impl ByItself {
             AgentEvent::Task(task) => {
                 self.tasks.retain(|(id, _)| *id != task.id);
             }
-            AgentEvent::TurnEnded(_) | AgentEvent::TurnFailed(_) => {
+            AgentEvent::TurnEnded(_) | AgentEvent::TurnFailed(_) | AgentEvent::TurnLimited(_) => {
                 self.tools.clear();
                 self.went_on = None;
                 return;
@@ -1889,7 +1889,7 @@ impl Chat {
         let baseline_changed = self.conversation.take_baseline_changed();
         let turns_ended = self.conversation.take_turns_ended();
         if let Some(record) = &self.record {
-            for &end in &turns_ended {
+            for end in &turns_ended {
                 if let Err(error) = record.turn_ended(end) {
                     tracing::error!("how the chat's turn ended is not kept: {error:#}");
                 }

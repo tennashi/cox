@@ -22,7 +22,7 @@ use crate::settings::Setting;
 use crate::tabs::KeptTabs;
 
 /// The version of the tables below, as `SQLite`'s `user_version` holds it.
-const VERSION: i64 = 28;
+const VERSION: i64 = 29;
 
 const TABLES: &str = "
 CREATE TABLE projects (
@@ -135,7 +135,9 @@ CREATE TABLE turns (
     -- When it ended, in milliseconds since the epoch.
     at INTEGER NOT NULL,
     -- How it ended, as `Ended` names it, such as `done` or `stopped`.
-    how TEXT NOT NULL
+    how TEXT NOT NULL,
+    -- What the agent said of why, for a turn that failed or was cut off.
+    why TEXT
 );
 CREATE INDEX turns_of ON turns (chat, at);
 -- The plan each chat's agent sent last, as its entry keeps it, kept
@@ -349,6 +351,7 @@ const UPGRADES: &[&str] = &[
          ended INTEGER,
          PRIMARY KEY (repo, number)
      ) WITHOUT ROWID;",
+    "ALTER TABLE turns ADD COLUMN why TEXT;",
 ];
 
 /// What keeps an entry of a chat, in place of what was kept there.
@@ -526,6 +529,8 @@ pub enum Ended {
     Refused,
     /// It failed, as when the agent's side erred.
     Failed,
+    /// The agent's account reached a usage or rate limit.
+    Limited,
     /// The agent closed while it ran.
     Closed,
     /// For a reason Cox does not know.
@@ -543,6 +548,7 @@ impl Ended {
             Self::TooManyRequests => "too_many_requests",
             Self::Refused => "refused",
             Self::Failed => "failed",
+            Self::Limited => "limited",
             Self::Closed => "closed",
             Self::Other => "other",
         }
@@ -558,19 +564,49 @@ impl Ended {
             "too_many_requests" => Self::TooManyRequests,
             "refused" => Self::Refused,
             "failed" => Self::Failed,
+            "limited" => Self::Limited,
             "closed" => Self::Closed,
             _ => Self::Other,
         }
     }
+
+    /// Whether a turn that ended so was cut off before the agent ended
+    /// it: not one it ended, having done what it was asked or refusing to
+    /// go on, nor one the human, or Cox, stopped, but one that failed, a
+    /// limit ended, or its agent closed under.
+    #[must_use]
+    pub const fn cuts_off(self) -> bool {
+        !matches!(self, Self::Done | Self::Stopped | Self::Refused)
+    }
 }
 
-/// A turn of a chat's agent that ended: when, and how.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+/// A turn of a chat's agent that ended: when, how, and why, as the agent
+/// said, if it said.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct TurnEnd {
     /// When, in milliseconds since the epoch.
     pub at: i64,
     pub how: Ended,
+    /// What the agent said of why, for a turn that failed or was cut off.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub why: Option<String>,
 }
+
+impl TurnEnd {
+    /// A turn that ended now, as `how` says, for `why`.
+    #[must_use]
+    pub fn now(how: Ended, why: Option<String>) -> Self {
+        Self {
+            at: now(),
+            how,
+            why,
+        }
+    }
+}
+
+/// Why a turn was cut off that no end was kept of: coxd went while it
+/// ran.
+pub const COXD_WENT: &str = "Cox stopped while the turn ran";
 
 /// The plan a chat's agent sent last, as [`Store::plans`] reads it.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1870,12 +1906,78 @@ impl Store {
     /// # Errors
     ///
     /// When the database cannot be written.
-    pub fn keep_turn_end(&self, chat: ChatId, end: TurnEnd) -> anyhow::Result<()> {
+    pub fn keep_turn_end(&self, chat: ChatId, end: &TurnEnd) -> anyhow::Result<()> {
         self.connection.execute(
-            "INSERT INTO turns (chat, at, how) VALUES (?1, ?2, ?3)",
-            params![chat.0, end.at, end.how.word()],
+            "INSERT INTO turns (chat, at, how, why) VALUES (?1, ?2, ?3, ?4)",
+            params![chat.0, end.at, end.how.word(), end.why],
         )?;
         Ok(())
+    }
+
+    /// The chats not marked done whose last turn was cut off (see
+    /// [`Ended::cuts_off`]), each with how its turn ended; and those
+    /// whose agent was sent a line, by the human or by Cox, after their
+    /// last turn ended, which coxd went before the turn it started
+    /// ended, as at the last entry kept, for [`COXD_WENT`]. A chat with no
+    /// turn's end kept, as one an older Cox kept, is not cut off.
+    ///
+    /// # Errors
+    ///
+    /// When the database cannot be read.
+    pub fn cut_off(&self) -> anyhow::Result<Vec<(ChatId, TurnEnd)>> {
+        let mut last = self.connection.prepare(
+            "SELECT turns.chat, turns.at, turns.how, turns.why FROM turns
+             JOIN chats ON chats.id = turns.chat
+             WHERE chats.resolved_at IS NULL AND turns.rowid = (
+                 SELECT rowid FROM turns AS later WHERE later.chat = turns.chat
+                 ORDER BY at DESC, rowid DESC LIMIT 1)
+             ORDER BY turns.chat",
+        )?;
+        let ends = last
+            .query_map([], |row| {
+                Ok((
+                    ChatId(row.get(0)?),
+                    TurnEnd {
+                        at: row.get(1)?,
+                        how: Ended::from_word(&row.get::<_, String>(2)?),
+                        why: row.get(3)?,
+                    },
+                ))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        // The entries since the turn ended, the last first, which are few.
+        let mut since = self.connection.prepare_cached(
+            r#"SELECT at, entry LIKE '{"human":%' OR entry LIKE '{"cox":%' FROM entries
+               WHERE chat = ?1 ORDER BY number DESC"#,
+        )?;
+        let mut cut = Vec::new();
+        for (chat, end) in ends {
+            if end.how.cuts_off() {
+                cut.push((chat, end));
+                continue;
+            }
+            let mut rows = since.query([chat.0])?;
+            let mut last_at = None;
+            while let Some(row) = rows.next()? {
+                let at: i64 = row.get(0)?;
+                if at <= end.at {
+                    break;
+                }
+                last_at.get_or_insert(at);
+                if row.get::<_, bool>(1)? {
+                    cut.push((
+                        chat,
+                        TurnEnd {
+                            at: last_at.unwrap_or(at),
+                            how: Ended::Closed,
+                            why: Some(COXD_WENT.to_owned()),
+                        },
+                    ));
+                    break;
+                }
+            }
+        }
+        Ok(cut)
     }
 
     /// How each turn of `chat`'s agent ended, the first first, of those
@@ -1887,11 +1989,12 @@ impl Store {
     pub fn turns(&self, chat: ChatId) -> anyhow::Result<Vec<TurnEnd>> {
         let mut statement = self
             .connection
-            .prepare_cached("SELECT at, how FROM turns WHERE chat = ?1 ORDER BY at, rowid")?;
+            .prepare_cached("SELECT at, how, why FROM turns WHERE chat = ?1 ORDER BY at, rowid")?;
         let ends = statement.query_map([chat.0], |row| {
             Ok(TurnEnd {
                 at: row.get(0)?,
                 how: Ended::from_word(&row.get::<_, String>(1)?),
+                why: row.get(2)?,
             })
         })?;
         Ok(ends.collect::<Result<_, _>>()?)
@@ -2352,7 +2455,7 @@ impl Record {
     /// # Errors
     ///
     /// When the database cannot be written.
-    pub fn turn_ended(&self, end: TurnEnd) -> anyhow::Result<()> {
+    pub fn turn_ended(&self, end: &TurnEnd) -> anyhow::Result<()> {
         self.store.keep_turn_end(self.chat, end)
     }
 
@@ -2606,19 +2709,22 @@ mod tests {
         let stopped = TurnEnd {
             at: 20,
             how: Ended::Stopped,
+            why: None,
         };
         let done = TurnEnd {
             at: 10,
             how: Ended::Done,
+            why: None,
         };
-        store.keep_turn_end(chat, stopped).unwrap();
-        store.keep_turn_end(chat, done).unwrap();
+        store.keep_turn_end(chat, &stopped).unwrap();
+        store.keep_turn_end(chat, &done).unwrap();
         store
             .keep_turn_end(
                 other,
-                TurnEnd {
+                &TurnEnd {
                     at: 15,
                     how: Ended::Failed,
+                    why: Some("lost".to_owned()),
                 },
             )
             .unwrap();
@@ -2629,6 +2735,87 @@ mod tests {
         store.delete_project(app).unwrap();
         assert_eq!(store.turns(chat).unwrap(), []);
         assert_eq!(store.turns(other).unwrap().len(), 1);
+        assert_eq!(store.turns(other).unwrap()[0].why.as_deref(), Some("lost"));
+    }
+
+    #[test]
+    fn a_chat_is_cut_off_by_its_last_turn_or_by_coxd_going_after_a_line() {
+        let store = Store::in_memory().unwrap();
+        let end = |at, how| TurnEnd { at, how, why: None };
+        let chat = |name| store.add_chat(None, name).unwrap();
+        let later = now() + 60_000;
+
+        // Its last turn hit a limit, though one before it was done.
+        let limited = chat("limited");
+        store.keep_turn_end(limited, &end(10, Ended::Done)).unwrap();
+        let hit = TurnEnd {
+            at: 20,
+            how: Ended::Limited,
+            why: Some("You've hit your limit".to_owned()),
+        };
+        store.keep_turn_end(limited, &hit).unwrap();
+        // Failed once, then done: not cut off now.
+        let again = chat("again");
+        store.keep_turn_end(again, &end(10, Ended::Failed)).unwrap();
+        store
+            .keep_turn_end(again, &end(later, Ended::Done))
+            .unwrap();
+        // Stopped by the human, or refused: not cut off.
+        let stopped = chat("stopped");
+        store
+            .keep_turn_end(stopped, &end(10, Ended::Stopped))
+            .unwrap();
+        let refused = chat("refused");
+        store
+            .keep_turn_end(refused, &end(10, Ended::Refused))
+            .unwrap();
+        // Sent a line after its last turn ended, with no end after it:
+        // coxd went as it ran.
+        let went = chat("went");
+        store.keep_turn_end(went, &end(10, Ended::Done)).unwrap();
+        store
+            .keep_entry(went, 0, &Entry::Human("Go on.".to_owned()))
+            .unwrap();
+        store
+            .keep_entry(went, 1, &Entry::Reply("Half".to_owned()))
+            .unwrap();
+        // Done after its line, or only replying since: not cut off.
+        let replied = chat("replied");
+        store
+            .keep_entry(replied, 0, &Entry::Human("Hi.".to_owned()))
+            .unwrap();
+        store
+            .keep_turn_end(replied, &end(later, Ended::Done))
+            .unwrap();
+        // Cut off, but marked done.
+        let resolved = chat("resolved");
+        store
+            .keep_turn_end(resolved, &end(10, Ended::Failed))
+            .unwrap();
+        store
+            .resolve_chat(
+                resolved,
+                Some(Resolved {
+                    at: 30,
+                    by: ResolvedBy::Human,
+                }),
+            )
+            .unwrap();
+        // Never a turn kept, as of an older Cox.
+        let old = chat("old");
+        store
+            .keep_entry(old, 0, &Entry::Human("Hi.".to_owned()))
+            .unwrap();
+
+        let cut = store.cut_off().unwrap();
+        assert_eq!(cut.len(), 2, "{cut:?}");
+        assert_eq!(cut[0], (limited, hit));
+        assert_eq!(cut[1].0, went);
+        assert_eq!(cut[1].1.how, Ended::Closed);
+        assert_eq!(cut[1].1.why.as_deref(), Some(COXD_WENT));
+        assert!(cut[1].1.at > 10);
+        assert!(Ended::Limited.cuts_off() && Ended::Closed.cuts_off());
+        assert!(!Ended::Done.cuts_off() && !Ended::Stopped.cuts_off());
     }
 
     #[test]

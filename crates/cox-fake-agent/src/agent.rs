@@ -40,6 +40,8 @@ enum Went {
     On,
     Cancelled,
     Failed(String),
+    /// The account reached a usage limit, as the error says.
+    Limited(String),
     /// Cox went, and the agent goes with it.
     Gone,
 }
@@ -304,6 +306,15 @@ impl<W: Write> Agent<W> {
             (Went::On, stop) => self.answer(id, &json!({ "stopReason": stop })),
             (Went::Cancelled, _) => self.answer(id, &json!({ "stopReason": "cancelled" })),
             (Went::Failed(error), _) => self.fail(id, INTERNAL_ERROR, &error),
+            (Went::Limited(error), _) => self.send(&json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "error": {
+                    "code": INTERNAL_ERROR,
+                    "message": format!("Internal error: {error}"),
+                    "data": { "errorKind": "rate_limit" },
+                },
+            })),
             (Went::Gone, _) => return false,
         }
         for turn in taken {
@@ -405,6 +416,7 @@ impl<W: Write> Agent<W> {
             Step::WaitFor(Event::Steer) => return self.wait_for_steer(),
             Step::Stderr(line) => eprintln!("{}", text(line)),
             Step::Fail(error) => return Went::Failed(text(error)),
+            Step::Limit(error) => return Went::Limited(text(error)),
         }
         Went::On
     }

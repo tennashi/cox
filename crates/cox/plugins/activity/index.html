@@ -239,6 +239,12 @@
         border-left-color: var(--failed-mark);
         background: linear-gradient(90deg, var(--failed-ground), var(--pane) 40%);
       }
+      /* A chat of it was cut off: red, as a pull request whose CI
+         failed is. */
+      .card.tree.failed {
+        border-left-color: var(--failed-mark);
+        background: linear-gradient(90deg, var(--failed-ground), var(--pane) 40%);
+      }
       .card.running,
       .card.work {
         border-left-color: var(--link);
@@ -440,6 +446,11 @@
         background: var(--asking-tint);
         border-color: var(--asking-tint-edge);
       }
+      .badge.bad {
+        color: var(--failed);
+        background: var(--failed-tint);
+        border-color: var(--failed-tint-edge);
+      }
       .badge.work {
         color: var(--link);
         border-color: var(--accent-tint-edge);
@@ -468,6 +479,9 @@
       }
       .chip.run {
         color: var(--link);
+      }
+      .chip.bad {
+        color: var(--failed);
       }
       .chip.quiet {
         color: var(--faint);
@@ -597,6 +611,14 @@
       }
       .btn:hover {
         background: var(--asking-tint);
+      }
+      .btn.bad {
+        color: var(--failed);
+        background: var(--failed-ground);
+        border-color: var(--failed-tint-edge);
+      }
+      .btn.bad:hover {
+        background: var(--failed-tint);
       }
       .btn:disabled {
         opacity: 0.5;

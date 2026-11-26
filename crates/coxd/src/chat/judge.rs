@@ -316,7 +316,7 @@ impl Judge {
                         reply.clear();
                         Err(format!("its agent's turn ended early: {reason:?}"))
                     }
-                    AgentEvent::TurnFailed(error) => {
+                    AgentEvent::TurnFailed(error) | AgentEvent::TurnLimited(error) => {
                         reply.clear();
                         Err(format!("its agent's turn failed: {error}"))
                     }

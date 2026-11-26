@@ -6,8 +6,10 @@
 //! are at work, and how many steps got done over each of [`WINDOWS`], as
 //! the human picks one (see [`summaries`]). Then the chats,
 //! one line each: those that ask the human something, with what they ask,
-//! or whose turn ended while they were not looking, or CI ended on a pull
-//! request their agent opened (see [`waiting_in`]); and those whose
+//! or whose turn was cut off, as by a usage limit, with why, which a
+//! button has go on (see [`resume`]), or whose turn ended while they were
+//! not looking, or CI ended on a pull request their agent opened (see
+//! [`waiting_in`]); and those whose
 //! agents take a turn, or work in the background once it ended, or wait
 //! on CI, or whose plan, as the agent last sent it over ACP, is not done,
 //! or was done, or marked done, lately (see [`planned`]). Each tells how
@@ -50,7 +52,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use cox_core::entry::{OnStep, Step, StepState, StepsDone, alike};
-use cox_core::store::{ChatId, KeptPlan, Progress, Said, Store};
+use cox_core::store::{COXD_WENT, ChatId, Ended, KeptPlan, Progress, Said, Store, TurnEnd};
 use jiff::tz::TimeZone;
 use serde_json::{Value, json};
 
@@ -128,13 +130,32 @@ pub struct Chat {
     pub on_steps: Vec<OnStepLine>,
     /// When it last moved, in milliseconds since the epoch.
     pub active: i64,
+    /// How its last turn was cut off, while it waits to go on (see
+    /// [`Ended::cuts_off`]).
+    pub cut_off: Option<TurnEnd>,
 }
 
 impl Chat {
     /// Whether it waits for the human, as the bell counts it.
     fn waits(&self) -> bool {
         !self.resolved
-            && (self.asking || (!self.archived && (self.unread || !self.ci_ended().is_empty())))
+            && (self.asking
+                || (!self.archived
+                    && (self.unread || self.cut().is_some() || !self.ci_ended().is_empty())))
+    }
+
+    /// How its last turn was cut off, while it is not at work again, nor
+    /// marked done.
+    fn cut(&self) -> Option<&TurnEnd> {
+        self.cut_off
+            .as_ref()
+            .filter(|_| !self.working && !self.resolved)
+    }
+
+    /// Whether the page may have it go on from where its turn was cut off:
+    /// cut off, and not asking the human anything.
+    fn resumes(&self) -> bool {
+        self.cut().is_some() && !self.asking
     }
 
     /// Whether CI runs on a pull request its agent opened, which it waits
@@ -551,15 +572,15 @@ fn thread_of(open: &Open, said: &[Said], zone: &TimeZone) -> Value {
 }
 
 /// A line the human wrote on a step of a chat's plan, or asked a chat to
-/// fix its CI with, from the page, for the window to send the chat (see
-/// [`listen`]).
+/// fix its CI, or to go on from where its turn was cut off, with, from the
+/// page, for the window to send the chat (see [`listen`]).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Say {
     /// The chat, by the number the window goes by for it.
     pub key: u64,
     pub text: String,
     /// The step it is written on, if it is: a line that has a chat fix
-    /// its CI is on none.
+    /// its CI, or go on, is on none.
     pub step: Option<OnStep>,
 }
 
@@ -675,6 +696,84 @@ fn fixes(told: &Told, asked: &Fix) -> Option<Say> {
         text: pull.fix_line(),
         step: None,
     })
+}
+
+/// How `chat`'s last turn was cut off, as JSON, while it waits to go on:
+/// how it ended, as coxd keeps it, when, and what the page says of it,
+/// after "Cut off: " (see [`cut_off_says`]). Null when it was not.
+fn cut_off_of(chat: &Chat) -> Value {
+    chat.cut().map_or(Value::Null, |end| {
+        json!({
+            "how": end.how.word(),
+            "at": end.at,
+            "says": cut_off_says(end.how, end.why.as_deref()),
+        })
+    })
+}
+
+/// What a turn cut off as `how` says, for `why`, as its agent said it,
+/// if it did, is told as, after "Cut off: ": what the agent said of a
+/// limit, as when it resets, or why it failed, as it said.
+pub(crate) fn cut_off_says(how: Ended, why: Option<&str>) -> String {
+    let why = why.map(str::trim).filter(|why| !why.is_empty());
+    match (how, why) {
+        (Ended::Limited, Some(why)) => why.to_owned(),
+        (Ended::Limited, None) => "usage limit reached".to_owned(),
+        (Ended::Failed, Some(why)) => format!("the turn failed: {why}"),
+        (Ended::Failed, None) => "the turn failed".to_owned(),
+        (Ended::Closed, Some(COXD_WENT)) => COXD_WENT.to_owned(),
+        (Ended::Closed, Some(why)) => format!("the agent closed: {why}"),
+        (Ended::Closed, None) => "the agent closed".to_owned(),
+        (Ended::TooLong, _) => "the agent's reply grew too long".to_owned(),
+        (Ended::TooManyRequests, _) => {
+            "the agent asked the model as often as a turn allows".to_owned()
+        }
+        (Ended::Done | Ended::Stopped | Ended::Refused | Ended::Other, _) => {
+            "the turn ended, for a reason Cox does not know".to_owned()
+        }
+    }
+}
+
+/// The line the page sends a chat whose turn was cut off, for it to go
+/// on, as the human would.
+pub const RESUME: &str = "Go on from where you were cut off.";
+
+/// What the page asks to have go on from where its turn was cut off: the
+/// chat, by the key the window goes by for it.
+#[derive(Clone, Debug, serde::Deserialize)]
+pub struct Resume {
+    key: u64,
+}
+
+/// Has the window send the chat `asked` names, as the JSON of [`Resume`]
+/// the page sent says, [`RESUME`], as the human would: a closed chat's
+/// agent starts again on its session for it. Nothing is sent unless the
+/// chat's turn was cut off, and it is not at work, nor asks the human
+/// anything.
+pub fn resume(asked: &str) {
+    let Ok(asked) = serde_json::from_str::<Resume>(asked) else {
+        return;
+    };
+    if let Some(say) = resumes(&now(), &asked)
+        && let Ok(listening) = SAYS.lock()
+        && let Some(listening) = listening.as_ref()
+    {
+        let _ = listening.send(say);
+    }
+}
+
+/// The line that has the chat `asked` names go on, of `told`, if its turn
+/// was cut off and it may (see [`Chat::resumes`]).
+fn resumes(told: &Told, asked: &Resume) -> Option<Say> {
+    told.chats
+        .iter()
+        .find(|chat| chat.key == asked.key)
+        .filter(|chat| chat.resumes())
+        .map(|chat| Say {
+            key: chat.key,
+            text: RESUME.to_owned(),
+            step: None,
+        })
 }
 
 /// What moved in the chats coxd keeps since `since`, in milliseconds
@@ -926,12 +1025,16 @@ fn waiting_in(told: &Told, root: &Path, now: &dyn Fn(u64) -> Option<commands::No
                 "name": chat.name,
                 "why": if chat.asking {
                     "asks you".to_owned()
+                } else if chat.cut().is_some() {
+                    "cut off".to_owned()
                 } else if chat.unread {
                     "finished a turn".to_owned()
                 } else {
                     chat.ci_ended().join(", ")
                 },
                 "asks": chat.asking.then(|| now(chat.key).and_then(|now| now.asks)).flatten(),
+                "cut_off": cut_off_of(chat),
+                "resume": chat.resumes(),
                 "goal": chat.goal,
                 "sketch": chat.cwd != chat.project,
                 "where": where_of(told, &chat.project),
@@ -964,7 +1067,7 @@ fn tree_of<'a>(told: &'a Told, root: &Path, plans: &Plans<'_>) -> Vec<&'a Chat> 
             || chat.waits_on_ci()
             || (chat.parent.is_some()
                 && !chat.resolved
-                && (chat.asking || (!chat.archived && chat.unread)))
+                && (chat.asking || (!chat.archived && (chat.unread || chat.cut().is_some()))))
     };
     let mut tree: Vec<&Chat> = told
         .chats
@@ -1080,6 +1183,8 @@ fn row_of(
         "depth": depth,
         "working": chat.working,
         "waits": waits_of(told, chat, depth),
+        "cut_off": cut_off_of(chat),
+        "resume": chat.resumes(),
         "reported": chat.reported,
         "sketch": chat.cwd != chat.project,
         "where": where_of(told, &chat.project),
@@ -1122,6 +1227,8 @@ fn waits_of(told: &Told, chat: &Chat, depth: usize) -> Option<&'static str> {
         None
     } else if chat.asking {
         Some("asks you")
+    } else if chat.cut().is_some() {
+        Some("cut off")
     } else if chat.unread {
         Some("finished a turn")
     } else if chat.waits_on_ci() {
@@ -1433,6 +1540,7 @@ mod tests {
             steers: false,
             on_steps: Vec::new(),
             active: 0,
+            cut_off: None,
         }
     }
 
@@ -2982,6 +3090,111 @@ mod tests {
         assert_eq!(fixes(&told, &fix(1, 7)), None);
         assert_eq!(fixes(&told, &fix(1, 8)), None);
         assert_eq!(fixes(&told, &fix(1, 9)), None);
+    }
+
+    #[test]
+    fn a_chat_cut_off_waits_for_the_human_with_why_and_goes_on_when_asked() {
+        let root = TempDir::new();
+        let limit = |why: &str| TurnEnd {
+            at: 5,
+            how: Ended::Limited,
+            why: Some(why.to_owned()),
+        };
+        // Cut off, and unread too: cut off says more.
+        let mut cut = chat(1, &root, &root, false, true);
+        cut.cut_off = Some(limit("You've hit your limit · resets 3pm"));
+        // A subagent cut off shows under its opener, at work.
+        let mut opener = chat(2, &root, &root, false, false);
+        opener.working = true;
+        let mut sub = chat(3, &root, &root, false, false);
+        sub.parent = Some(2);
+        sub.cut_off = Some(TurnEnd {
+            at: 6,
+            how: Ended::Closed,
+            why: Some(COXD_WENT.to_owned()),
+        });
+        // Cut off, but at work again, marked done, or archived: it does
+        // not wait.
+        let mut again = chat(4, &root, &root, false, false);
+        again.cut_off = Some(limit("limit"));
+        again.working = true;
+        let mut done = chat(5, &root, &root, false, false);
+        done.cut_off = Some(limit("limit"));
+        done.resolved = true;
+        let mut archived = chat(6, &root, &root, false, false);
+        archived.cut_off = Some(limit("limit"));
+        archived.archived = true;
+        // Cut off and asking: it waits, but goes on only once answered.
+        let mut asking = chat(7, &root, &root, true, false);
+        asking.cut_off = Some(limit("limit"));
+        let told = Told {
+            chats: vec![cut, opener, sub, again, done, archived, asking],
+            projects: vec![(root.to_path_buf(), "app".to_owned())],
+            home: root.join("home"),
+            ..Told::default()
+        };
+
+        let json = told_in(&told, &root);
+        let waiting: Vec<(u64, &str)> = json["waiting"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|chat| (chat["key"].as_u64().unwrap(), chat["why"].as_str().unwrap()))
+            .collect();
+        assert_eq!(waiting, [(1, "cut off"), (3, "cut off"), (7, "asks you")]);
+        assert_eq!(waiting_of(&told, &root), 3);
+        assert_eq!(
+            json["waiting"][0]["cut_off"],
+            json!({
+                "how": "limited",
+                "at": 5,
+                "says": "You've hit your limit · resets 3pm",
+            })
+        );
+        assert_eq!(json["waiting"][0]["resume"], true);
+        assert_eq!(json["waiting"][2]["resume"], false, "asking");
+        let sub = json["plans"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|chat| chat["key"] == 3)
+            .expect("the subagent cut off is listed under its opener");
+        assert_eq!(sub["waits"], "cut off");
+        assert_eq!(sub["cut_off"]["says"], COXD_WENT);
+        assert_eq!(sub["resume"], true);
+
+        // Asked to go on, the chat cut off is sent the line, and no other.
+        let resume = |key| resumes(&told, &Resume { key });
+        assert_eq!(
+            resume(1),
+            Some(Say {
+                key: 1,
+                text: RESUME.to_owned(),
+                step: None,
+            })
+        );
+        assert_eq!(resume(3).map(|say| say.key), Some(3));
+        for key in [2, 4, 5, 7, 99] {
+            assert_eq!(resume(key), None, "chat {key}");
+        }
+    }
+
+    #[test]
+    fn a_turn_cut_off_says_why_as_the_agent_said() {
+        let says = |how, why: Option<&str>| cut_off_says(how, why);
+        assert_eq!(says(Ended::Limited, None), "usage limit reached");
+        assert_eq!(says(Ended::Limited, Some(" resets 3pm ")), "resets 3pm");
+        assert_eq!(says(Ended::Failed, Some("lost")), "the turn failed: lost");
+        assert_eq!(says(Ended::Closed, None), "the agent closed");
+        assert_eq!(
+            says(Ended::Closed, Some("crashed")),
+            "the agent closed: crashed"
+        );
+        assert_eq!(says(Ended::Closed, Some(COXD_WENT)), COXD_WENT);
+        assert_eq!(
+            says(Ended::TooLong, None),
+            "the agent's reply grew too long"
+        );
     }
 
     #[test]

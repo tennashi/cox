@@ -123,6 +123,9 @@ pub enum Step {
     Stderr(String),
     /// Ends the turn with an error saying this.
     Fail(String),
+    /// Ends the turn with an error saying this, of the kind `rate_limit`,
+    /// as `claude-agent-acp` ends one the account's usage limit cut off.
+    Limit(String),
 }
 
 /// Something a [`Step::WaitFor`] waits for.

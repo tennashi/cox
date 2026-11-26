@@ -51,7 +51,7 @@ use std::time::Instant;
 
 use cox_core::entry::{Attachment, OnStep};
 use cox_core::goal::Goal;
-use cox_core::store::{ChatId, Named, ProjectId, Record, Resolved, ResolvedBy, Store};
+use cox_core::store::{ChatId, Named, ProjectId, Record, Resolved, ResolvedBy, Store, TurnEnd};
 use cox_core::tabs::{KeptTab, KeptTabs};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use tokio::sync::oneshot;
@@ -512,6 +512,9 @@ struct Slot {
     /// last started or ended, or, before any did in this run, when the
     /// last entry of its conversation was kept, or it was opened.
     active: i64,
+    /// How its last turn was cut off, as it was kept, while no turn ended
+    /// in this run (see [`Store::cut_off`]).
+    cut_off: Option<TurnEnd>,
     /// The chat, once it was read or opened in this run.
     chat: Option<Chat>,
 }
@@ -621,7 +624,25 @@ impl Slot {
                 .is_some_and(|chat| chat.conversation().steers()),
             on_steps: self.chat.as_ref().map_or_default(Chat::waiting_on_steps),
             active: self.active,
+            cut_off: self.cut_off(),
         }
+    }
+
+    /// How its last turn was cut off, while it is not at work again, nor
+    /// marked done: as it ended in this run, or else as it was kept.
+    fn cut_off(&self) -> Option<TurnEnd> {
+        if self.resolved.is_some() || !matches!(self.state, State::Idle | State::Closed) {
+            return None;
+        }
+        let last = match self
+            .chat
+            .as_ref()
+            .and_then(|chat| chat.conversation().last_turn())
+        {
+            Some(last) => last,
+            None => self.cut_off.as_ref()?,
+        };
+        last.how.cuts_off().then(|| last.clone())
     }
 }
 
@@ -876,6 +897,10 @@ impl Daemon {
             .store
             .projects()
             .and_then(|kept| Ok((kept, self.store.chats()?)));
+        let mut cut_off = self.store.cut_off().unwrap_or_else(|error| {
+            tracing::error!("the chats cut off cannot be read: {error:#}");
+            Vec::new()
+        });
         let (projects, chats) = match kept {
             Ok(kept) => kept,
             Err(error) => {
@@ -950,6 +975,10 @@ impl Daemon {
                 }),
                 resolved: chat.resolved,
                 active: chat.active,
+                cut_off: cut_off
+                    .iter()
+                    .position(|(id, _)| *id == chat.id)
+                    .map(|at| cut_off.swap_remove(at).1),
                 chat: None,
             };
             if chat.archived {
@@ -1547,6 +1576,7 @@ impl Daemon {
             spent: None,
             resolved: None,
             active: cox_core::store::now(),
+            cut_off: None,
             chat: Some(chat),
         });
         // Its triggers run on its opening once its agent has started.
@@ -6112,6 +6142,71 @@ mod tests {
                  resolve_chat still take their numbers"
             )
         );
+    }
+
+    #[test]
+    fn a_chat_whose_turn_hit_a_limit_is_cut_off_until_a_turn_ends_as_turns_do() {
+        on_daemon(async {
+            let mut chat = Opener::new(&[]).await;
+            let cut_off = |chat: &Opener| chat.daemon.slot(chat.key).unwrap().cut_off();
+            submit(&mut chat.daemon, chat.key);
+            chat.pump().await;
+            tells(
+                &chat.agent(None),
+                [AgentEvent::TurnLimited("You've hit your limit".to_owned())],
+            );
+            chat.pump().await;
+            let cut = cut_off(&chat).expect("cut off");
+            assert_eq!(cut.how, cox_core::store::Ended::Limited);
+            assert_eq!(cut.why.as_deref(), Some("You've hit your limit"));
+
+            // At work again, it is not cut off; nor once the turn is done.
+            submit(&mut chat.daemon, chat.key);
+            chat.pump().await;
+            assert_eq!(cut_off(&chat), None, "at work");
+            tells(
+                &chat.agent(None),
+                [AgentEvent::TurnEnded(cox_acp::StopReason::EndTurn)],
+            );
+            chat.pump().await;
+            assert_eq!(cut_off(&chat), None, "done");
+
+            // Stopped, it is stopped, not cut off.
+            submit(&mut chat.daemon, chat.key);
+            chat.pump().await;
+            tells(
+                &chat.agent(None),
+                [AgentEvent::TurnEnded(cox_acp::StopReason::Cancelled)],
+            );
+            chat.pump().await;
+            assert_eq!(cut_off(&chat), None, "stopped");
+        });
+    }
+
+    #[test]
+    fn a_chat_cut_off_before_coxd_started_is_cut_off_until_marked_done() {
+        let home = TempDir::new();
+        let (store, chat) = one_chat(&home);
+        store
+            .keep_turn_end(
+                chat,
+                &TurnEnd {
+                    at: 10,
+                    how: cox_core::store::Ended::Failed,
+                    why: Some("lost".to_owned()),
+                },
+            )
+            .unwrap();
+        let (mut daemon, _told) = daemon_of(&store, &home);
+        let key = key_of(&mut daemon, chat);
+        let cut = daemon.slot(key).unwrap().cut_off().expect("cut off");
+        assert_eq!(cut.why.as_deref(), Some("lost"));
+
+        daemon.act(ToDaemon::Resolve {
+            key,
+            resolved: true,
+        });
+        assert_eq!(daemon.slot(key).unwrap().cut_off(), None, "marked done");
     }
 
     #[test]
