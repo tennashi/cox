@@ -169,6 +169,10 @@ fn indexed(
     let out = work.join("index.scip");
     let config = work.join("config.json");
     if let Some(text) = &indexer.config {
+        let built = crate::storage::path(crate::storage::Kept::IndexBuilds)
+            .map_or_else(|| work.join("built"), |builds| builds.join(&indexer.name));
+        let built = serde_json::to_string(&built.to_string_lossy()).unwrap_or_default();
+        let text = text.replace("{built}", built.trim_matches('"'));
         std::fs::write(&config, text).map_err(|error| format!("{}: {error}", config.display()))?;
     }
     let name = if indexer.args.iter().any(|arg| arg.contains("{name}")) {

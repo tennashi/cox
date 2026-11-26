@@ -36,7 +36,9 @@ pub struct Indexer {
     /// `{config}` for the file of [`Indexer::config`], and `{name}` for
     /// the project's name (see [`project_name`]).
     pub args: Vec<String>,
-    /// What `{config}` holds, if it is used.
+    /// What `{config}` holds, if it is used, where `{built}` stands for a
+    /// folder of the indexer's own, kept from one index to the next, for
+    /// what it builds to read the code.
     pub config: Option<String>,
     /// The programs it runs besides its own, which have to be on `PATH`,
     /// each with how to get it.
@@ -99,7 +101,6 @@ pub enum Runs {
 /// indexes of a commit stay what they were, and rust-analyzer is the one
 /// the stage downloads for the code it shows.
 #[must_use]
-#[expect(clippy::too_many_lines, reason = "a table, a row for each language")]
 pub fn known() -> Vec<Indexer> {
     let strings = |items: &[&str]| items.iter().map(|&item| item.to_owned()).collect();
     let node = (
@@ -133,12 +134,11 @@ pub fn known() -> Vec<Indexer> {
                 "--config-path",
                 "{config}",
             ]),
-            // What runs only to build the code, build scripts and
-            // procedural macros, it skips: it reads the code as written.
-            config: Some(
-                r#"{"cargo":{"buildScripts":{"enable":false}},"procMacro":{"enable":false}}"#
-                    .to_owned(),
-            ),
+            // `scip` runs the build scripts and builds the procedural
+            // macros, whatever its config says, as what they make is in
+            // the code it reads: into a target folder kept across
+            // commits, so that each builds only what changed.
+            config: Some(r#"{"cargo":{"targetDir":"{built}"}}"#.to_owned()),
             needs: vec![(
                 "cargo".to_owned(),
                 "install Rust with rustup: https://rustup.rs".to_owned(),

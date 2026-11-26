@@ -122,11 +122,14 @@ pub enum Kept {
     Indexes,
     /// The indexers Cox installed for the maps (see [`crate::map`]).
     IndexerDownloads,
+    /// What the indexers build to read the code, kept from one commit to
+    /// the next (see [`crate::map`]).
+    IndexBuilds,
 }
 
 impl Kept {
     /// All that Cox keeps.
-    pub const ALL: [Self; 28] = [
+    pub const ALL: [Self; 29] = [
         Self::Settings,
         Self::Agents,
         Self::Servers,
@@ -155,6 +158,7 @@ impl Kept {
         Self::Playgrounds,
         Self::Indexes,
         Self::IndexerDownloads,
+        Self::IndexBuilds,
     ];
 
     /// Where it is kept, from the folder Cox keeps what lasts in.
@@ -189,6 +193,7 @@ impl Kept {
             Self::Playgrounds => "cache/playgrounds",
             Self::Indexes => "cache/indexes",
             Self::IndexerDownloads => "cache/indexers",
+            Self::IndexBuilds => "cache/index-builds",
         }
     }
 }
