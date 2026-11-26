@@ -11,12 +11,13 @@ Work in these steps, and tell me briefly what you found and decided at each.
    - The systems outside it that it calls or that call it: services, devices, other apps, the operating system, stores of data it does not own.
    - Read the README and any architecture notes, then the entry points, then the modules they reach. Read the module tree of each package, as the index names modules, so that you know every module you will have to give a box.
 
-2. Settle the viewpoint. The map shows the project from {viewpoint}. Say in one line what the map shows, for `says`. If the project has other maps, make this one show what they do not.
+2. Settle the viewpoint. The map shows the project from {viewpoint}. Say in one line what the map shows, for `says`. If the project has other maps, make this one show what they do not. Code that is not part of this viewpoint is left to another map: a map of what runs when someone uses the project leaves its build tasks, its tests and the stand-ins its tests run against to a map of how it is built, such as `build`. Say which code you leave out, and to which map.
 
 3. Write the top level. Put the project as one box in the centre. Around it put the people and the outside systems from your survey, as `outside` nodes, the ones that drive it on the left and the ones it drives or depends on on the right. Draw the lines between them and the centre by hand, each one way or both, as the talk between them goes. Keep the top to what a newcomer needs first: about three to ten nodes around the centre.
 
 4. Split the project into boxes, a level at a time.
    - Name each box in plain words for what it is or does to the person using the project, as "Window", "Payment checker", "Scheduler", capitalised as a title and without an article. Do not name a box after a module, a crate, a class or a folder. The module goes in `code`, under the name.
+   - Keep a name short enough to draw: at most about 16 characters, which fit on one line. A longer name of two words or more, up to about 30 characters, is drawn on two lines and leaves less room for `code`; anything longer may be cut short. Keep `code` to about 30 characters too.
    - Pick the icon that reads best for each.
    - Use `many: true` for a box there are several of at run time, as one per connection or per document.
    - Inside the centre, start from the programs the survey found: one box for each process or app. Then split each box that owns too much into the parts a reader would name.
@@ -26,12 +27,14 @@ Work in these steps, and tell me briefly what you found and decided at each.
 5. Give every piece of code an owner.
    - Use `claims` for the modules each box owns, as the index names them. A module goes to the box with the longest claim it is in, so a box can claim a package and a box inside it a module of it.
    - Use `files` only where a module holds several files that belong to different boxes, or where the index names no module for them.
-   - Leave no module unowned. The map reports an unowned module as drift only when the boxes use it often, so check the module list from your survey against your claims yourself. Tests, examples, generated code and build scripts belong to a box too, or to a box made for them that stays closed with `open: false` when they do not help the reader.
+   - Leave no module of this viewpoint unowned. The map reports an unowned module as drift only when the boxes use it often, so check the module list from your survey against your claims yourself. Generated code belongs to the box that uses it.
+   - Code you left to another map needs no owner in this one, and no box made for it. Take care that no claim takes it in by the way: a claim of a whole package owns its tests and build scripts too, so claim the package's modules, or its source files with `files`, instead.
+   - In a map that is not of the running project, as one of how it is built, the code the other maps show is still used by what this one shows. Give it one box that stays closed with `open: false`, and say in its `code` which map opens it.
    - Do not leave a box empty. A box that owns no code and holds no boxes is drift.
 
 6. Draw lines only where no code backs them. Lines between boxes that own code, or hold boxes that do, come from the code; writing one is a mistake the map reports. Write a line by hand only between processes, between the project and the people and systems around it, and between `outside` nodes. When such a line reaches a box that opens, carry it into the box: on the level inside, draw it on from the same node to the part it reaches, or end it with an `implements` or `uses` rule so that it goes on to the types that handle it. Prefer a rule over naming a part, since it follows the code as the code moves.
 
-7. Place the levels. For each box that opens on boxes, give the level its `box`, place its `parts` without overlapping (each part is 216 by 56), place the nodes of the levels above around it with `outer` or `at`, and leave room for the lines to run between them. Put parts that talk to each other near each other, and the ones that talk to the outside near the side the outside node is on.
+7. Place the levels. For each box that opens on boxes, give the level its `box`, place its `parts` in a compact grid (each part is 216 by 56): rows of the same columns, each row filled from the left before the next begins, with no cell left empty between parts, and the same step between columns and between rows, as 320 across and 200 down. Order the parts the way the talk goes, from the left, where the people and systems that drive the project are, to the right, where those it drives are. Cox may trade the places of parts to shorten the lines, so it is the set of places that you choose. Place the nodes of the levels above around it with `outer` or `at`, and leave room for the lines to run between them. Within the grid, put parts that talk to each other in cells next to each other, and the ones that talk to the outside in the column nearest the side the outside node is on.
 
 8. Show the map and work its drift down.
    - Write the vocabulary to the map's file, then call `show_map` with the map `{name}`.
