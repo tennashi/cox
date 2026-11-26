@@ -20,7 +20,9 @@
 //! The tools themselves are in [`calls`]: what the agent learns of them,
 //! and what each does when called, through what it asks of the chat: of
 //! its stage, as a [`ToolRequest`], or of the window, as a
-//! [`ChatRequest`], such as opening another chat.
+//! [`ChatRequest`], such as opening another chat. So are the prompts,
+//! which the agent's client offers the human as slash commands, as
+//! `make_map`.
 
 use std::collections::HashMap;
 use std::fmt;
@@ -733,8 +735,9 @@ pub const INTERNAL_ERROR: i64 = -32603;
 pub type Answered = Result<Value, (i64, String)>;
 
 /// The tools a server serves: what a client learns of them, and what each
-/// does when called. A server answers many calls at once, so a call that
-/// waits holds up no other.
+/// does when called; and its prompts, which a client offers the human as
+/// commands. A server answers many calls at once, so a call that waits
+/// holds up no other.
 pub trait Serves: Send + Sync + 'static {
     /// The tools, as MCP lists them.
     fn tools(&self) -> Value;
@@ -742,6 +745,24 @@ pub trait Serves: Send + Sync + 'static {
     /// arguments.
     fn call<'a>(&'a self, params: &'a Value)
     -> Pin<Box<dyn Future<Output = Answered> + Send + 'a>>;
+    /// The prompts, as MCP lists them: none, unless the server has some.
+    fn prompts(&self) -> Value {
+        json!([])
+    }
+    /// The prompt `params`, those of `prompts/get`, name, with its
+    /// arguments filled in.
+    ///
+    /// # Errors
+    ///
+    /// When the server has no prompt of that name, or its arguments do
+    /// not fit it.
+    fn prompt(&self, params: &Value) -> Answered {
+        let name = params
+            .get("name")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        Err((INVALID_PARAMS, format!("no prompt {name}")))
+    }
 }
 
 /// The result of a call that answers with `text`, as an error when
@@ -929,6 +950,14 @@ impl Serves for Served {
             &self.chats,
         ))
     }
+
+    fn prompts(&self) -> Value {
+        calls::prompts()
+    }
+
+    fn prompt(&self, params: &Value) -> Answered {
+        calls::prompt(params)
+    }
 }
 
 /// Answers what the agent says on one connection, until it hangs up.
@@ -1045,6 +1074,8 @@ async fn answer(message: &Value, served: &dyn Serves) -> Option<Value> {
         "ping" => Ok(json!({})),
         "tools/list" => Ok(json!({ "tools": served.tools() })),
         "tools/call" => served.call(params).await,
+        "prompts/list" => Ok(json!({ "prompts": served.prompts() })),
+        "prompts/get" => served.prompt(params),
         _ => Err((METHOD_NOT_FOUND, format!("no method {method}"))),
     };
     Some(match result {
@@ -1066,7 +1097,7 @@ fn initialize(params: &Value) -> Value {
         .unwrap_or(PROTOCOL_VERSIONS[0]);
     json!({
         "protocolVersion": version,
-        "capabilities": { "tools": {} },
+        "capabilities": { "tools": {}, "prompts": {} },
         "serverInfo": { "name": "cox", "version": env!("CARGO_PKG_VERSION") },
     })
 }
@@ -1139,6 +1170,115 @@ mod tests {
         let called = ask("tools/call", &json!({ "name": "no_such_tool" }));
         let called = answer_now(&called, cwd, &sent).unwrap();
         assert_eq!(called["error"]["code"], INVALID_PARAMS);
+    }
+
+    #[test]
+    fn offers_the_prompt_that_makes_a_map() {
+        let (sent, _requests) = unbounded_channel();
+        let cwd = Path::new("/");
+        let started = answer_now(&ask("initialize", &json!({})), cwd, &sent).unwrap();
+        assert!(started["result"]["capabilities"]["prompts"].is_object());
+        let listed = answer_now(&ask("prompts/list", &json!({})), cwd, &sent).unwrap();
+        let prompts = listed["result"]["prompts"].as_array().unwrap();
+        let names: Vec<&str> = prompts.iter().filter_map(|p| p["name"].as_str()).collect();
+        assert_eq!(names, ["make_map"]);
+        let arguments: Vec<&str> = prompts[0]["arguments"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|a| a["name"].as_str())
+            .collect();
+        assert_eq!(arguments, ["name", "viewpoint"]);
+    }
+
+    #[test]
+    fn fills_the_map_prompt_with_its_arguments_or_their_defaults() {
+        let (sent, _requests) = unbounded_channel();
+        let cwd = Path::new("/");
+        let text = |arguments: Value| {
+            let got = ask(
+                "prompts/get",
+                &json!({ "name": "make_map", "arguments": arguments }),
+            );
+            let got = answer_now(&got, cwd, &sent).unwrap();
+            let messages = got["result"]["messages"].as_array().unwrap().clone();
+            assert_eq!(messages.len(), 1);
+            assert_eq!(messages[0]["role"], "user");
+            messages[0]["content"]["text"].as_str().unwrap().to_owned()
+        };
+
+        let given = text(json!({ "name": "build", "viewpoint": "building it" }));
+        assert!(
+            given.starts_with("Make the map `build` of this project with me, from building it."),
+            "{given}"
+        );
+        assert!(
+            given.contains("call `show_map` with the map `build`"),
+            "{given}"
+        );
+        assert!(
+            !given.contains("{name}") && !given.contains("{viewpoint}"),
+            "{given}"
+        );
+        assert!(
+            given.contains("`says`: one line on what the map shows"),
+            "the format"
+        );
+
+        let defaulted = text(json!({}));
+        assert!(
+            defaulted.starts_with("Make the map `use` of this project"),
+            "{defaulted}"
+        );
+        assert!(!defaulted.contains("{viewpoint}"), "{defaulted}");
+        assert_eq!(text(json!({ "name": "", "viewpoint": " " })), defaulted);
+    }
+
+    /// A server with no tools and no prompts of its own, as one that
+    /// serves something other than a chat.
+    struct Bare;
+
+    impl Serves for Bare {
+        fn tools(&self) -> Value {
+            json!([])
+        }
+
+        fn call<'a>(
+            &'a self,
+            _params: &'a Value,
+        ) -> Pin<Box<dyn Future<Output = Answered> + Send + 'a>> {
+            Box::pin(async { Err((INVALID_PARAMS, "no tools".to_owned())) })
+        }
+    }
+
+    #[test]
+    fn a_server_other_than_a_chats_offers_no_prompts() {
+        let ask_bare = |message: &Value| {
+            tokio::runtime::Builder::new_current_thread()
+                .build()
+                .unwrap()
+                .block_on(answer(message, &Bare))
+                .unwrap()
+        };
+        let listed = ask_bare(&ask("prompts/list", &json!({})));
+        assert_eq!(listed["result"]["prompts"], json!([]));
+        let got = ask_bare(&ask("prompts/get", &json!({ "name": "make_map" })));
+        assert_eq!(got["error"]["code"], INVALID_PARAMS);
+    }
+
+    #[test]
+    fn refuses_a_prompt_it_lacks_or_an_argument_that_is_not_text() {
+        let (sent, _requests) = unbounded_channel();
+        let cwd = Path::new("/");
+        let missing = ask("prompts/get", &json!({ "name": "no_such_prompt" }));
+        let missing = answer_now(&missing, cwd, &sent).unwrap();
+        assert_eq!(missing["error"]["code"], INVALID_PARAMS);
+        let wrong = ask(
+            "prompts/get",
+            &json!({ "name": "make_map", "arguments": { "name": 3 } }),
+        );
+        let wrong = answer_now(&wrong, cwd, &sent).unwrap();
+        assert_eq!(wrong["error"]["code"], INVALID_PARAMS);
     }
 
     #[test]
