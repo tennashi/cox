@@ -15,6 +15,7 @@ const compose = {
   goalLine: document.getElementById("goal-line"),
   goalButton: document.getElementById("goal-button"),
   changesButton: document.getElementById("changes-button"),
+  mapButton: document.getElementById("map-button"),
   sketch: document.getElementById("sketch-form"),
   sketchLabel: document.getElementById("sketch-label"),
   sketchLine: document.getElementById("sketch-line"),
@@ -499,11 +500,28 @@ function resolvedGroup(project, done) {
     open ? done.map((row) => chatRow(row, { child: true })) : null);
 }
 
+// The map of the project at `index`, on its shelf: a button that opens it
+// over the list. coxd tells a map by a chat that works in the project, so
+// it is asked by one of the project's chats, one that is no sketch if
+// there is one, as a sketch works in a folder of its own; a project with
+// no chat kept has none to ask by, and no button.
+function projectMap(index) {
+  const rows = listing.chats.concat(listing.archived)
+    .filter((row) => row.project === index && row.kept !== null);
+  const by = rows.find((row) => !(row.setup && row.setup.sketch)) || rows[0];
+  if (!by || listing.projects[index].missing) return null;
+  return el("button", {
+    type: "button", class: "map", "aria-label": `Map of ${projectName(index)}`,
+    onclick: () => openMap({}, by.kept),
+  }, icon("map", 16), "Map");
+}
+
 function drawHome() {
   compose.form.hidden = true;
   compose.goal.hidden = true;
   compose.goalButton.hidden = true;
   compose.changesButton.hidden = true;
+  compose.mapButton.hidden = true;
   compose.sketchButton.hidden = true;
   compose.sketch.hidden = true;
   drawHead(null);
@@ -541,7 +559,8 @@ function drawHome() {
       .filter((index) => index !== own && !listing.projects[index].archived && !listing.projects[index].deleted);
     shelves.push(el("div", { class: "projects-head" }, el("span", { class: "label" }, "Projects")));
     for (const index of projects) {
-      shelves.push(shelf(index, el("div", { class: "shelf-head" }, square(index), el("span", {}, projectName(index)))));
+      shelves.push(shelf(index, el("div", { class: "shelf-head" },
+        square(index), el("span", { class: "name" }, projectName(index)), projectMap(index))));
     }
     // A project of its own, as the + at the foot of the window's rail
     // makes, for the human and the agent to work out what it is to be.
@@ -558,6 +577,8 @@ function drawChat() {
   document.title = row ? row.name : "Cox";
   compose.form.hidden = !row;
   compose.goalButton.hidden = !row;
+  // The home's chats work in no project, which has no map.
+  compose.mapButton.hidden = !row || listing.projects[row.project].id === null;
   if (row) findChanges(row);
   drawChangesButton();
   if (row) findSketching(row);
@@ -862,6 +883,7 @@ function drawChangesButton() {
   compose.changesCount.textContent = String(count);
 }
 compose.changesButton.addEventListener("click", () => openChanges());
+compose.mapButton.addEventListener("click", () => openMap({}));
 
 // Shows what changed over the chat, file by file and line by line, as
 // the window's "Changes" tab does, asking coxd again for what it is now.
@@ -1571,11 +1593,11 @@ function mapShownName(shown) {
 // Where the phone shows the Map page, beside its own, open where the
 // agent showed the map, as the window's stage opens it: the map's name and
 // `:`, unless the project's first, then the ids of the nodes from the top
-// down, each encoded; of the project of the chat shown.
-function mapAddress(shown) {
+// down, each encoded; of the project of the chat kept as `kept`.
+function mapAddress(shown, kept) {
   const at = (shown.at || []).map(encodeURIComponent).join("/");
   const hash = shown.map ? `${encodeURIComponent(shown.map)}:${at}` : at;
-  return `/map/?kept=${chat.kept}#${hash}`;
+  return `/map/?kept=${kept}#${hash}`;
 }
 
 // A map of the project the agent showed on the stage: a row that opens it
@@ -1591,15 +1613,18 @@ function mapShownRow(shown) {
 
 // Shows the Map page over the chat, in a frame, where the agent showed the
 // map, as it is drawn now: it is the window's own page, read beside the
-// phone's, whose taps, drags and pinches move through the map.
-function openMap(shown) {
+// phone's, whose taps, drags and pinches move through the map. With
+// nothing shown, as from the head's button or a project's on the list, it
+// opens at the project's first map, of the project of the chat kept as
+// `kept`: the chat shown, unless given.
+function openMap(shown, kept = chat.kept) {
   const close = () => { viewer.remove(); document.body.classList.remove("trying"); };
   const name = mapShownName(shown);
   const viewer = el("div", { id: "map", role: "dialog", "aria-label": name },
     el("div", { class: "bar" },
-      el("button", { type: "button", class: "icon-button", "aria-label": "Back to the chat", onclick: close }, "‹"),
+      el("button", { type: "button", class: "icon-button", "aria-label": chat ? "Back to the chat" : "Back to the chats", onclick: close }, "‹"),
       el("span", { class: "page" }, name)),
-    el("iframe", { src: mapAddress(shown), title: name }));
+    el("iframe", { src: mapAddress(shown, kept), title: name }));
   document.getElementById("map")?.remove();
   document.body.classList.add("trying");
   document.body.append(viewer);

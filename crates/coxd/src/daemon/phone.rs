@@ -51,7 +51,10 @@
 //! with the window's colors beside them, and which reads the map of the
 //! project where the chat its query names works, `?kept=<number>`, beside
 //! itself, at `/map/api/map`, as the window's stage tells it at
-//! `cox://api/map` (see [`map_asked`]).
+//! `cox://api/map` (see [`map_asked`]). The human opens the same page
+//! whenever they will, at the project's first map: from the head of a
+//! chat of a project, and from a project's shelf on the list of chats,
+//! which asks by one of the project's chats.
 //!
 //! The page asks, too, to be told of the chats that need the human while
 //! they are away from the Mac, with Web Push (see [`super::push`]): it
