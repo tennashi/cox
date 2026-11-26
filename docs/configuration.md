@@ -552,13 +552,14 @@ vocabulary, change the code, or agree to leave it in the vocabulary's
 level of boxes of its own instead, which you place, and which own its
 code; drawn closed, it stands for them. Around the box of such a level
 you place, in its `at`, the boxes of the levels above it is to show, and
-the code's lines go on to those; leave `at` out, and Cox places there
-every box above that the code of its parts meets, on the side the box
-lies on in the level above. An end of a line you drew that you placed
-nowhere in the level, Cox places the same way. A card is one size,
-however long its name: a name of up to 16 letters stays on one line, a
-longer one takes two, and what fits on neither is cut short. A box
-opened keeps the lines it
+the code's lines go on to those; place nothing around it, and the level
+opens where its box sits in the level above, which stays around it,
+moved aside to make room, and the code's lines go on to the boxes there.
+Where you place some, an end of a line you drew that you placed nowhere
+in the level, Cox places beside the box, on the side it lies on in the
+level above. A card is one size, however long its name: a name of up to
+16 letters stays on one line, a longer one takes two, and what fits on
+neither is cut short. A box opened keeps the lines it
 has closed: each goes on to the parts inside that the level inside joins
 to the line's other end, or else to the box's edge, as a line from a
 person does where no code ties it to one of the box's types. What

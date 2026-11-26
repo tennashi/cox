@@ -659,6 +659,30 @@ fn a_level_shows_around_its_box_what_its_lines_reach_that_no_one_placed() {
     assert_eq!(ends_nowhere(&map), []);
 }
 
+#[test]
+fn a_level_that_places_nothing_around_its_box_opens_where_the_box_sits_above() {
+    // The server's name is longer than its card: the card is as wide as
+    // any, and the page fits the name to it.
+    let vocabulary =
+        people("", "", "").replace(r#""Server""#, r#""The server that answers everyone""#);
+    let map = generated(&vocabulary, &app());
+    let level = &map.levels["group"];
+    // The group's box grows from the middle of its card, at [300, 0] in
+    // the level above, by 292 to each side and 222 up and down: the level
+    // above stays around it, its box's edge grown as much, the server and
+    // the people left of the card further left, the admin, below it,
+    // further down; the admin, though no line of the group reaches it.
+    assert_eq!(level.area, Some([0, 0, 800, 500]));
+    assert_eq!(level.parts["store"], [300, 0]);
+    assert_eq!(level.frames["app"], [-300, 0, 1384, 944]);
+    assert_eq!(level.at["server"], [-300, 222]);
+    assert_eq!(level.at["user"], [-698, 222]);
+    assert_eq!(level.at["admin"], [-698, 644]);
+    assert!(!level.at.contains_key("group"));
+    assert_eq!(ends_nowhere(&map), []);
+    assert_eq!(open_drift(&map), Vec::<&str>::new());
+}
+
 /// [`app`]'s server, and its store in a box of its own, `group`, which
 /// keeps its lines by hand, among a user and an admin: the user's line
 /// goes to the server; the admin's to the app, and on as `admin` writes
