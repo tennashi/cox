@@ -205,7 +205,11 @@ fn the_chats_of_a_folder_share_its_stage() {
             &project,
             &KeptTabs {
                 tabs: vec![
-                    KeptTab::Files { open: Vec::new() },
+                    KeptTab::Files {
+                        open: Vec::new(),
+                        checkouts: Vec::new(),
+                        shown: None,
+                    },
                     page("https://b/"),
                     page("https://a/"),
                 ],
@@ -239,7 +243,11 @@ fn the_chats_of_a_folder_share_its_stage() {
         .expect("coxd tells the stage's tabs");
     let shared = KeptTabs {
         tabs: vec![
-            KeptTab::Files { open: Vec::new() },
+            KeptTab::Files {
+                open: Vec::new(),
+                checkouts: Vec::new(),
+                shown: None,
+            },
             page("https://b/"),
             page("https://a/"),
         ],
