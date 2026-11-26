@@ -26,11 +26,13 @@
   --mono: ui-monospace, Menlo, "DejaVu Sans Mono", monospace;
 }
 /* What only the map has: the edge of what the pointer is on, the color
-   of drift, and where the drawing starts under the bars above it. */
+   of drift, where the drawing starts under the bars above it, and how
+   much larger than the drawing the mark that closes a box is drawn. */
 :root {
   --focused-edge: #5a5a61;
   --drift: #e2a64f;
   --top: 44px;
+  --shut: 1;
 }
 
 * {
@@ -284,6 +286,15 @@ svg .mono {
   cursor: zoom-in;
 }
 .open:hover rect {
+  fill: var(--button-hover);
+}
+/* The mark that closes a box, as large on the screen however far the
+   drawing is zoomed out: the page tells how much larger to draw it. */
+.shut {
+  cursor: zoom-out;
+  transform: scale(var(--shut));
+}
+.shut:hover .face {
   fill: var(--button-hover);
 }
 .obj .dn,

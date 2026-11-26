@@ -456,11 +456,19 @@ function centerCard(id, r, op) {
   ${anim ? "" : `<g transform="translate(${r.x},${r.y})">${changedTab(id)}${driftBadge(id, r.w)}</g>`}</g>`;
 }
 
-// The edge of a box opened, with its name, around the level inside it.
+// The edge of a box opened, with its name, around the level inside it,
+// and on its top right corner, where the box's card has its mark to open
+// it, the mark that closes it. The mark sits on the edge, over nothing
+// drawn inside, and is drawn no smaller than a finger finds it however
+// far the drawing is zoomed out.
 function boundary(id, r, op) {
   const n = node(id);
+  const shut =
+    !anim && view.stack.indexOf(id) > 0
+      ? `<g transform="translate(${r.x + r.w - 34},${r.y})"><g class="shut" data-shut="${esc(id)}" role="button" aria-label="Close ${esc(n.name)}"><title>Close ${esc(n.name)}</title><rect x="-18" y="-18" width="36" height="36" fill="transparent"/><rect class="face" x="-11" y="-11" width="22" height="22" rx="6" fill="var(--raised)" stroke="var(--accent)" stroke-width="1.2"/><g transform="translate(-8.4,-8.4) scale(.7)" fill="none" stroke="var(--foreground)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${ICON.shrink}</g></g></g>`
+      : "";
   return `<g opacity="${op}"><rect x="${r.x}" y="${r.y}" width="${r.w}" height="${r.h}" rx="20" fill="rgba(21,44,42,.28)" stroke="var(--accent)" stroke-width="1.6" stroke-dasharray="7 5"/>
-  <text x="${r.x + 18}" y="${r.y + 28}" font-size="14" font-weight="700" fill="var(--accent)">${esc(n.name)}${n.code ? `<tspan class="mono" dx="10" font-size="11.5" font-weight="400" fill="var(--dim)">${esc(n.code)}</tspan>` : ""}</text></g>`;
+  <text x="${r.x + 18}" y="${r.y + 28}" font-size="14" font-weight="700" fill="var(--accent)">${esc(n.name)}${n.code ? `<tspan class="mono" dx="10" font-size="11.5" font-weight="400" fill="var(--dim)">${esc(n.code)}</tspan>` : ""}</text>${shut}</g>`;
 }
 
 const cv = document.getElementById("cv");
@@ -968,6 +976,19 @@ export function up(n) {
   });
 }
 
+/// Closes the box `id`, the one open or one open around it, as `up` goes
+/// there: to the level that draws it closed, with it chosen.
+export function close(id) {
+  const n = view.stack.indexOf(id);
+  if (anim || n < 1) return;
+  up(n - 1);
+  whenStill(() => {
+    if (view.stack.length !== n || view.sel || !nodes[id]) return;
+    view.sel = id;
+    render();
+  });
+}
+
 /// Shows the level inside `f` at once, as a link to it does, with
 /// `chosen` chosen there.
 export function goTo(f, chosen = null) {
@@ -985,6 +1006,7 @@ export function goTo(f, chosen = null) {
 
 function apply() {
   W.setAttribute("transform", `translate(${cam.x},${cam.y}) scale(${cam.k})`);
+  W.style.setProperty("--shut", Math.max(1, 1 / cam.k));
 }
 // Shows the drawing as `next` says: at once, or, while the cards go to a
 // function's area or back, as they come to rest.
@@ -1052,7 +1074,8 @@ cv.addEventListener(
   { passive: false },
 );
 // A press chooses a box, which lights its lines; its corner's mark, or a
-// second press, opens it. A drag moves the drawing; two fingers, as on a
+// second press, opens it, and the mark on the corner of a box's edge
+// closes it. A drag moves the drawing; two fingers, as on a
 // phone, move it and pinch it larger or smaller, and choose nothing.
 let drag = null;
 const fingers = new Map();
@@ -1078,6 +1101,7 @@ cv.addEventListener("pointerdown", (e) => {
     moved: 0,
     on: e.target.closest(".obj")?.dataset.id,
     open: e.target.closest("[data-open]")?.dataset.open,
+    shut: e.target.closest("[data-shut]")?.dataset.shut,
   };
 });
 addEventListener("pointermove", (e) => {
@@ -1116,6 +1140,7 @@ addEventListener("pointerup", (e) => {
   lift(e);
   if (drag && drag.moved <= 4 && !anim) {
     if (drag.open) open(drag.open);
+    else if (drag.shut) close(drag.shut);
     else {
       view.sel = drag.on && drag.on !== view.sel ? drag.on : null;
       render();
