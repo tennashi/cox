@@ -12,8 +12,10 @@
 // while one of its ends is chosen or pointed at from a list.
 //
 // A function chosen splits the level: the cards of what it relates to
-// leave their places for an area above the box, laid out as the calls
-// flow, from the left to the right, and the rest stays under it, faint.
+// inside the open box leave their places for an area above the box, laid
+// out as the calls flow, from the left to the right, and the rest stays
+// under it, faint. What it relates to outside the box stays where it is,
+// with a line to the area.
 
 import { ICON } from "./icons.js";
 
@@ -43,16 +45,13 @@ const SIDE = { left: "l", right: "r", top: "t", bottom: "b" };
 const AREA = { across: 72, down: 14, label: 24, wrap: 30, pad: 26, out: 44, lane: 6, rest: 0.36, lines: 0.4, ends: 0.2, readable: 0.62, takes: 0.4 };
 // The columns of the area, from the left, each with what is written over
 // it: who calls the function, its own type, what it calls, the types
-// whose fields it uses, and what those fields point to; at the far sides,
-// what stands in the level for code it does not draw.
+// whose fields it uses, and what those fields point to.
 const COLUMNS = [
-  ["from", "Called from elsewhere"],
   ["caller", "Called from"],
   ["own", ""],
   ["call", "Calls"],
   ["field", "Uses fields of"],
   ["target", "Fields point to"],
-  ["to", "Reaches elsewhere"],
 ];
 // Which column a card that is in several ways related goes to.
 const FIRST = ["call", "caller", "field", "target"];
@@ -478,12 +477,14 @@ function room() {
 }
 
 // The level `g` as the function chosen arranges it: where each card and
-// each edge is, and, when the function relates to cards of the level,
-// those `taken` to its area, the area's `edge`, what is written in it,
-// the places the cards left, and the lines between them, by their ends:
-// each from a card to a card, whether it has a head at both ends, the
-// sides it leaves and meets them at, and the way it takes past the
-// columns between them, if there are some.
+// each edge is, and the lines of what the function relates to, by their
+// ends: each from a card to a card, whether it has a head at both ends,
+// the sides it leaves and meets them at, and the way it takes past the
+// columns between them, if there are some. When the function relates to
+// parts of the open box, those `taken` to its area, the area's `edge`,
+// what is written in it, and the places the cards left. What it relates
+// to outside the box stays where it is, with a line to what was taken;
+// with nothing taken, to the function's own card.
 // With no function chosen, or one that relates to nothing drawn here,
 // the level as it is.
 function arrangement(g) {
@@ -505,9 +506,13 @@ function arrangement(g) {
       const had = lines.get(key);
       lines.set(key, had ? [had[0], had[1], had[2] || had[0] !== x] : [x, y, false]);
       const other = role === "caller" ? x : y;
-      if (!column.has(other)) column.set(other, parts.has(other) ? role : role === "caller" ? "from" : "to");
+      if (parts.has(other) && !column.has(other)) column.set(other, role);
     }
-  if (column.size < 2) return still;
+  if (!parts.has(own) || column.size < 2) column.clear();
+  const held = column.size ? column : new Set([own]);
+  for (const [key, [x, y]] of lines) if (!held.has(x) && !held.has(y)) lines.delete(key);
+  if (!lines.size) return still;
+  if (!column.size) return { ...still, lines };
 
   // Each column as stacks of a few cards, and the stacks in rows, as many
   // as are wide enough to read in what the panels leave.
@@ -553,7 +558,7 @@ function arrangement(g) {
   for (const id of rest) r[id] = moved(g.r[id]);
   const frames = {};
   for (const [id, q] of Object.entries(g.frames)) frames[id] = R(q.x, q.y - up, q.w, q.h + up);
-  const left = [...column.keys()].map((id) => moved(g.r[id]));
+  const left = [...column.keys()].map((id) => g.r[id]);
   const labels = [];
   const where = new Map();
   let y = edge.y + AREA.pad;
@@ -582,6 +587,8 @@ function arrangement(g) {
   const lanes = new Map();
   for (const line of lines.values()) {
     const [a, b] = [where.get(line[0]), where.get(line[1])];
+    // To a card that stays outside, as a line of the level goes.
+    if (!a || !b) continue;
     if (a.row !== b.row)
       line[3] = [rows.indexOf(a.row) < rows.indexOf(b.row) ? "b" : "t", middle(r[line[0]]).x <= middle(r[line[1]]).x ? "l" : "r"];
     if (a.row !== b.row || a.n === b.n) continue;
@@ -669,9 +676,10 @@ function areaShown(p) {
 
 /// Chooses the function `next`: its `own` type, its `name`, and `links`,
 /// each from a node to a node as "caller", "call", "field" or "target";
-/// or none. The cards of what it relates to go to an area above the level,
-/// and back as it is let go, shown in what panels `left` and `right` of
-/// the drawing leave, or, with neither, above a drawer from below.
+/// or none. The cards of what it relates to inside the open box go to an
+/// area above the level, and back as it is let go, shown in what panels
+/// `left` and `right` of the drawing leave, or, with neither, above a
+/// drawer from below.
 export function focus(next, left = 0, right = 0) {
   const level = view.stack.at(-1);
   const steady = !pair && !anim;
