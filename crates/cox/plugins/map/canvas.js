@@ -12,10 +12,11 @@
 // while one of its ends is chosen or pointed at from a list.
 //
 // A function chosen splits the level: the cards of what it relates to
-// inside the open box leave their places for an area above the box, laid
-// out as the calls flow, from the left to the right, and the rest stays
-// under it, faint. What it relates to outside the box stays where it is,
-// with a line to the area.
+// inside the open box leave their places for an area at the top of the
+// box, laid out as the calls flow, from the left to the right, and the
+// rest moves down under it, faint, the box growing down to hold both.
+// What it relates to outside the box stays where it is, with a line to
+// the area.
 
 import { ICON } from "./icons.js";
 
@@ -38,11 +39,12 @@ const SIDE = { left: "l", right: "r", top: "t", bottom: "b" };
 // The area a function chosen is laid out in: how far its columns and the
 // cards of one stand apart, the room over a column for what it is, the
 // gap between the rows it wraps into, the space around it inside its
-// edge and out, how far the lines that pass a column stand apart, how
-// faint the rest of the level is under it, and its lines, and those of
-// them that end at a card of the area, how small it may be drawn, and how
-// many seconds the cards take to go there.
-const AREA = { across: 72, down: 14, label: 24, wrap: 30, pad: 26, out: 44, lane: 6, rest: 0.36, lines: 0.4, ends: 0.2, readable: 0.62, takes: 0.4 };
+// edge and out, how far under the top of the open box it starts and from
+// the box's sides it stays, how far the lines that pass a column stand
+// apart, how faint the rest of the level is under it, and its lines, and
+// those of them that end at a card of the area, how small it may be
+// drawn, and how many seconds the cards take to go there.
+const AREA = { across: 72, down: 14, label: 24, wrap: 30, pad: 26, out: 44, head: 44, inset: 24, lane: 6, rest: 0.36, lines: 0.4, ends: 0.2, readable: 0.62, takes: 0.4 };
 // The columns of the area, from the left, each with what is written over
 // it: who calls the function, its own type, what it calls, the types
 // whose fields it uses, and what those fields point to.
@@ -481,8 +483,9 @@ function room() {
 // ends: each from a card to a card, whether it has a head at both ends,
 // the sides it leaves and meets them at, and the way it takes past the
 // columns between them, if there are some. When the function relates to
-// parts of the open box, those `taken` to its area, the area's `edge`,
-// what is written in it, and the places the cards left. What it relates
+// parts of the open box, those `taken` to its area at the top of the
+// box, the area's `edge`, what is written in it, the places the cards
+// left, and the `box` as it grew down to hold the area. What it relates
 // to outside the box stays where it is, with a line to what was taken;
 // with nothing taken, to the function's own card.
 // With no function chosen, or one that relates to nothing drawn here,
@@ -533,7 +536,7 @@ function arrangement(g) {
       });
     }
   }
-  const widest = w / AREA.readable - 2 * AREA.pad;
+  const widest = Math.min(w / AREA.readable, g.box.w - 2 * AREA.inset) - 2 * AREA.pad;
   const rows = [];
   for (const stack of stacks) {
     const row = rows.at(-1);
@@ -546,19 +549,20 @@ function arrangement(g) {
   const wide = Math.max(...rows.map((row) => row.w)) + 2 * AREA.pad;
   const tall = rows.reduce((sum, row) => sum + AREA.label + row.h, 0) + (rows.length - 1) * AREA.wrap + 2 * AREA.pad;
 
-  // The area stands over the box and what is beside it; what is above
-  // them moves up to make room, and the edges around them grow.
-  const above = (q) => q.y + q.h <= g.box.y;
-  const rest = Object.keys(g.r).filter((id) => !column.has(id));
-  const floor = Math.min(...rest.filter((id) => !above(g.r[id])).map((id) => g.r[id].y));
-  const edge = R(middle(g.box).x - wide / 2, floor - AREA.out - tall, wide, tall);
-  const up = g.box.y - edge.y + AREA.out;
-  const moved = (q) => (above(q) ? R(q.x, q.y - up, q.w, q.h) : q);
+  // The area stands in the box, under its name. The box's other parts
+  // move down to make room, where its top has none, and the box and the
+  // edges around it grow down by as much, with what is under the box
+  // moving down too. What is above the box or beside it stays.
+  const edge = R(middle(g.box).x - wide / 2, g.box.y + AREA.head, wide, tall);
+  const down = Math.max(0, edge.y + tall + AREA.out - Math.min(...g.parts.map((id) => g.r[id].y)));
+  const under = g.box.y + g.box.h;
+  const lower = (q) => R(q.x, q.y + down, q.w, q.h);
+  const around = (q) => (q.y >= under ? lower(q) : q.y <= g.box.y && q.y + q.h >= under ? R(q.x, q.y, q.w, q.h + down) : q);
   const r = {};
-  for (const id of rest) r[id] = moved(g.r[id]);
+  for (const [id, q] of Object.entries(g.r)) if (!column.has(id)) r[id] = parts.has(id) ? lower(q) : around(q);
   const frames = {};
-  for (const [id, q] of Object.entries(g.frames)) frames[id] = R(q.x, q.y - up, q.w, q.h + up);
-  const left = [...column.keys()].map((id) => g.r[id]);
+  for (const [id, q] of Object.entries(g.frames)) frames[id] = around(q);
+  const left = [...column.keys()].map((id) => lower(g.r[id]));
   const labels = [];
   const where = new Map();
   let y = edge.y + AREA.pad;
@@ -609,7 +613,7 @@ function arrangement(g) {
       to: on ? x1 : x0,
     };
   }
-  return { id: g.id, r, frames, taken: new Set(column.keys()), lines, edge, labels, left, box: g.box };
+  return { id: g.id, r, frames, taken: new Set(column.keys()), lines, edge, labels, left, box: r[g.id] };
 }
 
 // The area of an arrangement, under its cards: its edge, what is written
@@ -652,7 +656,7 @@ function arranged(g) {
   // The level draws no line of its own where the area draws one.
   const wires = to.lines ? g.wires.filter(([x, y]) => !to.lines.has(pairKey(x, y))) : g.wires;
   return {
-    g: { ...g, r, frames, wires },
+    g: { ...g, r, frames, wires, box: r[g.id] ?? g.box },
     to,
     e,
     now: { ...to, r, frames },
@@ -662,22 +666,23 @@ function arranged(g) {
   };
 }
 
-// Where the drawing shows the area of `p`, and under it the box, or as
-// much of it as fits while the area still reads.
+// Where the drawing shows the box of `p` with the area in it, or, from
+// the box's top, the area and as much under it as fits while the area
+// still reads.
 function areaShown(p) {
   const { left, w, h } = room();
-  const all = outline([p.edge, p.box]);
+  const all = outline([p.box]);
   let k = Math.min(1, w / (all.x1 - all.x0), h / (all.y1 - all.y0));
   if (k >= AREA.readable) return { k, x: left + w / 2 - (k * (all.x0 + all.x1)) / 2, y: h / 2 - (k * (all.y0 + all.y1)) / 2 };
-  const peek = Math.min(p.box.h, 2 * IH) + AREA.out;
-  k = Math.max(AREA.readable, Math.min(1, w / (p.edge.w + 40), h / (p.edge.h + peek + 40)));
-  return { k, x: left + w / 2 - k * (p.edge.x + p.edge.w / 2), y: 20 - k * p.edge.y };
+  const tall = AREA.head + p.edge.h + AREA.out + 2 * IH;
+  k = Math.max(AREA.readable, Math.min(1, w / (p.edge.w + 40), h / (tall + 40)));
+  return { k, x: left + w / 2 - k * (p.edge.x + p.edge.w / 2), y: 20 - k * p.box.y };
 }
 
 /// Chooses the function `next`: its `own` type, its `name`, and `links`,
 /// each from a node to a node as "caller", "call", "field" or "target";
 /// or none. The cards of what it relates to inside the open box go to an
-/// area above the level, and back as it is let go, shown in what panels
+/// area at the top of the box, and back as it is let go, shown in what panels
 /// `left` and `right` of the drawing leave, or, with neither, above a
 /// drawer from below.
 export function focus(next, left = 0, right = 0) {

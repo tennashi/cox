@@ -4,7 +4,7 @@
 // the left, its fields, each opening on where it is used. A function
 // opened lights the fields it uses on the left, the others folding into
 // one row, the uses of each by that function, and on the map takes what
-// it relates to out of the level, to an area above it. A function's name,
+// it relates to in the open box to an area at its top. A function's name,
 // wherever it is, goes to it. On a narrow screen, all of it is in a
 // drawer from below.
 
