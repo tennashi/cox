@@ -4,11 +4,14 @@
 //! own folder, as one does from what changed in the project's files, and
 //! from the map of the project; and a file chosen on the tree of the
 //! project's files, on the tab of a file shown, in place of what it
-//! showed, or on a tab of its own.
+//! showed, or on a tab of its own. A file of a branch no checkout has,
+//! chosen on the tree, is read from Git, onto a tab of code of its own
+//! kind, which no file on disk at its path is shown on, nor it on a tab
+//! of a file on disk.
 
 use std::path::{Path, PathBuf};
 
-use cox_core::tabs::Lines;
+use cox_core::tabs::{Lines, OnBranch};
 use gpui::{Context, EventEmitter, Focusable as _, Subscription, Window, prelude::*};
 
 use crate::stage::Stage;
@@ -21,6 +24,32 @@ use crate::stage::tree::{self, Chosen, Unchosen};
 use crate::ui::LinkClicked;
 use crate::ui::markdown::FileLink;
 use coxd::home::{expanded_in, home};
+
+/// The most of a file of a branch the stage reads from Git to show, in
+/// bytes.
+const MOST_OF_A_BRANCH_FILE: u64 = 8 * 1024 * 1024;
+
+/// What the file at `path` of the branch `on` says, read from Git, at the
+/// commit the branch is at, or why it cannot be shown: as it is not text,
+/// is too large, or is not there. Slow, as it runs Git.
+///
+/// # Errors
+///
+/// When the file cannot be shown, saying why.
+pub fn read_on_branch(path: &Path, on: &OnBranch) -> Result<String, String> {
+    let within = path
+        .strip_prefix(&on.repository)
+        .map_err(|_| format!("{} is not in the repository", path.display()))?;
+    let commit = cox_git::tree::commit_of(&on.repository, &on.branch)?
+        .ok_or_else(|| format!("the branch {} is gone", on.branch))?;
+    match cox_git::tree::read(&on.repository, &commit, within, MOST_OF_A_BRANCH_FILE)? {
+        cox_git::tree::Read::Text(text) => Ok(text),
+        cox_git::tree::Read::Binary => Err("it is not text, so it cannot be shown".to_owned()),
+        cox_git::tree::Read::TooLarge(size) => {
+            Err(format!("it is {size} bytes, too large to show"))
+        }
+    }
+}
 
 impl EventEmitter<ShowTurn> for Stage {}
 impl EventEmitter<CompareWith> for Stage {}
@@ -36,10 +65,13 @@ impl Stage {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let showing = self
-            .tabs
-            .iter()
-            .position(|tab| T::of(&tab.content).is_some_and(|shown| shown.read(cx).path() == path));
+        let showing = self.tabs.iter().position(|tab| {
+            // Not a tab of the file of that path on a branch.
+            T::of(&tab.content).is_some_and(|shown| {
+                let shown = shown.read(cx);
+                shown.path() == path && shown.branch().is_none()
+            })
+        });
         if let Some(index) = showing {
             if let Some(shown) = T::of(&self.tabs[index].content) {
                 shown.update(cx, |shown, cx| shown.show(text, lines, cx));
@@ -92,6 +124,69 @@ impl Stage {
             },
         );
         (T::content(shown), changes, opens)
+    }
+
+    /// Shows the file at `path` of the branch `on`, read from Git, at
+    /// `lines` if any: on the tab that shows it already, or a new one.
+    pub(super) fn show_branch_file(
+        &mut self,
+        path: PathBuf,
+        on: OnBranch,
+        lines: Option<Lines>,
+        cx: &mut Context<Self>,
+    ) {
+        let read = read_on_branch(&path, &on);
+        let showing = self.tabs.iter().position(|tab| match &tab.content {
+            TabContent::Code(code) => {
+                let code = code.read(cx);
+                code.path() == path && code.branch() == Some(&on)
+            }
+            _ => false,
+        });
+        if let Some(index) = showing {
+            if let TabContent::Code(code) = &self.tabs[index].content {
+                let text = read.unwrap_or_default();
+                code.update(cx, |code, cx| code.show(&text, lines, cx));
+            }
+            if self.in_sight() {
+                self.tabs.show(index);
+            }
+            self.changed(cx);
+        } else {
+            let (content, changes) = Self::branch_tab(path, read, lines, on, cx);
+            self.push(content, changes, None, true, cx);
+        }
+    }
+
+    /// Puts a tab showing the file at `path` of the branch `on`, read from
+    /// Git, at `lines` if any, after the others, shown if `show` is.
+    pub(super) fn push_branch_file(
+        &mut self,
+        path: PathBuf,
+        on: OnBranch,
+        lines: Option<Lines>,
+        show: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let read = read_on_branch(&path, &on);
+        let (content, changes) = Self::branch_tab(path, read, lines, on, cx);
+        self.push(content, changes, None, show, cx);
+    }
+
+    /// What a tab shows of the file at `path` of the branch `on`, as
+    /// `read` read it, at `lines` if any, with what redraws the tab as it
+    /// changes. It opens no links: only a server, which it asks none,
+    /// gives it any.
+    fn branch_tab(
+        path: PathBuf,
+        read: Result<String, String>,
+        lines: Option<Lines>,
+        on: OnBranch,
+        cx: &mut Context<Self>,
+    ) -> (TabContent, Subscription) {
+        let shown = cx.new(|cx| Code::on_branch(path, read, lines, on, cx));
+        let changes = cx.observe(&shown, |stage, _, cx| stage.changed(cx));
+        (TabContent::Code(shown), changes)
     }
 
     /// Opens `url`, a link the human clicked: on the tab that shows it
@@ -196,11 +291,30 @@ impl Stage {
             .tabs
             .shown_index()
             .filter(|&index| self.tabs[index].content.is_file());
-        match shown {
-            Some(index) if !chosen.apart => self.show_in(index, &chosen.path, window, cx),
+        match (shown, &chosen.branch) {
+            (Some(index), Some(on)) if !chosen.apart => {
+                let read = read_on_branch(&chosen.path, on);
+                let (content, changes) =
+                    Self::branch_tab(chosen.path.clone(), read, None, on.clone(), cx);
+                self.tabs[index] = Tab {
+                    content,
+                    owner: self.tabs[index].owner,
+                    _changes: changes,
+                    _opens: None,
+                };
+                self.changed(cx);
+                self.focus_shown(window, cx);
+            }
+            (_, Some(on)) => {
+                self.show_branch_file(chosen.path.clone(), on.clone(), None, cx);
+                self.focus_shown(window, cx);
+            }
+            (Some(index), None) if !chosen.apart => {
+                self.show_in(index, &chosen.path, window, cx);
+            }
             // A file that cannot be read gets a tab all the same, which
             // says why.
-            _ => {
+            (_, None) => {
                 if self.open_path(&chosen.path, None, window, cx).is_err() {
                     self.show_file::<Code>(chosen.path.clone(), "", None, window, cx);
                     self.focus_shown(window, cx);
@@ -220,7 +334,9 @@ impl Stage {
     fn show_in(&mut self, index: usize, path: &Path, window: &mut Window, cx: &mut Context<Self>) {
         let path = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_owned());
         match (FileTab::of(&path, None), &self.tabs[index].content) {
-            (FileTab::Code(_), TabContent::Code(code)) => {
+            // Not on a tab of a file of a branch, which shows no file on
+            // disk.
+            (FileTab::Code(_), TabContent::Code(code)) if code.read(cx).branch().is_none() => {
                 code.update(cx, |code, cx| code.go_to_file(&path, cx));
             }
             (kind, _) => {

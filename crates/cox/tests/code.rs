@@ -2,6 +2,7 @@
 //! agent shows it at, and asking the language server what the code means.
 
 mod fake_lsp;
+mod git;
 use coxd::testing::scratch;
 use coxd::testing::waits;
 
@@ -14,7 +15,7 @@ use std::time::Duration;
 use cox::stage::code::{Back, Code, Forward};
 use cox::stage::servers::{LanguageServer, Servers};
 use cox::stage::tab::Shows as _;
-use cox_core::tabs::Lines;
+use cox_core::tabs::{KeptTab, Lines, OnBranch};
 use cox_editor::language::Highlight;
 use gpui::{
     Entity, Focusable as _, Modifiers, MouseButton, MouseDownEvent, MouseUpEvent, Point,
@@ -550,4 +551,98 @@ fn the_wheel_during_a_drag_selects_to_where_the_pointer_is_then(cx: &mut TestApp
 
     assert!(in_sight(&code, cx).start > 0);
     assert!(lines(cx) > before, "{before} lines, then {}", lines(cx));
+}
+
+/// A repository on `main`, whose `README.md` says "main", with a branch
+/// `side` no checkout has, on which it says "side", with `src/lib.rs`
+/// and a file that is not text, `logo.png`, which are not on disk.
+fn repository_with_a_branch(name: &str) -> PathBuf {
+    let app = scratch(name).canonicalize().unwrap();
+    std::fs::write(app.join("README.md"), "main\n").unwrap();
+    git::git(&app, &["init", "--quiet"]);
+    git::git(&app, &["add", "--all"]);
+    git::git(&app, &["commit", "--quiet", "-m", "Main"]);
+    git::git(&app, &["checkout", "--quiet", "-b", "side"]);
+    std::fs::create_dir(app.join("src")).unwrap();
+    std::fs::write(app.join("src/lib.rs"), "pub fn side() -> u32 {\n    1\n}\n").unwrap();
+    std::fs::write(app.join("logo.png"), [0x89, b'P', b'N', b'G', 0, 0]).unwrap();
+    std::fs::write(app.join("README.md"), "side\n").unwrap();
+    git::git(&app, &["add", "--all"]);
+    git::git(&app, &["commit", "--quiet", "-m", "Side"]);
+    git::git(&app, &["checkout", "--quiet", "main"]);
+    app
+}
+
+#[gpui::test]
+fn shows_a_file_of_a_branch_from_git_and_never_the_one_on_disk(cx: &mut TestAppContext) {
+    let app = repository_with_a_branch("branch-file");
+    let on = OnBranch {
+        repository: app.clone(),
+        branch: "side".to_owned(),
+    };
+    let readme = app.join("README.md");
+    let read = cox::stage::links::read_on_branch(&readme, &on);
+    assert_eq!(read.as_deref(), Ok("side\n"));
+    let (code, cx) = {
+        let (path, on) = (readme.clone(), on.clone());
+        cx.add_window_view(|_, cx| Code::on_branch(path, read, None, on, cx))
+    };
+    cx.run_until_parked();
+    assert_eq!(code.read_with(cx, |code, _| code.text()), "side\n");
+    assert_eq!(
+        code.read_with(cx, |code, _| code.title()),
+        "README.md · side"
+    );
+    assert!(cx.debug_bounds("code-branch").is_some());
+    assert_eq!(
+        code.read_with(cx, |code, _| code.kept()),
+        KeptTab::File {
+            path: readme.clone(),
+            lines: None,
+            branch: Some(on.clone()),
+        }
+    );
+
+    // The file on disk at its path changes; the tab does not follow it, nor
+    // write it.
+    std::fs::write(&readme, "main, changed\n").unwrap();
+    look(cx);
+    assert_eq!(code.read_with(cx, |code, _| code.text()), "side\n");
+    assert_eq!(std::fs::read_to_string(&readme).unwrap(), "main, changed\n");
+}
+
+#[gpui::test]
+fn colors_a_file_of_a_branch_as_any_code(cx: &mut TestAppContext) {
+    let app = repository_with_a_branch("branch-colors");
+    let on = OnBranch {
+        repository: app.clone(),
+        branch: "side".to_owned(),
+    };
+    let path = app.join("src/lib.rs");
+    let read = cox::stage::links::read_on_branch(&path, &on);
+    let (code, cx) = cx.add_window_view(|_, cx| Code::on_branch(path, read, None, on, cx));
+    cx.run_until_parked();
+    assert!(
+        code.read_with(cx, |code, _| code.highlights(0))
+            .iter()
+            .any(|(_, highlight)| *highlight == Highlight::Keyword),
+        "pub fn is colored"
+    );
+}
+
+#[test]
+fn says_why_a_file_of_a_branch_cannot_be_shown() {
+    let app = repository_with_a_branch("branch-unread");
+    let on = |branch: &str| OnBranch {
+        repository: app.clone(),
+        branch: branch.to_owned(),
+    };
+    let read = |path: &str, branch: &str| {
+        cox::stage::links::read_on_branch(&app.join(path), &on(branch)).unwrap_err()
+    };
+    assert!(read("logo.png", "side").contains("not text"));
+    assert!(read("src/lib.rs", "gone").contains("gone"));
+    // Not there: as Git says it.
+    let missing = read("nothing.rs", "side");
+    assert!(missing.contains("nothing.rs"), "{missing}");
 }

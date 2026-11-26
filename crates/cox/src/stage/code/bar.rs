@@ -12,7 +12,8 @@ use coxd::theme::{BORDER, BUTTON_HOVER, DIM, DISABLED, FAILED, FOREGROUND};
 impl Code {
     /// The bar above the code: the button that shows the project's files
     /// while they are folded, back and forward, the file's path, the
-    /// lines it is shown at, and what the tab says of what the human asked,
+    /// branch it is of, if it is of one no checkout has, the lines it is
+    /// shown at, and what the tab says of what the human asked,
     /// the server, and the file when it cannot be read.
     pub(super) fn render_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let lines = self.look.marked.map(|lines| {
@@ -78,6 +79,18 @@ impl Code {
                     .overflow_hidden()
                     .child(ellipsis(shortened(&self.file.path))),
             )
+            .children(self.branch.as_ref().map(|on| {
+                // Not the file on disk at this path: the branch's, from Git.
+                div()
+                    .debug_selector(|| "code-branch".to_owned())
+                    .flex_shrink_0()
+                    .px(px(5.))
+                    .rounded(px(4.))
+                    .border_1()
+                    .border_color(rgb(BORDER))
+                    .text_size(px(11.))
+                    .child(format!("on {}, read-only", on.branch))
+            }))
             .children(lines.map(|lines| div().flex_shrink_0().child(lines)))
             .children(self.notice.as_ref().map(|notice| {
                 div()

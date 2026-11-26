@@ -73,19 +73,29 @@ pub enum KeptTab {
     /// A terminal, with the title it last had.
     Terminal { title: String },
     /// A file shown as it is written, such as code, by its absolute path,
-    /// with the lines it was shown at, if any.
-    File { path: PathBuf, lines: Option<Lines> },
+    /// with the lines it was shown at, if any; or, with `branch`, the file
+    /// of that path on a branch no checkout has, read from Git, whose
+    /// path is as if the repository's own checkout had it.
+    File {
+        path: PathBuf,
+        lines: Option<Lines>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        branch: Option<OnBranch>,
+    },
     /// A file not chosen yet, beside the tree of the project's files. The
     /// folders open in the tree, by their absolute paths, are those it
     /// opens with, which a stage kept before the tree was beside the tabs
     /// of files; it keeps none now. The tree shows the directory of the
     /// project the human chose, by its name, if they chose one, in the
     /// checkout they chose of it, as `checkouts` has the folder of each,
-    /// by the directory's name.
+    /// by the directory's name, or on the branch no checkout has they
+    /// chose of it, as `branches` has its name.
     Files {
         open: Vec<PathBuf>,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         checkouts: Vec<(String, PathBuf)>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        branches: Vec<(String, String)>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         shown: Option<String>,
     },
@@ -117,6 +127,15 @@ pub enum KeptTab {
     MacWindows,
     /// A Mermaid diagram of a reply, by its source.
     Diagram { source: String },
+}
+
+/// A branch of a repository, by its short name, whose files Cox reads
+/// from Git, as no checkout has it on disk: the repository by the folder
+/// of its own checkout.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct OnBranch {
+    pub repository: PathBuf,
+    pub branch: String,
 }
 
 /// Lines of a file, as people number them: from 1, the last included.
@@ -153,6 +172,7 @@ mod tests {
             KeptTab::Files {
                 open: Vec::new(),
                 checkouts: Vec::new(),
+                branches: Vec::new(),
                 shown: None,
             }
         );
@@ -163,10 +183,36 @@ mod tests {
         let chosen = KeptTab::Files {
             open: Vec::new(),
             checkouts: vec![("app".to_owned(), PathBuf::from("/p/worktrees/app/b"))],
+            branches: vec![("notes".to_owned(), "side".to_owned())],
             shown: Some("app".to_owned()),
         };
         let json = serde_json::to_string(&chosen).unwrap();
         assert_eq!(serde_json::from_str::<KeptTab>(&json).unwrap(), chosen);
+    }
+
+    #[test]
+    fn a_tab_of_a_file_keeps_the_branch_it_is_from() {
+        let json = r#"{"file":{"path":"/p/a.rs","lines":null}}"#;
+        let kept: KeptTab = serde_json::from_str(json).unwrap();
+        assert_eq!(
+            kept,
+            KeptTab::File {
+                path: PathBuf::from("/p/a.rs"),
+                lines: None,
+                branch: None,
+            }
+        );
+        assert_eq!(serde_json::to_string(&kept).unwrap(), json);
+        let on = KeptTab::File {
+            path: PathBuf::from("/p/a.rs"),
+            lines: None,
+            branch: Some(OnBranch {
+                repository: PathBuf::from("/p"),
+                branch: "side".to_owned(),
+            }),
+        };
+        let json = serde_json::to_string(&on).unwrap();
+        assert_eq!(serde_json::from_str::<KeptTab>(&json).unwrap(), on);
     }
 
     #[test]

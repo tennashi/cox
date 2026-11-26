@@ -2946,6 +2946,7 @@ mod tests {
                 KeptTab::Files {
                     open: Vec::new(),
                     checkouts: Vec::new(),
+                    branches: Vec::new(),
                     shown: None,
                 },
                 KeptTab::Markdown {
@@ -3161,6 +3162,7 @@ mod tests {
                 KeptTab::File {
                     path: path.into(),
                     lines: None,
+                    branch: None,
                 },
                 KeptTab::Markdown {
                     path: "/work/app/directories/lib/plan.md".into(),

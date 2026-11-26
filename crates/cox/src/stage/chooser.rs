@@ -203,18 +203,20 @@ pub(crate) fn menu_button<T: Chooser>(
 
 /// The button, found as `id`, saying what `checkout` goes by, and
 /// whether it is a worktree, which opens `menu`, the menu of the
-/// checkouts, drawn as open while `open`.
+/// checkouts, drawn as open while `open`; a branch no checkout has is
+/// marked `branch_tag`.
 pub(crate) fn checkout_button<T: Chooser>(
     id: &'static str,
     menu: T::Menu,
     open: bool,
     checkout: &Checkout,
+    branch_tag: &'static str,
     cx: &mut Context<T>,
 ) -> Stateful<Div> {
     menu_button(id, menu, open, cx)
         .child(icon(checkout_icon(checkout), 12., DIM))
         .child(checkout.label())
-        .children(checkout_tags(checkout))
+        .children(checkout_tags(checkout, branch_tag))
         .child(caret())
 }
 
@@ -258,7 +260,8 @@ pub(crate) fn menu_list<T: Chooser>(
 /// it is, from `folder` when it is in it, what marks it, and how many
 /// files changed in it, as `counted` has them; the one at `shown`
 /// marked, and a click on one choosing it with `choose`. The branches no
-/// checkout has, if any, come last, under a heading of their own.
+/// checkout has, if any, come last, under a heading of their own, each
+/// marked `branch_tag`.
 #[expect(
     clippy::too_many_arguments,
     reason = "what the menu lists, and where, as each view has them"
@@ -272,6 +275,7 @@ pub(crate) fn checkouts_menu<T: Chooser>(
     shown: Option<usize>,
     folder: &Path,
     counted: &HashMap<PathBuf, Result<usize, String>>,
+    branch_tag: &'static str,
     choose: impl Fn(&mut T, &Checkout, &mut Context<T>) + 'static,
     cx: &mut Context<T>,
 ) -> Stateful<Div> {
@@ -316,7 +320,7 @@ pub(crate) fn checkouts_menu<T: Chooser>(
                         .text_color(rgb(FAINT))
                         .child(ellipsis(where_is(&at, folder))),
                 )
-                .children(checkout_tags(checkout));
+                .children(checkout_tags(checkout, branch_tag));
             let choose = Rc::clone(&choose);
             let chosen = checkout.clone();
             let row = crate::ui::menu::item((choice, index), label, &counted)
@@ -403,11 +407,11 @@ pub(crate) fn tag(said: String, color: u32) -> Div {
 
 /// What marks `checkout`: for a worktree, the chat Cox made it for, or
 /// that it was made by hand, and whether it is outside the folder; for a
-/// branch no checkout has, that only its commits are seen.
-pub(crate) fn checkout_tags(checkout: &Checkout) -> Vec<Div> {
+/// branch no checkout has, `branch_tag`, which says how it is seen.
+pub(crate) fn checkout_tags(checkout: &Checkout, branch_tag: &'static str) -> Vec<Div> {
     let worktree = match checkout {
         Checkout::Worktree(worktree) => worktree,
-        Checkout::Branch { .. } => return vec![tag("commits only".to_owned(), FAINT)],
+        Checkout::Branch { .. } => return vec![tag(branch_tag.to_owned(), FAINT)],
         Checkout::Own { .. } => return Vec::new(),
     };
     let made = match worktree.made_for {

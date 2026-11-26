@@ -208,6 +208,7 @@ fn the_chats_of_a_folder_share_its_stage() {
                     KeptTab::Files {
                         open: Vec::new(),
                         checkouts: Vec::new(),
+                        branches: Vec::new(),
                         shown: None,
                     },
                     page("https://b/"),
@@ -246,6 +247,7 @@ fn the_chats_of_a_folder_share_its_stage() {
             KeptTab::Files {
                 open: Vec::new(),
                 checkouts: Vec::new(),
+                branches: Vec::new(),
                 shown: None,
             },
             page("https://b/"),

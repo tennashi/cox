@@ -91,6 +91,10 @@ use coxd::theme::{
 
 pub(crate) const KEY_CONTEXT: &str = "Changes";
 
+/// What marks a branch no checkout has among the checkouts: the tab sees
+/// what it committed, not what changed in files on disk.
+const BRANCH_TAG: &str = "commits only";
+
 /// How often the tab looks at what changed.
 const LOOK_EVERY: Duration = Duration::from_secs(2);
 
@@ -997,7 +1001,7 @@ impl Changes {
         shown.read.as_ref().ok()?;
         let checkout = shown.checkout()?;
         let open = self.menus.is_open(Menu::Checkouts);
-        let button = checkout_button("checkout", Menu::Checkouts, open, checkout, cx);
+        let button = checkout_button("checkout", Menu::Checkouts, open, checkout, BRANCH_TAG, cx);
         let checkouts = open.then(|| self.render_checkouts_menu(shown, cx));
         let compared = self
             .history()
@@ -1056,6 +1060,7 @@ impl Changes {
             Some(shown.shown),
             &self.folder,
             &self.counted,
+            BRANCH_TAG,
             move |changes: &mut Self, checkout: &Checkout, cx| match checkout.branch() {
                 Some(branch) => changes.show_branch(name.clone(), branch.to_owned(), cx),
                 None => changes.show_checkout(name.clone(), checkout.folder().to_owned(), cx),

@@ -436,15 +436,24 @@ fn tabs(told: &mut String, view: &ChatView, cx: &App) {
         let what = match tab {
             KeptTab::Page { url, title } => format!("page {url} {title:?}"),
             KeptTab::Markdown { path } => format!("markdown {}", path.display()),
-            KeptTab::File { path, lines } => match lines {
-                Some(lines) => format!(
-                    "file {} lines {}–{}",
-                    path.display(),
-                    lines.first,
-                    lines.last
-                ),
-                None => format!("file {}", path.display()),
-            },
+            KeptTab::File {
+                path,
+                lines,
+                branch,
+            } => {
+                let on = branch.as_ref().map_or_else(String::new, |on| {
+                    format!(" on branch {}, from Git", on.branch)
+                });
+                match lines {
+                    Some(lines) => format!(
+                        "file {}{on} lines {}–{}",
+                        path.display(),
+                        lines.first,
+                        lines.last
+                    ),
+                    None => format!("file {}{on}", path.display()),
+                }
+            }
             KeptTab::Files { .. } => "files, no file chosen".to_owned(),
             KeptTab::Changes {
                 folder,
