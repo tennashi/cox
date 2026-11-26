@@ -39,8 +39,8 @@ export const view = {
   sel: null,
   /// The nodes pointed at from a list, which light up as the chosen one.
   mark: new Set(),
-  /// The lines lit, as "a>b", when a function is chosen: from its type
-  /// to what it reaches.
+  /// The lines lit, each as its two ends, when a function is chosen:
+  /// from its type to what it reaches.
   litPairs: null,
   /// Drift drawn as lines, between two nodes each, while the drift is
   /// shown, and the one pointed at, as "a|b".
@@ -119,17 +119,32 @@ export function chain(f) {
 
 const size = (id) => (inside(id) ? [IW, IH] : [PW, PH]);
 
+// The card that stands for the node `id` among those at `r` in the level
+// inside `f`: its own, or that of the nearest box it is inside of which
+// is drawn closed there.
+const standsFor = (id, r, f) =>
+  chain(id)
+    .reverse()
+    .find((at) => at !== f && r[at]);
+// The cards lit as the chosen one is: those of the nodes pointed at.
+const marked = (r, f) => new Set([...view.mark].map((id) => standsFor(id, r, f)).filter(Boolean));
+
 // Opening a box replaces the lines to it with those of the level inside
 // it; the other lines stay. A weak line shows only while one of its ends
 // is chosen or pointed at.
-const showWeak = (e) => !e[4] || [e[0], e[1]].some((n) => n === view.sel || view.mark.has(n));
+const showWeak = (mark) => (e) => !e[4] || [e[0], e[1]].some((n) => n === view.sel || mark.has(n));
 // A level a person placed shows, of the levels above, only what it
 // places around its box, so of their lines only those between what
 // `shown` there, by id.
-function wiresOf(f, shown) {
+function wiresOf(f, shown, mark) {
   let wires = top.wires;
   for (const g of chain(f)) wires = wires.filter(([x, y]) => x !== g && y !== g).concat(levels[g].wires);
-  return wires.filter(([x, y]) => x in shown && y in shown).filter(showWeak);
+  return wires.filter(([x, y]) => x in shown && y in shown).filter(showWeak(mark));
+}
+// A level laid out, with its lines and the cards lit in it.
+function laid(f, r, box, frames, parts) {
+  const mark = marked(r, f);
+  return { id: f, r, box, frames, mark, wires: wiresOf(f, { ...r, ...frames }, mark), parts };
 }
 
 /// The level inside `f`, or the top for "root", laid out: where each node
@@ -144,7 +159,8 @@ export function geo(f) {
     column(top.left, -GX - PW);
     column(top.right, GX);
     r[top.center] = R(-CW / 2, -CH / 2, CW, CH);
-    return { id: f, r, box: null, frames: {}, wires: top.wires.filter(showWeak), parts: [] };
+    const mark = marked(r, f);
+    return { id: f, r, box: null, frames: {}, mark, wires: top.wires.filter(showWeak(mark)), parts: [] };
   }
   const d = levels[f];
   // A level gone as the map was read again draws as the top until the
@@ -173,7 +189,13 @@ export function geo(f) {
     frames[parentOf(f)] = grown(above.box);
     for (const [id, x, y] of d.parts) r[id] = R(box.x + x, box.y + y, ...size(id));
     r[f] = box;
-    return { id: f, r, box, frames, wires: wiresOf(f, { ...r, ...frames }), parts: d.parts.map((p) => p[0]) };
+    return laid(
+      f,
+      r,
+      box,
+      frames,
+      d.parts.map((p) => p[0]),
+    );
   }
   const [bx, by, bw, bh] = d.box;
   const box = R(bx, by, bw, bh);
@@ -193,7 +215,13 @@ export function geo(f) {
   r[f] = box;
   const frames = {};
   for (const [k, v] of Object.entries(d.frames)) frames[k] = R(...v);
-  return { id: f, r, box, frames, wires: wiresOf(f, { ...r, ...frames }), parts: d.parts.map((p) => p[0]) };
+  return laid(
+    f,
+    r,
+    box,
+    frames,
+    d.parts.map((p) => p[0]),
+  );
 }
 
 const outline = (rects) => ({
@@ -351,7 +379,7 @@ function card(id, r, op = 1, appearing = 0) {
   const w = r.w;
   const h = r.h;
   const sc = appearing ? lerp(0.85, 1, op) : 1;
-  const on = id === view.sel || view.mark.has(id);
+  const on = id === view.sel || lit.has(id);
   const tf = `translate(${r.x + w / 2},${r.y + h / 2}) scale(${sc}) translate(${-w / 2},${-h / 2})`;
   const stack = p.many
     ? [8, 4]
@@ -398,6 +426,8 @@ const W = document.getElementById("w");
 let pair = null;
 let s = 0;
 let anim = false;
+// The cards lit in what is being drawn, as the chosen one is.
+let lit = new Set();
 let cam = { x: 0, y: 0, k: 1 };
 let world = { x0: -100, x1: 100, y0: -100, y1: 100 };
 const hooks = [];
@@ -431,8 +461,16 @@ export function draw() {
   const onlyA = (id) => gB && !(id in gB.r);
   const onlyB = (id) => !(id in gA.r);
   const rect = (id) => g[id];
-  const isLit = (x, y) =>
-    view.litPairs ? view.litPairs.has(`${x}>${y}`) || view.litPairs.has(`${y}>${x}`) : view.sel && (x === view.sel || y === view.sel);
+  const here = gB ?? gA;
+  lit = here.mark;
+  // The lines a function chosen lights go between the cards that stand
+  // for their ends here.
+  const reached = new Map();
+  for (const ends of view.litPairs ?? []) {
+    const [x, y] = ends.map((id) => standsFor(id, here.r, here.id));
+    if (x && y && x !== y) reached.set(pairKey(x, y), [x, y]);
+  }
+  const isLit = (x, y) => (view.litPairs ? reached.has(pairKey(x, y)) : view.sel && (x === view.sel || y === view.sel));
   const edgesOf = (gg, f) => (gg ? { ...gg.frames, ...(gg.box ? { [f]: gg.box } : {}) } : {});
   const bA = edgesOf(gA, a);
   const bB = edgesOf(gB, b);
@@ -455,8 +493,8 @@ export function draw() {
   };
   const nA = near(gA);
   const nB = near(gB);
-  const wires = (gB ?? gA).wires;
-  const litNodes = new Set(view.sel ? [view.sel, ...wires.filter(([x, y]) => x === view.sel || y === view.sel).flat()] : []);
+  const wires = here.wires;
+  const litNodes = new Set([...lit, ...(view.sel ? [view.sel, ...wires.filter(([x, y]) => x === view.sel || y === view.sel).flat()] : [])]);
   const dim = (id) => (litNodes.has(id) ? 1 : lerp(nA && !nA.has(id) ? FAR : 1, nB && !nB.has(id) ? FAR : 1, t1));
   const inA = within(gA);
   const inB = gB && within(gB);
@@ -502,6 +540,12 @@ export function draw() {
       wire(path(mix(A0[E + j].a, A1[E + I + j].a), mix(A0[E + j].b, A1[E + I + j].b)), e[0], e[1], e[2], onlyB(e[0]) || onlyB(e[1]) ? t2 : 1),
     );
     int.forEach((e, i) => wire(path(A1[E + i].a, A1[E + i].b), e[0], e[1], e[2], t2));
+  }
+  // What a function chosen reaches where the level draws no line.
+  if (!between) {
+    const drawn = new Set(wires.map(([x, y]) => pairKey(x, y)));
+    const more = [...reached].filter(([key]) => !drawn.has(key)).map(([, ends]) => ends);
+    anchors(more, rect).forEach((P, i) => wire(path(P.a, P.b), ...more[i], false));
   }
   if (!between)
     for (const [x, y] of view.ghost) {
