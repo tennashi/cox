@@ -1,7 +1,7 @@
 //! What Cox keeps of a stage: the tabs it had open, in their order, which
 //! was shown, and which chat each is of. Not what runs in them: a page is
 //! kept by its address, a file by its path, the tab of a file not chosen
-//! yet as such, what changed in the project's files as such, the map
+//! yet by what the tree beside it shows, what changed in the project's files as such, the map
 //! of the project by where it is open, an Android emulator by the device
 //! it runs, a window of another app on the Mac by its app and title, the
 //! lists of the devices and of the windows as such, and a terminal only as
@@ -78,8 +78,17 @@ pub enum KeptTab {
     /// A file not chosen yet, beside the tree of the project's files. The
     /// folders open in the tree, by their absolute paths, are those it
     /// opens with, which a stage kept before the tree was beside the tabs
-    /// of files; it keeps none now.
-    Files { open: Vec<PathBuf> },
+    /// of files; it keeps none now. The tree shows the directory of the
+    /// project the human chose, by its name, if they chose one, in the
+    /// checkout they chose of it, as `checkouts` has the folder of each,
+    /// by the directory's name.
+    Files {
+        open: Vec<PathBuf>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        checkouts: Vec<(String, PathBuf)>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        shown: Option<String>,
+    },
     /// What changed in the files of the Git repository of a folder, by
     /// its absolute path, as Git tells it, with the checkout of each of
     /// its repositories the human chose to see, if they chose one: by the
@@ -134,6 +143,30 @@ mod tests {
         let json = serde_json::to_string(&owned).unwrap();
         assert!(json.contains(r#""owners":[7]"#), "{json}");
         assert_eq!(owned.owned(|chat| Some(chat + 1)).owner(0), Some(8));
+    }
+
+    #[test]
+    fn a_tab_of_files_keeps_the_folder_chosen() {
+        let kept: KeptTab = serde_json::from_str(r#"{"files":{"open":[]}}"#).unwrap();
+        assert_eq!(
+            kept,
+            KeptTab::Files {
+                open: Vec::new(),
+                checkouts: Vec::new(),
+                shown: None,
+            }
+        );
+        assert_eq!(
+            serde_json::to_string(&kept).unwrap(),
+            r#"{"files":{"open":[]}}"#
+        );
+        let chosen = KeptTab::Files {
+            open: Vec::new(),
+            checkouts: vec![("app".to_owned(), PathBuf::from("/p/worktrees/app/b"))],
+            shown: Some("app".to_owned()),
+        };
+        let json = serde_json::to_string(&chosen).unwrap();
+        assert_eq!(serde_json::from_str::<KeptTab>(&json).unwrap(), chosen);
     }
 
     #[test]

@@ -74,6 +74,7 @@ pub mod android;
 mod asked;
 pub(crate) mod bar;
 pub mod changes;
+mod chooser;
 pub mod code;
 mod column;
 pub mod commands;
@@ -127,7 +128,7 @@ use crate::stage::playground::Playground;
 use crate::stage::plugins::Plugins;
 use crate::stage::tab::{Shows, Tab, TabContent};
 use crate::stage::terminal::{Exited, Terminal};
-use crate::stage::tree::{Chosen, Tree};
+use crate::stage::tree::{Chosen, Rerooted, Tree};
 use crate::stage::windows::{ShowWindow, Windows};
 use crate::ui::Panel;
 use crate::ui::snippet::Snippet;
@@ -253,6 +254,8 @@ pub struct Stage {
     files: Entity<Tree>,
     /// Shows the files chosen on the tree.
     _chosen: Subscription,
+    /// Keeps what the tree shows, as the human chooses it.
+    _rerooted: Subscription,
 }
 
 struct Relayed {
@@ -290,10 +293,13 @@ impl Stage {
         let chosen = cx.subscribe_in(&files, window, |stage, _, chosen: &Chosen, window, cx| {
             stage.open_chosen(chosen, window, cx);
         });
+        // What the tree shows is kept with the tabs of files not chosen yet.
+        let rerooted = cx.subscribe(&files, |stage, _, _: &Rerooted, cx| stage.changed(cx));
         let sighted = cx.observe(&panel, |stage, _, cx| stage.tell_sight(cx));
         Self {
             files,
             _chosen: chosen,
+            _rerooted: rerooted,
             _sighted: sighted,
             cef,
             plugins: Plugins::new(cwd.clone()),
@@ -397,8 +403,15 @@ impl Stage {
                     let text = std::fs::read_to_string(&path).unwrap_or_default();
                     stage.push_file::<Code>(path, &text, lines, show, window, cx);
                 }
-                KeptTab::Files { open } => {
-                    stage.files.update(cx, |files, cx| files.open_too(open, cx));
+                KeptTab::Files {
+                    open,
+                    checkouts,
+                    shown,
+                } => {
+                    stage.files.update(cx, |files, cx| {
+                        files.choosing(checkouts, shown, cx);
+                        files.open_too(open, cx);
+                    });
                     stage.push_files(show, cx);
                 }
                 KeptTab::Changes {
@@ -443,7 +456,16 @@ impl Stage {
     #[must_use]
     pub fn tabs(&self, cx: &App) -> KeptTabs<u64> {
         KeptTabs {
-            tabs: self.tabs.iter().map(|tab| tab.content.kept(cx)).collect(),
+            tabs: self
+                .tabs
+                .iter()
+                .map(|tab| match tab.content.kept(cx) {
+                    // The tree beside it is the stage's, which keeps what it
+                    // shows.
+                    KeptTab::Files { .. } => self.files.read(cx).kept(),
+                    kept => kept,
+                })
+                .collect(),
             shown: self.tabs.shown_index().unwrap_or(0),
             owners: self.tabs.iter().map(|tab| tab.owner).collect(),
         }

@@ -10,6 +10,7 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use cox::stage::tree::{Chosen, Tree, Wrote};
+use cox_core::tabs::KeptTab;
 use cox_git::changes::How;
 use git::git;
 use gpui::{Entity, Modifiers, TestAppContext, VisualTestContext};
@@ -318,4 +319,185 @@ fn marks_the_files_the_agents_wrote_until_they_are_committed(cx: &mut TestAppCon
     git(&root, &["commit", "--quiet", "--all", "-m", "Main"]);
     look(cx);
     assert_eq!(writers(cx), [Vec::<u64>::new(), vec![], vec![]]);
+}
+
+fn press(selector: &'static str, cx: &mut VisualTestContext) {
+    let bounds = cx.debug_bounds(selector).expect("it is drawn");
+    cx.simulate_click(bounds.center(), Modifiers::none());
+    cx.run_until_parked();
+}
+
+/// A Git repository at `folder`, with `paths` committed, empty.
+fn repository(folder: &Path, paths: &[&str]) {
+    for path in paths {
+        let path = folder.join(path);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, "").unwrap();
+    }
+    git(folder, &["init", "--quiet"]);
+    git(folder, &["add", "--all"]);
+    git(folder, &["commit", "--quiet", "-m", "Files"]);
+}
+
+/// A project whose directories `app` and `notes` are repositories, with
+/// a wiki beside them, and `app` with a worktree where Cox makes them,
+/// on the branch `search`, with a file of its own, `s.txt`; and the
+/// folder of that worktree.
+fn project(name: &str) -> (PathBuf, PathBuf) {
+    let project = scratch(name, &["wiki/index.md"]);
+    let app = project.join("directories/app");
+    repository(&app, &["src/main.rs", "README.md"]);
+    repository(&project.join("directories/notes"), &["today.md"]);
+    let search = project.join("worktrees/app/search");
+    git(
+        &app,
+        &[
+            "worktree",
+            "add",
+            "--quiet",
+            "-b",
+            "search",
+            &search.to_string_lossy(),
+        ],
+    );
+    std::fs::write(search.join("s.txt"), "").unwrap();
+    (project, search)
+}
+
+/// The folder the tree shows.
+fn root(tree: &Entity<Tree>, cx: &mut VisualTestContext) -> PathBuf {
+    tree.read_with(cx, |tree, _| tree.root().to_owned())
+}
+
+#[gpui::test]
+fn shows_the_first_directory_of_a_project_until_the_human_chooses_another(cx: &mut TestAppContext) {
+    let (project, _) = project("directories");
+    let (tree, _, cx) = open(cx, &project, Vec::new());
+    assert_eq!(
+        tree.read_with(cx, |tree, _| tree.directories()),
+        ["app", "notes"]
+    );
+    let app = project.join("directories/app");
+    assert_eq!(root(&tree, cx), app);
+    assert_eq!(shown(&tree, &app, cx), ["src", "README.md"]);
+
+    press("files-directory-1", cx);
+    let notes = project.join("directories/notes");
+    assert_eq!(root(&tree, cx), notes);
+    assert_eq!(shown(&tree, &notes, cx), ["today.md"]);
+}
+
+#[gpui::test]
+fn keeps_quiet_with_one_directory_of_one_checkout(cx: &mut TestAppContext) {
+    let project = scratch("one-directory", &["wiki/index.md"]);
+    let app = project.join("directories/app");
+    repository(&app, &["README.md"]);
+    let (tree, _, cx) = open(cx, &project, Vec::new());
+    assert_eq!(root(&tree, cx), app);
+    // The directory, but no menu of checkouts, with one to choose.
+    assert!(cx.debug_bounds("files-directory-0").is_some());
+    assert!(cx.debug_bounds("files-checkout").is_none());
+}
+
+#[gpui::test]
+fn shows_a_worktree_of_a_directory_as_the_human_chooses_it(cx: &mut TestAppContext) {
+    let (project, search) = project("worktree");
+    let (tree, _, cx) = open(cx, &project, Vec::new());
+    assert_eq!(
+        tree.read_with(cx, |tree, _| tree
+            .checkouts()
+            .iter()
+            .map(coxd::repositories::Checkout::label)
+            .collect::<Vec<_>>()),
+        ["main", "search"]
+    );
+
+    press("files-checkout", cx);
+    assert!(cx.debug_bounds("files-checkouts").is_some());
+    press("files-checkout-choice-1", cx);
+    assert_eq!(root(&tree, cx), search);
+    assert_eq!(shown(&tree, &search, cx), ["src", "README.md", "s.txt"]);
+
+    // Its own checkout again, by the menu.
+    press("files-checkout", cx);
+    press("files-checkout-choice-0", cx);
+    assert_eq!(root(&tree, cx), project.join("directories/app"));
+}
+
+#[gpui::test]
+fn shows_a_folder_with_no_directories_as_it_is(cx: &mut TestAppContext) {
+    // As a worktree a chat works in, or a sketch.
+    let (_, search) = project("no-directories");
+    let (tree, _, cx) = open(cx, &search, Vec::new());
+    look(cx);
+    assert_eq!(root(&tree, cx), search);
+    assert_eq!(shown(&tree, &search, cx), ["src", "README.md", "s.txt"]);
+    assert!(cx.debug_bounds("files-chooser").is_none());
+    assert_eq!(
+        tree.read_with(cx, |tree, _| tree.directories()),
+        Vec::<String>::new()
+    );
+}
+
+#[gpui::test]
+fn keeps_what_the_human_chose_to_show(cx: &mut TestAppContext) {
+    let (project, search) = project("keeps");
+    let (tree, _, cx) = open(cx, &project, Vec::new());
+    assert_eq!(
+        tree.read_with(cx, |tree, _| tree.kept()),
+        KeptTab::Files {
+            open: Vec::new(),
+            checkouts: Vec::new(),
+            shown: None,
+        }
+    );
+    press("files-checkout", cx);
+    press("files-checkout-choice-1", cx);
+    let kept = tree.read_with(cx, |tree, _| tree.kept());
+    assert_eq!(
+        kept,
+        KeptTab::Files {
+            open: Vec::new(),
+            checkouts: vec![("app".to_owned(), search.clone())],
+            shown: Some("app".to_owned()),
+        }
+    );
+
+    // A stage that opens again shows it again.
+    let KeptTab::Files {
+        checkouts, shown, ..
+    } = kept
+    else {
+        unreachable!()
+    };
+    let folder = project.clone();
+    let (again, cx) = cx.add_window_view(|_, cx| Tree::new(folder, Vec::new(), cx));
+    again.update(cx, |tree, cx| tree.choosing(checkouts, shown, cx));
+    cx.run_until_parked();
+    assert_eq!(root(&again, cx), search);
+}
+
+#[gpui::test]
+fn follows_the_file_shown_to_the_checkout_it_is_in(cx: &mut TestAppContext) {
+    let (project, search) = project("follows-file");
+    let elsewhere = scratch("follows-file-elsewhere", &["a.txt"]);
+    let (tree, _, cx) = open(cx, &project, Vec::new());
+    let marked = |tree: &Entity<Tree>, cx: &mut VisualTestContext| {
+        tree.read_with(cx, |tree, _| tree.current().map(Path::to_owned))
+    };
+
+    let file = search.join("s.txt");
+    tree.update(cx, |tree, cx| tree.reveal(Some(file.clone()), cx));
+    cx.run_until_parked();
+    assert_eq!(root(&tree, cx), search);
+    assert_eq!(marked(&tree, cx), Some(file));
+
+    // A file of the project's in none of the checkouts, as of its wiki, or
+    // of no project's: the tree stays, marking none of its rows.
+    for file in [project.join("wiki/index.md"), elsewhere.join("a.txt")] {
+        tree.update(cx, |tree, cx| tree.reveal(Some(file.clone()), cx));
+        cx.run_until_parked();
+        assert_eq!(root(&tree, cx), search);
+        assert!(!tree.read_with(cx, |tree, _| tree.shown()).contains(&file));
+    }
 }

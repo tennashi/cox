@@ -2943,7 +2943,11 @@ mod tests {
 
         let tabs = KeptTabs {
             tabs: vec![
-                KeptTab::Files { open: Vec::new() },
+                KeptTab::Files {
+                    open: Vec::new(),
+                    checkouts: Vec::new(),
+                    shown: None,
+                },
                 KeptTab::Markdown {
                     path: "/work/plan.md".into(),
                 },
