@@ -56,6 +56,29 @@ pub fn raw(folder: &Path, args: &[impl AsRef<OsStr>]) -> Result<String, String> 
     }
 }
 
+/// Runs Git in `folder` with `args`, and answers what it printed, byte
+/// for byte, for output that may not be text, as a file's.
+///
+/// # Errors
+///
+/// When Git does not start, or fails, with what it wrote on its standard
+/// error.
+pub fn bytes(folder: &Path, args: &[impl AsRef<OsStr>]) -> Result<Vec<u8>, String> {
+    let output = command()
+        .arg("-C")
+        .arg(folder)
+        .args(args)
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|error| format!("Git does not start: {error}"))?;
+    if output.status.success() {
+        Ok(output.stdout)
+    } else {
+        Err(String::from_utf8_lossy(&output.stderr).trim().to_owned())
+    }
+}
+
 /// The variables that name a repository, its index or its objects, by
 /// which Git would ask of another repository than the folder's.
 const REPOSITORY_VARIABLES: [&str; 7] = [
