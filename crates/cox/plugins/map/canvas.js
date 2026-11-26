@@ -10,6 +10,10 @@
 // The lines between boxes whose code meets are as thick as it meets
 // often; a box's two heaviest are always drawn, the rest, weak, only
 // while one of its ends is chosen or pointed at from a list.
+//
+// A function chosen splits the level: the cards of what it relates to
+// leave their places for an area above the box, laid out as the calls
+// flow, from the left to the right, and the rest stays under it, faint.
 
 import { ICON } from "./icons.js";
 
@@ -29,6 +33,29 @@ const OUT = 150;
 // How faint what the open box's lines do not reach is drawn.
 const FAR = 0.42;
 const SIDE = { left: "l", right: "r", top: "t", bottom: "b" };
+// The area a function chosen is laid out in: how far its columns and the
+// cards of one stand apart, the room over a column for what it is, the
+// gap between the rows it wraps into, the space around it inside its
+// edge and out, how far the lines that pass a column stand apart, how
+// faint the rest of the level is under it, and its lines, and those of
+// them that end at a card of the area, how small it may be drawn, and how
+// many seconds the cards take to go there.
+const AREA = { across: 72, down: 14, label: 24, wrap: 30, pad: 26, out: 44, lane: 6, rest: 0.36, lines: 0.4, ends: 0.2, readable: 0.62, takes: 0.4 };
+// The columns of the area, from the left, each with what is written over
+// it: who calls the function, its own type, what it calls, the types
+// whose fields it uses, and what those fields point to; at the far sides,
+// what stands in the level for code it does not draw.
+const COLUMNS = [
+  ["from", "Called from elsewhere"],
+  ["caller", "Called from"],
+  ["own", ""],
+  ["call", "Calls"],
+  ["field", "Uses fields of"],
+  ["target", "Fields point to"],
+  ["to", "Reaches elsewhere"],
+];
+// Which column a card that is in several ways related goes to.
+const FIRST = ["call", "caller", "field", "target"];
 
 // What is drawn, and how: the map's nodes, its top and levels as the
 // engine reads them, and where the page is in it.
@@ -39,9 +66,9 @@ export const view = {
   sel: null,
   /// The nodes pointed at from a list, which light up as the chosen one.
   mark: new Set(),
-  /// The lines lit, each as its two ends, when a function is chosen:
-  /// from its type to what it reaches.
-  litPairs: null,
+  /// The function chosen, as `focus` was given it, and the `level` it
+  /// was chosen in.
+  focus: null,
   /// Drift drawn as lines, between two nodes each, while the drift is
   /// shown, and the one pointed at, as "a|b".
   ghost: [],
@@ -293,6 +320,11 @@ function anchors(list, rect) {
   }
   return out;
 }
+// A line from `a` to `b` by the `way` past the columns between them.
+function pathBy(a, b, way) {
+  const k = (Math.sign(way.to - way.from) * AREA.across) / 2;
+  return `M${a.x} ${a.y}C${a.x + k} ${a.y},${way.from - k} ${way.y},${way.from} ${way.y}L${way.to} ${way.y}C${way.to + k} ${way.y},${b.x - k} ${b.y},${b.x} ${b.y}`;
+}
 function path(a, b) {
   const d = Math.hypot(b.x - a.x, b.y - a.y);
   const k = Math.min(130, Math.max(36, d * 0.42));
@@ -420,6 +452,256 @@ function boundary(id, r, op) {
 const cv = document.getElementById("cv");
 const W = document.getElementById("w");
 
+// What the panels leave of the drawing, as `focus` was told: its width
+// and height, and where it starts from the left.
+let clear = { left: 0, right: 0 };
+function room() {
+  const beside = clear.left || clear.right;
+  return {
+    left: clear.left,
+    w: Math.max(1, cv.clientWidth - clear.left - clear.right),
+    h: Math.max(1, beside ? cv.clientHeight : innerHeight * 0.5 - cv.getBoundingClientRect().top),
+  };
+}
+
+// The level `g` as the function chosen arranges it: where each card and
+// each edge is, and, when the function relates to cards of the level,
+// those `taken` to its area, the area's `edge`, what is written in it,
+// the places the cards left, and the lines between them, by their ends:
+// each from a card to a card, whether it has a head at both ends, the
+// sides it leaves and meets them at, and the way it takes past the
+// columns between them, if there are some.
+// With no function chosen, or one that relates to nothing drawn here,
+// the level as it is.
+function arrangement(g) {
+  const still = { id: g.id, r: g.r, frames: g.frames, taken: null, lines: null };
+  const chosen = view.focus;
+  if (!chosen || chosen.level !== g.id || !g.box) return still;
+  const cardOf = (id) => standsFor(id, g.r, g.id);
+  const own = cardOf(chosen.own);
+  if (!own) return still;
+  const parts = new Set(g.parts);
+  const column = new Map([[own, "own"]]);
+  const lines = new Map();
+  for (const role of FIRST)
+    for (const [from, to, as] of chosen.links) {
+      const [x, y] = [cardOf(from), cardOf(to)];
+      if (as !== role || !x || !y || x === y) continue;
+      // Called both ways, the line has a head at both ends.
+      const key = pairKey(x, y);
+      const had = lines.get(key);
+      lines.set(key, had ? [had[0], had[1], had[2] || had[0] !== x] : [x, y, false]);
+      const other = role === "caller" ? x : y;
+      if (!column.has(other)) column.set(other, parts.has(other) ? role : role === "caller" ? "from" : "to");
+    }
+  if (column.size < 2) return still;
+
+  // Each column as stacks of a few cards, and the stacks in rows, as many
+  // as are wide enough to read in what the panels leave.
+  const { w, h } = room();
+  const most = Math.max(2, Math.min(5, Math.floor((h * 0.45) / AREA.readable / (IH + AREA.down))));
+  const stacks = [];
+  for (const [key, says] of COLUMNS) {
+    const ids = [...column].filter(([, at]) => at === key).map(([id]) => id);
+    for (let i = 0; i < ids.length; i += most) {
+      const of = ids.slice(i, i + most);
+      stacks.push({
+        says: key === "own" ? chosen.name : says,
+        more: i > 0,
+        own: key === "own",
+        ids: of,
+        w: Math.max(...of.map((id) => g.r[id].w)),
+        h: of.reduce((sum, id) => sum + g.r[id].h, 0) + (of.length - 1) * AREA.down,
+      });
+    }
+  }
+  const widest = w / AREA.readable - 2 * AREA.pad;
+  const rows = [];
+  for (const stack of stacks) {
+    const row = rows.at(-1);
+    if (row && row.w + AREA.across + stack.w <= widest) {
+      row.stacks.push(stack);
+      row.w += AREA.across + stack.w;
+      row.h = Math.max(row.h, stack.h);
+    } else rows.push({ stacks: [stack], w: stack.w, h: stack.h });
+  }
+  const wide = Math.max(...rows.map((row) => row.w)) + 2 * AREA.pad;
+  const tall = rows.reduce((sum, row) => sum + AREA.label + row.h, 0) + (rows.length - 1) * AREA.wrap + 2 * AREA.pad;
+
+  // The area stands over the box and what is beside it; what is above
+  // them moves up to make room, and the edges around them grow.
+  const above = (q) => q.y + q.h <= g.box.y;
+  const rest = Object.keys(g.r).filter((id) => !column.has(id));
+  const floor = Math.min(...rest.filter((id) => !above(g.r[id])).map((id) => g.r[id].y));
+  const edge = R(middle(g.box).x - wide / 2, floor - AREA.out - tall, wide, tall);
+  const up = g.box.y - edge.y + AREA.out;
+  const moved = (q) => (above(q) ? R(q.x, q.y - up, q.w, q.h) : q);
+  const r = {};
+  for (const id of rest) r[id] = moved(g.r[id]);
+  const frames = {};
+  for (const [id, q] of Object.entries(g.frames)) frames[id] = R(q.x, q.y - up, q.w, q.h + up);
+  const left = [...column.keys()].map((id) => moved(g.r[id]));
+  const labels = [];
+  const where = new Map();
+  let y = edge.y + AREA.pad;
+  for (const row of rows) {
+    let x = edge.x + AREA.pad;
+    row.stacks.forEach((stack, n) => {
+      let at = y + AREA.label + (row.h - stack.h) / 2;
+      Object.assign(stack, { x, top: at, bottom: at + stack.h });
+      // A column says what it is once in a row.
+      if (!stack.more || !n) labels.push({ x, y: at - 9, says: stack.says, own: stack.own });
+      for (const id of stack.ids) {
+        r[id] = R(x + (stack.w - g.r[id].w) / 2, at, g.r[id].w, g.r[id].h);
+        where.set(id, { row, n });
+        at += g.r[id].h + AREA.down;
+      }
+      x += stack.w + AREA.across;
+    });
+    row.middle = y + AREA.label + row.h / 2;
+    y += AREA.label + row.h + AREA.wrap;
+  }
+  // In a row, a line goes from side to side, as the calls flow; past the
+  // columns between its ends, over them or under, whichever its far end
+  // is nearer, the lines of one card together and those of another apart.
+  // To another row, it comes in from the side, not through the cards
+  // stacked over its end.
+  const lanes = new Map();
+  for (const line of lines.values()) {
+    const [a, b] = [where.get(line[0]), where.get(line[1])];
+    if (a.row !== b.row)
+      line[3] = [rows.indexOf(a.row) < rows.indexOf(b.row) ? "b" : "t", middle(r[line[0]]).x <= middle(r[line[1]]).x ? "l" : "r"];
+    if (a.row !== b.row || a.n === b.n) continue;
+    const on = a.n < b.n;
+    line[3] = on ? ["r", "l"] : ["l", "r"];
+    const passed = a.row.stacks.slice(Math.min(a.n, b.n) + 1, Math.max(a.n, b.n));
+    if (!passed.length) continue;
+    const over = middle(r[line[1]]).y < a.row.middle;
+    const key = `${rows.indexOf(a.row)}|${over}`;
+    const taken = lanes.get(key) ?? lanes.set(key, new Map()).get(key);
+    const lane = taken.get(line[0]) ?? taken.set(line[0], taken.size).get(line[0]);
+    const [x0, x1] = [passed[0].x, passed.at(-1).x + passed.at(-1).w];
+    line[4] = {
+      y: over
+        ? Math.min(...passed.map((stack) => stack.top)) - AREA.label - 4 - AREA.lane * lane
+        : Math.max(...passed.map((stack) => stack.bottom)) + 10 + AREA.lane * lane,
+      from: on ? x0 : x1,
+      to: on ? x1 : x0,
+    };
+  }
+  return { id: g.id, r, frames, taken: new Set(column.keys()), lines, edge, labels, left, box: g.box };
+}
+
+// The area of an arrangement, under its cards: its edge, what is written
+// over its columns, and the places its cards left.
+function areaUnder(p, op) {
+  if (!p.taken || op <= 0) return "";
+  const { edge } = p;
+  return `<g opacity="${op}"><rect x="${edge.x}" y="${edge.y}" width="${edge.w}" height="${edge.h}" rx="16" fill="var(--surface)" fill-opacity=".55" stroke="var(--border-strong)"/>${p.left
+    .map(
+      (q) =>
+        `<rect x="${q.x}" y="${q.y}" width="${q.w}" height="${q.h}" rx="10" fill="none" stroke="var(--border-strong)" stroke-dasharray="4 5" opacity=".6"/>`,
+    )
+    .join("")}${p.labels
+    .map((l) =>
+      l.own
+        ? `<text class="mono" x="${l.x}" y="${l.y}" font-size="12.5" font-weight="600" fill="var(--accent)">${esc(l.says)}</text>`
+        : `<text x="${l.x}" y="${l.y}" font-size="11.5" fill="var(--dim)">${esc(l.says)}</text>`,
+    )
+    .join("")}</g>`;
+}
+
+// The cards on their way to where the function chosen has them, from
+// where they were as it was chosen, or let go.
+let shift = null;
+// What the drawing showed before a function was chosen, to show again.
+let home = null;
+
+// The level `g` as it is drawn now: as the function chosen arranges it,
+// or part of the way there from how it was.
+function arranged(g) {
+  const to = arrangement(g);
+  const from = shift && shift.from.id === g.id ? shift.from : null;
+  const e = from ? ease(shift.t) : 1;
+  const mix = (a, b) => Object.fromEntries(Object.entries(b).map(([id, q]) => [id, a[id] && e < 1 ? lerpR(a[id], q, e) : q]));
+  const r = from ? mix(from.r, to.r) : to.r;
+  const frames = from ? mix(from.frames, to.frames) : to.frames;
+  // How faint each arrangement has a card, and a line by its ends.
+  const faint = (p, id) => (!p.taken || p.taken.has(id) ? 1 : AREA.rest);
+  const faintLine = (p, x, y) => (!p.taken ? 1 : p.taken.has(x) || p.taken.has(y) ? AREA.ends : AREA.lines);
+  // The level draws no line of its own where the area draws one.
+  const wires = to.lines ? g.wires.filter(([x, y]) => !to.lines.has(pairKey(x, y))) : g.wires;
+  return {
+    g: { ...g, r, frames, wires },
+    to,
+    e,
+    now: { ...to, r, frames },
+    rest: (id) => lerp(from ? faint(from, id) : 1, faint(to, id), e),
+    restLine: (x, y) => lerp(from ? faintLine(from, x, y) : 1, faintLine(to, x, y), e),
+    under: (from ? areaUnder(from, 1 - e) : "") + areaUnder(to, e),
+  };
+}
+
+// Where the drawing shows the area of `p`, and under it the box, or as
+// much of it as fits while the area still reads.
+function areaShown(p) {
+  const { left, w, h } = room();
+  const all = outline([p.edge, p.box]);
+  let k = Math.min(1, w / (all.x1 - all.x0), h / (all.y1 - all.y0));
+  if (k >= AREA.readable) return { k, x: left + w / 2 - (k * (all.x0 + all.x1)) / 2, y: h / 2 - (k * (all.y0 + all.y1)) / 2 };
+  const peek = Math.min(p.box.h, 2 * IH) + AREA.out;
+  k = Math.max(AREA.readable, Math.min(1, w / (p.edge.w + 40), h / (p.edge.h + peek + 40)));
+  return { k, x: left + w / 2 - k * (p.edge.x + p.edge.w / 2), y: 20 - k * p.edge.y };
+}
+
+/// Chooses the function `next`: its `own` type, its `name`, and `links`,
+/// each from a node to a node as "caller", "call", "field" or "target";
+/// or none. The cards of what it relates to go to an area above the level,
+/// and back as it is let go, shown in what panels `left` and `right` of
+/// the drawing leave, or, with neither, above a drawer from below.
+export function focus(next, left = 0, right = 0) {
+  const level = view.stack.at(-1);
+  const steady = !pair && !anim;
+  const was = steady ? arranged(geo(level)) : null;
+  const heading = shift?.cam1;
+  view.focus = next && { ...next, level };
+  if (next) clear = { left, right };
+  shift = null;
+  const to = steady ? arrangement(geo(level)) : null;
+  if (!was || (!was.to.taken && !was.under && !to.taken)) {
+    home = null;
+    return;
+  }
+  if (to.taken && !was.to.taken) home = heading ?? { ...cam };
+  const here = { from: was.now, t: 0, cam0: { ...cam }, cam1: to.taken ? areaShown(to) : (home ?? { ...cam }) };
+  if (!to.taken) home = null;
+  // A page out of sight gets no frames to animate in: it goes there.
+  if (document.hidden) {
+    cam = here.cam1;
+    apply();
+    return;
+  }
+  shift = here;
+  let last = performance.now();
+  const step = (now) => {
+    // Overtaken, by another function chosen or a level opened.
+    if (shift !== here) return;
+    if (pair || view.stack.at(-1) !== level) {
+      shift = null;
+      return;
+    }
+    here.t = Math.min(1, here.t + Math.min(0.05, (now - last) / 1000) / AREA.takes);
+    last = now;
+    const e = ease(here.t);
+    cam = { k: lerp(here.cam0.k, here.cam1.k, e), x: lerp(here.cam0.x, here.cam1.x, e), y: lerp(here.cam0.y, here.cam1.y, e) };
+    apply();
+    if (here.t === 1) shift = null;
+    safely(draw);
+    if (shift === here) requestAnimationFrame(step);
+  };
+  requestAnimationFrame(step);
+}
+
 // Between the level A, above, and the level B, inside its box f: s = 0
 // draws A and s = 2 draws B. Up to 1, f grows into the edge of B; past
 // it, B's boxes and lines come out.
@@ -451,8 +733,12 @@ export function draw() {
   const b = resting && B === "root" ? null : B;
   const t1 = b ? ease(clamp(sv)) : 0;
   const t2 = b ? ease(clamp(sv - 1)) : 0;
-  const gA = geo(a);
-  const gB = b ? geo(b) : null;
+  let gA = geo(a);
+  let gB = b ? geo(b) : null;
+  // A function chosen moves the cards of the level shown, at rest.
+  const act = resting ? arranged(gB ?? gA) : null;
+  if (act && gB) gB = act.g;
+  else if (act) gA = act.g;
   const g = {};
   const o = [];
   for (const k in gA.r)
@@ -463,14 +749,9 @@ export function draw() {
   const rect = (id) => g[id];
   const here = gB ?? gA;
   lit = here.mark;
-  // The lines a function chosen lights go between the cards that stand
-  // for their ends here.
-  const reached = new Map();
-  for (const ends of view.litPairs ?? []) {
-    const [x, y] = ends.map((id) => standsFor(id, here.r, here.id));
-    if (x && y && x !== y) reached.set(pairKey(x, y), [x, y]);
-  }
-  const isLit = (x, y) => (view.litPairs ? reached.has(pairKey(x, y)) : view.sel && (x === view.sel || y === view.sel));
+  // A function chosen lights the lines of its area alone.
+  const flow = act?.to.lines;
+  const isLit = (x, y) => (view.focus ? Boolean(flow?.has(pairKey(x, y))) : view.sel && (x === view.sel || y === view.sel));
   const edgesOf = (gg, f) => (gg ? { ...gg.frames, ...(gg.box ? { [f]: gg.box } : {}) } : {});
   const bA = edgesOf(gA, a);
   const bB = edgesOf(gB, b);
@@ -480,6 +761,7 @@ export function draw() {
     if (id !== b) g[id] = bA[id] && bB[id] ? lerpR(bA[id], bB[id], t1) : (g[id] ?? bA[id] ?? bB[id]);
   for (const id in bA)
     if (id !== b) o.push(boundary(id, bB[id] ? lerpR(bA[id], bB[id], t1) : bA[id], bB[id] || !gB ? 1 : 1 - t1));
+  if (act) o.push(act.under);
   // What the open box's lines do not reach is faint.
   const near = (gg) => {
     if (!gg || !gg.parts.length) return null;
@@ -494,14 +776,16 @@ export function draw() {
   const nA = near(gA);
   const nB = near(gB);
   const wires = here.wires;
-  const litNodes = new Set([...lit, ...(view.sel ? [view.sel, ...wires.filter(([x, y]) => x === view.sel || y === view.sel).flat()] : [])]);
-  const dim = (id) => (litNodes.has(id) ? 1 : lerp(nA && !nA.has(id) ? FAR : 1, nB && !nB.has(id) ? FAR : 1, t1));
+  const ofChosen = view.sel && !flow ? wires.filter(([x, y]) => x === view.sel || y === view.sel).flat() : [];
+  const litNodes = new Set([...lit, ...(view.sel ? [view.sel, ...ofChosen] : [])]);
+  const dim = (id) =>
+    litNodes.has(id) ? 1 : lerp(nA && !nA.has(id) ? FAR : 1, nB && !nB.has(id) ? FAR : 1, t1) * (act ? act.rest(id) : 1);
   const inA = within(gA);
   const inB = gB && within(gB);
   const wireDim = (x, y) => {
     if (isLit(x, y)) return 1;
     const f = (gg, P) => (gg && gg.parts.length && !P.has(x) && !P.has(y) ? FAR : 1);
-    return lerp(f(gA, inA), f(gB, inB), t1);
+    return lerp(f(gA, inA), f(gB, inB), t1) * (act ? act.restLine(x, y) : 1);
   };
   // The box opened: its card fades as its edge comes.
   if (b) {
@@ -541,11 +825,16 @@ export function draw() {
     );
     int.forEach((e, i) => wire(path(A1[E + i].a, A1[E + i].b), e[0], e[1], e[2], t2));
   }
-  // What a function chosen reaches where the level draws no line.
-  if (!between) {
-    const drawn = new Set(wires.map(([x, y]) => pairKey(x, y)));
-    const more = [...reached].filter(([key]) => !drawn.has(key)).map(([, ends]) => ends);
-    anchors(more, rect).forEach((P, i) => wire(path(P.a, P.b), ...more[i], false));
+  // What a function chosen calls and uses, and who calls it: a line for
+  // each, whether the level draws one between the two or not.
+  if (flow) {
+    const lines = [...flow.values()];
+    // They come as the cards come to rest, not across their way there.
+    const op = clamp((act.e - 0.6) / 0.4);
+    anchors(lines, rect).forEach((P, i) => {
+      const [x, y, both, , way] = lines[i];
+      if (op > 0) wire(way ? pathBy(P.a, P.b, way) : path(P.a, P.b), x, y, both, op);
+    });
   }
   if (!between)
     for (const [x, y] of view.ghost) {
@@ -671,14 +960,22 @@ export function goTo(f, chosen = null) {
 function apply() {
   W.setAttribute("transform", `translate(${cam.x},${cam.y}) scale(${cam.k})`);
 }
+// Shows the drawing as `next` says: at once, or, while the cards go to a
+// function's area or back, as they come to rest.
+function aim(next) {
+  if (shift && !pair && shift.from.id === view.stack.at(-1)) shift.cam1 = next;
+  else {
+    cam = next;
+    apply();
+  }
+}
 /// Fits what is drawn to the drawing's area.
 export function fitAll() {
   const w = cv.clientWidth;
   const h = cv.clientHeight;
   if (!w || !h) return;
   const k = Math.min(1.25, Math.min(w / (world.x1 - world.x0), h / (world.y1 - world.y0)) * 0.94);
-  cam = { k, x: w / 2 - (k * (world.x0 + world.x1)) / 2, y: h / 2 - (k * (world.y0 + world.y1)) / 2 };
-  apply();
+  aim({ k, x: w / 2 - (k * (world.x0 + world.x1)) / 2, y: h / 2 - (k * (world.y0 + world.y1)) / 2 });
 }
 /// Fits the node `id`, and what its lines reach, to what the panels
 /// leave of the drawing: `left` and `right` of it on a wide screen, or,
@@ -702,11 +999,9 @@ export function fitAbove(id, left = 0, right = 0) {
   if ((left || right) && k < 0.8) {
     const r = g.r[id];
     const kk = 0.8;
-    cam = { k: kk, x: left + w / 2 - kk * (r.x + r.w / 2), y: h / 2 - kk * (r.y + r.h / 2) };
-    return apply();
+    return aim({ k: kk, x: left + w / 2 - kk * (r.x + r.w / 2), y: h / 2 - kk * (r.y + r.h / 2) });
   }
-  cam = { k, x: left + w / 2 - (k * (x0 + x1)) / 2, y: h / 2 - (k * (y0 + y1)) / 2 };
-  apply();
+  aim({ k, x: left + w / 2 - (k * (x0 + x1)) / 2, y: h / 2 - (k * (y0 + y1)) / 2 });
 }
 function zoomAt(f, px, py) {
   const k = Math.max(0.3, Math.min(3, cam.k * f));

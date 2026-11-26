@@ -3,12 +3,13 @@
 // on where it is called from, what it calls and the fields it uses; on
 // the left, its fields, each opening on where it is used. A function
 // opened lights the fields it uses on the left, the others folding into
-// one row, the uses of each by that function, and on the map the lines
-// to what it reaches. A function's name, wherever it is, goes to it. On a
-// narrow screen, all of it is in a drawer from below.
+// one row, the uses of each by that function, and on the map takes what
+// it relates to out of the level, to an area above it. A function's name,
+// wherever it is, goes to it. On a narrow screen, all of it is in a
+// drawer from below.
 
 import { ICON } from "./icons.js";
-import { afterRender, draw, esc, fitAbove, fitAll, goTo, moving, node, render, view, whenStill } from "./canvas.js";
+import { afterRender, draw, esc, fitAbove, fitAll, focus, goTo, moving, node, render, view, whenStill } from "./canvas.js";
 
 const dt = document.getElementById("dt");
 const fl = document.getElementById("fl");
@@ -166,12 +167,12 @@ function panel() {
   const again = stale && id === was ? actFn : null;
   const kept = id && id === was ? keep() : null;
   shownFrom = from;
-  const lit = view.mark.size > 0 || view.litPairs;
+  const lit = view.mark.size > 0 || view.focus;
   shownFor = id;
   stale = false;
   view.mark = new Set();
   actFn = null;
-  view.litPairs = null;
+  focus(null);
   focusMark = new Set();
   // What the function that was open lit goes dark.
   if (lit) draw();
@@ -235,32 +236,34 @@ function restore(kept) {
   fl.scrollTop = kept.fl;
 }
 
-// What a function reaches: the nodes it calls and whose fields it uses,
-// and the nodes those fields' types name; lit from its type.
+// What a function relates to, each as a link from a node to a node: the
+// nodes that call it, outside tests, then, in the order it does, the
+// nodes it calls and whose fields it uses, and the nodes those fields'
+// types name. `nodes` are the other ends, lit as its type is.
 function reach(fn) {
-  const { t: own } = functions[fn];
-  const pairs = [];
+  const { t: own, f } = functions[fn];
+  const links = [];
   const nodes = new Set();
-  const add = (a, b) => {
-    if (a && b && a !== b) {
-      pairs.push([a, b]);
-      nodes.add(b);
-    }
+  const add = (from, to, as) => {
+    if (!from || !to || from === to) return;
+    links.push([from, to, as]);
+    nodes.add(as === "caller" ? from : to);
   };
-  for (const c of functions[fn].f.calls) {
-    add(own.id, c.node);
-    if (c.kind === "field" && c.key && fields[c.key]) for (const n of fields[c.key].f.to) add(c.node, n);
+  for (const u of f.uses) if (!u.test) add(u.node, own.id, "caller");
+  for (const c of f.calls) {
+    add(own.id, c.node, c.kind === "field" ? "field" : "call");
+    if (c.kind === "field" && c.key && fields[c.key]) for (const n of fields[c.key].f.to) add(c.node, n, "target");
   }
-  return { pairs, nodes };
+  return { own: own.id, name: `${own.name}::${f.name}`, links, nodes };
 }
 const fieldsOf = (fn) => functions[fn].f.calls.filter((c) => c.kind === "field" && c.key).map((c) => ({ key: c.key, writes: c.writes }));
 
 // Opens the function `fn` in the detail, or none: the fields it uses
-// light on the left, and the lines to what it reaches on the map.
+// light on the left, and what it relates to is laid out on the map.
 function focusFn(fn) {
   actFn = fn;
   const reached = fn ? reach(fn) : null;
-  view.litPairs = reached ? reached.pairs : null;
+  focus(reached && { own: reached.own, name: reached.name, links: reached.links }, ...(narrow() ? [] : [LEFT, RIGHT]));
   focusMark = reached ? reached.nodes : new Set();
   view.mark = new Set(focusMark);
   const hit = new Map((fn ? fieldsOf(fn) : []).map((x) => [x.key, x]));
