@@ -222,6 +222,9 @@ mod tests {
                 head: "a".to_owned(),
                 checks: Vec::new(),
                 times: coxd::github::Times::default(),
+                review: None,
+                mergeable: coxd::github::Mergeable::Unknown,
+                size: None,
             }),
             unseen: None,
         }

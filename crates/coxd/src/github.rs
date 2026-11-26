@@ -141,6 +141,46 @@ pub struct Status {
     /// When it was opened, merged and closed, as GitHub tells it.
     #[serde(default)]
     pub times: Times,
+    /// What its reviews decided, as the branch's rules ask for them;
+    /// `None` when they ask for none, or Cox read it before it read this.
+    #[serde(default)]
+    pub review: Option<Review>,
+    /// Whether it merges into its base as it is.
+    #[serde(default)]
+    pub mergeable: Mergeable,
+    /// How much it changes, once Cox read it.
+    #[serde(default)]
+    pub size: Option<Size>,
+}
+
+/// What the reviews of a pull request decided, as GitHub tells it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Review {
+    Approved,
+    ChangesRequested,
+    /// It waits for a review the branch's rules ask for.
+    Required,
+}
+
+/// Whether a pull request merges into its base as it is, as GitHub tells
+/// it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Mergeable {
+    Mergeable,
+    /// It conflicts with its base.
+    Conflicting,
+    /// GitHub has not worked it out yet, or Cox did not read it.
+    #[default]
+    Unknown,
+}
+
+/// How much a pull request changes: the lines it adds and removes, and
+/// the files it changes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Size {
+    pub added: u64,
+    pub removed: u64,
+    pub files: u64,
 }
 
 /// When a pull request was opened, merged and closed, each in
@@ -153,7 +193,8 @@ pub struct Times {
 }
 
 /// The fields of `gh pr view --json` that [`Status::parse`] reads.
-const FIELDS: &str = "title,state,isDraft,headRefOid,statusCheckRollup,createdAt,mergedAt,closedAt";
+const FIELDS: &str = "title,state,isDraft,headRefOid,statusCheckRollup,createdAt,mergedAt,closedAt,\
+     reviewDecision,mergeable,additions,deletions,changedFiles";
 
 /// `at`, a time as GitHub tells it, as `2026-11-16T14:19:00Z`, in
 /// milliseconds since the epoch; none for none, or for one it cannot read.
@@ -180,6 +221,11 @@ struct Viewed {
     created_at: Option<String>,
     merged_at: Option<String>,
     closed_at: Option<String>,
+    review_decision: Option<String>,
+    mergeable: Option<String>,
+    additions: Option<u64>,
+    deletions: Option<u64>,
+    changed_files: Option<u64>,
 }
 
 /// A check as `gh` tells it: a check run, of GitHub Actions or another
@@ -250,6 +296,25 @@ impl Status {
                 opened: millis(viewed.created_at.as_deref()),
                 merged: millis(viewed.merged_at.as_deref()),
                 closed: millis(viewed.closed_at.as_deref()),
+            },
+            review: match viewed.review_decision.as_deref() {
+                Some("APPROVED") => Some(Review::Approved),
+                Some("CHANGES_REQUESTED") => Some(Review::ChangesRequested),
+                Some("REVIEW_REQUIRED") => Some(Review::Required),
+                _ => None,
+            },
+            mergeable: match viewed.mergeable.as_deref() {
+                Some("MERGEABLE") => Mergeable::Mergeable,
+                Some("CONFLICTING") => Mergeable::Conflicting,
+                _ => Mergeable::Unknown,
+            },
+            size: match (viewed.additions, viewed.deletions, viewed.changed_files) {
+                (Some(added), Some(removed), Some(files)) => Some(Size {
+                    added,
+                    removed,
+                    files,
+                }),
+                _ => None,
             },
         })
     }
@@ -548,6 +613,54 @@ mod tests {
     }
 
     #[test]
+    fn reads_what_reviews_decided_whether_it_merges_and_how_much_it_changes() {
+        let status = Status::parse(include_str!("github/failed.json")).unwrap();
+        assert_eq!(status.review, Some(Review::Required));
+        assert_eq!(status.mergeable, Mergeable::Mergeable);
+        assert_eq!(
+            status.size,
+            Some(Size {
+                added: 412,
+                removed: 96,
+                files: 14
+            })
+        );
+
+        let json = |review: &str, mergeable: &str| {
+            format!(
+                r#"{{"title":"t","state":"OPEN","headRefOid":"a","reviewDecision":"{review}","mergeable":"{mergeable}"}}"#
+            )
+        };
+        let read = |review, mergeable| {
+            let status = Status::parse(&json(review, mergeable)).unwrap();
+            (status.review, status.mergeable)
+        };
+        assert_eq!(
+            read("APPROVED", "CONFLICTING"),
+            (Some(Review::Approved), Mergeable::Conflicting)
+        );
+        assert_eq!(
+            read("CHANGES_REQUESTED", "UNKNOWN"),
+            (Some(Review::ChangesRequested), Mergeable::Unknown)
+        );
+        // No review asked for, as gh tells it.
+        assert_eq!(read("", "MERGEABLE"), (None, Mergeable::Mergeable));
+        // Without the counts, its size is not known.
+        assert_eq!(Status::parse(&json("", "")).unwrap().size, None);
+    }
+
+    #[test]
+    fn a_status_kept_before_cox_read_reviews_still_loads() {
+        let kept = r#"{"title":"t","state":"Open","head":"a","checks":[],
+            "times":{"opened":null,"merged":null,"closed":null}}"#;
+        let status: Status = serde_json::from_str(kept).unwrap();
+        assert_eq!(
+            (status.review, status.mergeable, status.size),
+            (None, Mergeable::Unknown, None)
+        );
+    }
+
+    #[test]
     fn a_merged_pull_request_whose_ci_passed_is_done() {
         let status = Status::parse(include_str!("github/merged.json")).unwrap();
         assert_eq!(status.state, PullState::Merged);
@@ -609,6 +722,9 @@ mod tests {
                 })
                 .collect(),
             times: Times::default(),
+            review: None,
+            mergeable: Mergeable::Unknown,
+            size: None,
         }
     }
 

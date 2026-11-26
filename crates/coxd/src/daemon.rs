@@ -5681,6 +5681,9 @@ mod tests {
                     ended: None,
                 }],
                 times: crate::github::Times::default(),
+                review: None,
+                mergeable: crate::github::Mergeable::Unknown,
+                size: None,
             };
             for state in [CheckState::Pending, CheckState::Failed, CheckState::Failed] {
                 opener.daemon.pulled(&pull, Ok(status(state)), now);
@@ -5757,6 +5760,9 @@ mod tests {
                 ended: None,
             }],
             times: crate::github::Times::default(),
+            review: None,
+            mergeable: crate::github::Mergeable::Unknown,
+            size: None,
         };
         (pull, status)
     }
