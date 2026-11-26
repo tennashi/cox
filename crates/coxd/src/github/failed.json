@@ -1,6 +1,11 @@
 {
+ "additions": 412,
+ "changedFiles": 14,
+ "deletions": 96,
  "headRefOid": "c328a36037409258fade373849980e31a843ecc7",
  "isDraft": true,
+ "mergeable": "MERGEABLE",
+ "reviewDecision": "REVIEW_REQUIRED",
  "state": "OPEN",
  "statusCheckRollup": [
   {

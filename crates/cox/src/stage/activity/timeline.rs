@@ -665,6 +665,7 @@ mod tests {
             archived: false,
             steers: false,
             on_steps: Vec::new(),
+            active: 0,
         }
     }
 
@@ -810,6 +811,9 @@ mod tests {
                     merged: Some(at(14, 31)),
                     closed: Some(at(14, 31)),
                 },
+                review: None,
+                mergeable: coxd::github::Mergeable::Unknown,
+                size: None,
             }),
             unseen: None,
         }];

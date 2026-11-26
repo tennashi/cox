@@ -82,25 +82,25 @@
         gap: var(--space-2);
         margin-bottom: var(--space-3);
       }
-      .number {
+      .numbers .number {
         background: var(--pane);
         border-radius: var(--radius);
         padding: var(--space-2) var(--space-3);
         border: 1px solid var(--card-edge);
       }
-      .number .count {
+      .numbers .number .count {
         font-size: var(--title);
         font-weight: 600;
         font-variant-numeric: tabular-nums;
       }
-      .number .what {
+      .numbers .number .what {
         color: var(--dim);
         font-size: var(--small);
       }
-      .number.yours .count {
+      .numbers .number.yours .count {
         color: var(--asking);
       }
-      .number.work .count {
+      .numbers .number.work .count {
         color: var(--accent);
       }
       .pick {
@@ -151,56 +151,217 @@
       .bar i.in_progress {
         background: var(--accent);
       }
-      .yours .bar i.in_progress {
-        background: var(--asking);
-      }
-      .group {
-        margin-bottom: var(--space-4);
+      /* The chats, and the pull requests, as cards, in groups by what
+         they need, the one that needs the human first, each group under
+         its name and how many it holds. */
+      #app {
         container-type: inline-size;
       }
-      .group h2 {
+      .section {
+        margin-bottom: var(--space-4);
+      }
+      .section-head {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: baseline;
+        gap: 0 var(--space-2);
+        margin-bottom: var(--space-2);
+      }
+      .section-head h2 {
+        margin: 0;
+        font-size: var(--body);
+        font-weight: 600;
+        white-space: nowrap;
+      }
+      .section-head .sum {
         font-size: var(--small);
+        color: var(--faint);
+      }
+      .cards-group {
+        margin-bottom: var(--space-3);
+      }
+      .group-head {
+        display: flex;
+        align-items: baseline;
+        gap: var(--space-2);
+        margin-bottom: var(--space-1);
+        font-size: var(--small);
+        font-weight: 600;
+        color: var(--dim);
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+      }
+      .group-head .n {
         font-weight: normal;
         color: var(--faint);
-        margin: 0 0 var(--space-1);
-        padding: 0 var(--space-2);
+      }
+      .cards-group.yours .group-head {
+        color: var(--asking);
+      }
+      .cards-group.running .group-head,
+      .cards-group.work .group-head {
+        color: var(--link);
+      }
+      .cards-group.ready .group-head {
+        color: var(--accent);
+      }
+      .cards {
+        display: flex;
+        flex-direction: column;
+        gap: var(--space-1);
       }
       .none {
         color: var(--dim);
         padding: var(--space-2);
       }
-      /* A chat: one line, which a click opens, its name stepped in as
-         deep as it is under the chat at the top of its, and the rest in
-         columns, alike at every depth. */
-      .row {
-        display: grid;
-        grid-template-columns: minmax(0, 1.4fr) minmax(48px, 110px) 32px minmax(0, 1.2fr);
-        align-items: center;
-        gap: var(--space-3);
-        padding: 6px var(--space-2);
+      /* A card, its left edge colored as what it needs. */
+      .card {
+        display: flex;
+        flex-direction: column;
+        gap: var(--space-1);
+        min-width: 0;
+        padding: var(--space-2) var(--space-3);
+        background: var(--pane);
+        border: 1px solid var(--card-edge);
+        border-left: 3px solid var(--card-edge);
         border-radius: var(--radius);
+      }
+      .card.pr:hover {
+        background: var(--raised);
+      }
+      .card.yours {
+        border-left-color: var(--asking);
+      }
+      .card.pr.yours {
+        background: linear-gradient(90deg, var(--asking-ground), var(--pane) 40%);
+      }
+      .card.pr.yours.failed {
+        border-left-color: var(--failed-mark);
+        background: linear-gradient(90deg, var(--failed-ground), var(--pane) 40%);
+      }
+      .card.running,
+      .card.work {
+        border-left-color: var(--link);
+      }
+      .card.ready {
+        border-left-color: var(--accent);
+      }
+      .card.rest,
+      .card.done {
+        background: transparent;
+      }
+      .l1,
+      .l2 {
+        display: flex;
+        align-items: center;
+        gap: var(--space-2);
+        min-width: 0;
+      }
+      .l1 .title {
+        flex: 1;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .l1 .meta,
+      .push {
+        display: flex;
+        flex: none;
+        align-items: center;
+        gap: var(--space-2);
+      }
+      .l2 {
+        flex-wrap: wrap;
+        row-gap: var(--space-1);
+      }
+      .push {
+        margin-left: auto;
+      }
+      /* A chat's card: the chat at the top on two lines, past what folds
+         its subagents away, and each subagent on one, stepped in as deep
+         as it is. */
+      .card.tree {
+        padding: 0;
+        gap: 0;
+      }
+      .row {
+        padding: var(--space-2) var(--space-3);
         cursor: pointer;
       }
       .row:hover {
         background: var(--hover);
       }
       .row.open {
-        background: var(--pane);
+        background: var(--raised);
+      }
+      .row.root {
+        display: flex;
+        flex-direction: column;
+        gap: var(--space-1);
         border-radius: var(--radius) var(--radius) 0 0;
+      }
+      .row.root .l2 {
+        padding-left: calc(var(--fold) + var(--space-2));
+      }
+      .row.root .l2 .now {
+        flex: 1;
+      }
+      .row.sub {
+        display: flex;
+        align-items: center;
+        gap: var(--space-2);
+        padding: var(--space-1) var(--space-3);
+        padding-left: calc(var(--space-3) + var(--fold) + var(--space-2) + (var(--indent) - 1) * var(--indent-step));
+        border-top: 1px solid var(--border);
+      }
+      .row.sub .name {
+        display: flex;
+        flex: none;
+        align-items: center;
+        gap: var(--space-1);
+        width: 240px;
+        min-width: 0;
+        white-space: nowrap;
+      }
+      .row.sub .name a,
+      .row.sub .name .hint {
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .row.sub .cname {
+        font-weight: normal;
+      }
+      .row.sub.is-done .cname,
+      .row.sub.is-stopped .cname {
+        color: var(--dim);
+      }
+      .row.sub .now {
+        flex: 1;
+        font-size: var(--small);
       }
       /* The chat the window shows, by a bar down its left edge. */
       .row.shown {
         box-shadow: inset 2px 0 0 var(--accent);
-        border-top-left-radius: 0;
-        border-bottom-left-radius: 0;
+      }
+      .cname {
+        font-weight: 600;
+      }
+      .cname:hover {
+        color: var(--link);
+      }
+      .arrow {
+        color: var(--disabled);
       }
       /* A step of a chat's plan that subagents came from, over them. */
       .from {
         display: flex;
         align-items: baseline;
         gap: var(--space-1);
-        padding: 2px var(--space-2);
-        padding-left: calc(var(--space-2) + var(--indent) * var(--indent-step) + var(--fold));
+        padding: 2px var(--space-3);
+        padding-left: calc(var(--space-3) + var(--fold) + var(--space-2) + (var(--indent) - 1) * var(--indent-step));
+        border-top: 1px solid var(--border);
         color: var(--faint);
         font-size: var(--small);
         min-width: 0;
@@ -213,69 +374,15 @@
       .from.in_progress .mark {
         color: var(--accent);
       }
-      .dot {
-        flex: none;
-        width: 8px;
-        height: 8px;
-        margin-right: 6px;
-        border-radius: 50%;
-        background: var(--disabled);
-      }
-      .yours .dot {
-        background: var(--asking);
-      }
-      .work .dot {
-        background: var(--accent);
-        box-shadow: 0 0 0 3px var(--accent-ground);
-      }
-      .ci .dot {
-        border: 2px solid var(--accent);
-        border-right-color: transparent;
-        background: none;
-        width: 4px;
-        height: 4px;
-        animation: turn 1s linear infinite;
-      }
-      .done .dot {
-        background: none;
-        border: 1.5px solid var(--accent);
-        width: 5px;
-        height: 5px;
-      }
-      /* Not at work itself, but the subagents under it are. */
-      .subs .dot {
-        background: none;
-        border: 1.5px dashed var(--accent);
-        width: 5px;
-        height: 5px;
-      }
-      @keyframes turn {
-        to {
-          transform: rotate(360deg);
-        }
-      }
-      .name {
-        display: flex;
-        align-items: center;
-        gap: var(--space-1);
-        min-width: 0;
-        padding-left: calc(var(--indent, 0) * var(--indent-step));
-        font-weight: 600;
-        white-space: nowrap;
-      }
-      .name a,
-      .name .hint {
-        min-width: 0;
-        overflow: hidden;
-        text-overflow: ellipsis;
-      }
-      /* How many subagents are under a chat, which folds them away. */
+      /* What folds away the subagents under a chat, and, while they are,
+         how many there are. */
       .fold {
         flex: none;
-        width: calc(var(--fold) - var(--space-1));
+        width: var(--fold);
         color: var(--faint);
         font-size: var(--small);
         font-weight: normal;
+        text-align: left;
         background: none;
         border: 0;
         padding: 0;
@@ -283,47 +390,302 @@
       }
       .fold.more {
         width: auto;
-        padding: 0 2px;
+        white-space: nowrap;
+      }
+      .fold .ask {
+        color: var(--asking);
       }
       .fold:hover {
-        color: var(--link);
-      }
-      .name a:hover {
-        color: var(--link);
+        color: var(--foreground);
       }
       .hint {
         color: var(--faint);
         font-weight: normal;
         font-size: var(--small);
       }
-      .steps {
-        font: var(--small) var(--mono);
+      /* How a chat, or a pull request, stands, as a badge. */
+      .badge {
+        display: inline-flex;
+        flex: none;
+        align-items: center;
+        padding: 0 7px;
+        border: 1px solid;
+        border-radius: 9px;
+        font-size: var(--small);
+        font-weight: 600;
+        line-height: 18px;
+        white-space: nowrap;
+      }
+      .badge.open {
+        color: var(--accent);
+        background: var(--accent-tint);
+        border-color: var(--accent-tint-edge);
+      }
+      .badge.draft {
+        color: var(--dim);
+        border-color: var(--border-strong);
+      }
+      .badge.merged {
+        color: var(--dim);
+        background: var(--raised);
+        border-color: var(--border-strong);
+      }
+      .badge.closed {
         color: var(--faint);
-        text-align: right;
+        border-color: var(--border);
+        text-decoration: line-through;
+      }
+      .badge.ask {
+        color: var(--asking);
+        background: var(--asking-tint);
+        border-color: var(--asking-tint-edge);
+      }
+      .badge.work {
+        color: var(--link);
+        border-color: var(--accent-tint-edge);
+      }
+      .badge.quiet {
+        color: var(--faint);
+        border-color: var(--border);
+      }
+      .chip {
+        display: inline-flex;
+        align-items: center;
+        gap: var(--space-1);
+        min-width: 0;
+        font-size: var(--small);
+        white-space: nowrap;
+        color: var(--dim);
+      }
+      .chip b {
+        font-weight: 600;
+      }
+      .chip.good {
+        color: var(--accent);
+      }
+      .chip.ask {
+        color: var(--asking);
+      }
+      .chip.run {
+        color: var(--link);
+      }
+      .chip.quiet {
+        color: var(--faint);
       }
       .now {
-        color: var(--dim);
-        white-space: nowrap;
+        display: block;
         overflow: hidden;
         text-overflow: ellipsis;
       }
-      .yours .now {
-        color: var(--asking);
-      }
-      /* What is done, or stopped, steps back. */
-      .done .name,
-      .done .now,
-      .stopped .name,
-      .stopped .now {
+      /* A plan, or the checks of a pull request, as blocks of a size, and
+         how far it got. */
+      .ci {
+        display: inline-flex;
+        flex: none;
+        align-items: center;
+        gap: var(--space-2);
+        font-size: var(--small);
         color: var(--dim);
+        white-space: nowrap;
+      }
+      .ci .p {
+        color: var(--accent);
+      }
+      .ci .f {
+        color: var(--failed);
+      }
+      .ci .r {
+        color: var(--link);
+      }
+      .blocks {
+        display: inline-flex;
+        gap: 2px;
+        height: 6px;
+        max-width: 160px;
+      }
+      .blocks s {
+        flex: 0 1 auto;
+        width: 8px;
+        min-width: 2px;
+        border-radius: 2px;
+        background: var(--button);
+      }
+      .blocks s.p {
+        background: var(--accent);
+      }
+      .blocks s.f {
+        background: var(--failed-mark);
+      }
+      .blocks s.r {
+        background: transparent;
+        box-shadow: inset 0 0 0 1px var(--link);
+        animation: pulse 1.4s ease-in-out infinite;
+      }
+      .blocks s.a {
+        background: transparent;
+        box-shadow: inset 0 0 0 1px var(--asking);
+      }
+      @keyframes pulse {
+        50% {
+          opacity: 0.35;
+        }
+      }
+      .failnames {
+        font-size: var(--small);
+        color: var(--failed);
+      }
+      .failnames code {
+        padding: 0 var(--space-1);
+        font: var(--small) var(--mono);
+        background: var(--failed-tint);
+        border: 1px solid var(--failed-tint-edge);
+        border-radius: 4px;
+      }
+      .diff {
+        font: var(--small) var(--mono);
+        color: var(--faint);
+        white-space: nowrap;
+      }
+      .diff .a {
+        color: var(--accent);
+      }
+      .diff .d {
+        color: var(--failed);
+      }
+      .age,
+      .where {
+        font-size: var(--small);
+        color: var(--faint);
+        white-space: nowrap;
+      }
+      .num {
+        flex: none;
+        color: var(--link);
+        font-variant-numeric: tabular-nums;
+      }
+      .num:hover,
+      .chatlink:hover {
+        text-decoration: underline;
+      }
+      .chatlink {
+        font-size: var(--small);
+        color: var(--link);
+        white-space: nowrap;
+      }
+      .chatlink.done {
+        color: var(--faint);
+      }
+      .chatlink.none {
+        color: var(--disabled);
+      }
+      .sep {
+        color: var(--disabled);
+      }
+      /* What asks the human to act: to answer a chat, reply to it, or
+         have it fix its CI. */
+      .btn {
+        flex: none;
+        padding: 2px var(--space-2);
+        font-size: var(--small);
+        font-weight: 600;
+        color: var(--asking);
+        background: var(--asking-ground);
+        border: 1px solid var(--asking-edge);
+        border-radius: var(--radius-control);
+        white-space: nowrap;
+        cursor: pointer;
+      }
+      .btn:hover {
+        background: var(--asking-tint);
+      }
+      .btn:disabled {
+        opacity: 0.5;
+        cursor: default;
+      }
+      /* What is folded away: the chats stopped or done, the pull
+         requests merged or closed. */
+      .folded summary {
+        padding: var(--space-1) 0;
+        font-size: var(--small);
+        color: var(--faint);
+        list-style: none;
+        cursor: pointer;
+      }
+      .folded summary::-webkit-details-marker {
+        display: none;
+      }
+      .folded summary::before {
+        content: "▸ ";
+        color: var(--disabled);
+      }
+      .folded[open] summary::before {
+        content: "▾ ";
+      }
+      .folded summary:hover {
+        color: var(--dim);
+      }
+      .folded .card {
+        opacity: 0.7;
+      }
+      /* Narrow, as on a phone, a card's title goes on a line of its own,
+         and what it asks to do under the rest. */
+      @container (max-width: 600px) {
+        .card.pr,
+        .row {
+          padding-left: var(--space-2);
+          padding-right: var(--space-2);
+        }
+        .l1 {
+          flex-wrap: wrap;
+          row-gap: var(--space-1);
+        }
+        .l1 .title {
+          flex-basis: 100%;
+          order: 3;
+          white-space: normal;
+        }
+        .l1 .meta {
+          margin-left: auto;
+        }
+        .push {
+          flex-wrap: wrap;
+          row-gap: var(--space-1);
+          width: 100%;
+          margin-left: 0;
+        }
+        .push .btn {
+          margin-left: auto;
+        }
+        .row.root .l2 {
+          padding-left: 0;
+        }
+        .row.sub,
+        .from {
+          --indent-step: 10px;
+          padding-left: calc(var(--space-2) + var(--indent) * var(--indent-step));
+        }
+        .row.sub {
+          flex-wrap: wrap;
+          row-gap: var(--space-1);
+        }
+        .row.sub .name {
+          flex: 1 1 100%;
+          width: auto;
+        }
+        .row.sub .now {
+          flex: 1 1 auto;
+        }
+        .row.sub .push {
+          width: auto;
+        }
       }
       /* The chat opened: what it is, its story in time, how it ended, and
          its steps. */
       .opened {
-        background: var(--pane);
-        border-radius: 0 0 var(--radius) var(--radius);
-        padding: var(--space-1) var(--space-3) var(--space-3);
-        margin-bottom: var(--space-2);
+        background: var(--ground);
+        border-radius: var(--radius);
+        padding: var(--space-2) var(--space-3) var(--space-3);
+        margin: var(--space-1) var(--space-2) var(--space-2);
       }
       .meta {
         color: var(--faint);
@@ -357,37 +719,8 @@
       .columns.alone {
         grid-template-columns: minmax(0, 1fr);
       }
-      /* Narrow, a chat's line goes on two, its name over how far it got
-         and what it does, and each step in is shorter. */
+      /* Narrow, its steps go under its story. */
       @container (max-width: 480px) {
-        .row,
-        .from {
-          --indent-step: 10px;
-        }
-        .row {
-          grid-template-columns: auto minmax(0, 1fr) auto;
-          grid-template-areas: "name name steps" "bar now now";
-          row-gap: 2px;
-          column-gap: var(--space-2);
-        }
-        .row .name {
-          grid-area: name;
-        }
-        /* Under the name, past what folds and the dot. */
-        .row .bar {
-          grid-area: bar;
-          width: 64px;
-          margin-left: calc(var(--indent, 0) * var(--indent-step) + var(--fold) + 18px);
-        }
-        .row .bar:empty {
-          width: 0;
-        }
-        .row .steps {
-          grid-area: steps;
-        }
-        .row .now {
-          grid-area: now;
-        }
         .columns {
           grid-template-columns: minmax(0, 1fr);
         }
@@ -841,92 +1174,19 @@
         font-family: var(--mono);
         color: var(--link);
       }
-      .pull .ci.running {
+      .pull .pci.running {
         color: var(--link);
       }
-      .pull .ci.passed {
+      .pull .pci.passed {
         color: var(--accent);
       }
-      .pull .ci.failed {
+      .pull .pci.failed {
         color: var(--failed);
       }
       .background {
         font-size: var(--small);
         color: var(--dim);
         margin-left: 48px;
-      }
-      /* The pull requests the project holds, one line each. */
-      .prow {
-        padding: var(--space-1) var(--space-2);
-        font-size: var(--small);
-        color: var(--dim);
-      }
-      .prow .line {
-        display: flex;
-        align-items: baseline;
-        gap: var(--space-1);
-      }
-      .prow .pull-number {
-        font-family: var(--mono);
-        color: var(--link);
-      }
-      .prow .title {
-        flex: 0 1 auto;
-        color: var(--foreground);
-        min-width: 0;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-      }
-      .prow .where,
-      .prow .draft,
-      .prow .by,
-      .prow .failed {
-        color: var(--faint);
-      }
-      .prow .where,
-      .prow .draft,
-      .prow .by,
-      .prow .ci {
-        flex: none;
-        white-space: nowrap;
-      }
-      .prow .by a:hover,
-      .prow .pull-number:hover {
-        text-decoration: underline;
-      }
-      .prow .ci.running {
-        color: var(--link);
-      }
-      .prow .ci.passed {
-        color: var(--accent);
-      }
-      .prow .ci.failed {
-        color: var(--failed);
-      }
-      .prow.merged,
-      .prow.closed {
-        opacity: 0.6;
-      }
-      .prow .failed {
-        margin-left: var(--space-3);
-      }
-      .prow .fix {
-        margin-left: auto;
-        font-size: var(--small);
-        color: var(--foreground);
-        background: var(--button);
-        border: 0;
-        border-radius: var(--radius);
-        padding: 0 var(--space-2);
-        cursor: pointer;
-      }
-      .prow .fix:hover {
-        background: var(--button-hover);
-      }
-      .prow .fix:disabled {
-        opacity: 0.5;
-        cursor: default;
       }
     </style>
   </head>

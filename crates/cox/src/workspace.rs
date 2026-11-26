@@ -1627,6 +1627,7 @@ impl Workspace {
                     archived,
                     steers: chat.steers,
                     on_steps: chat.on_steps.clone(),
+                    active: chat.active,
                 })
                 .collect(),
             projects: self

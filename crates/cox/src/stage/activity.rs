@@ -24,10 +24,11 @@
 //!
 //! Then the pull requests the project holds, whichever of its chats'
 //! agents opened them, and those of every project in the home (see
-//! [`pulls_in`]): each open one, with how its CI stands and the chat that
-//! opened it, and, once its CI failed, a button that has that chat fix
-//! it (see [`fix`]); one merged or closed shows as long as a chat done
-//! does.
+//! [`pulls_in`]): each open one, with how its CI stands, check by check,
+//! what its reviews decided, whether it conflicts, how much it changes,
+//! and the chat that opened it, and, once its CI failed, a button that
+//! has that chat fix it (see [`fix`]); one merged or closed shows as
+//! long as a chat done does.
 //!
 //! A chat's story, what it did when, is read for the chat alone, once the
 //! human opens its line (see [`timeline`]), and the thread of a step of
@@ -125,6 +126,8 @@ pub struct Chat {
     /// The lines written on steps of its plan that wait for its turn to
     /// end, the first first.
     pub on_steps: Vec<OnStepLine>,
+    /// When it last moved, in milliseconds since the epoch.
+    pub active: i64,
 }
 
 impl Chat {
@@ -237,8 +240,11 @@ impl Pull {
 /// its project, or of every project in the home, the first seen first,
 /// those open, and those merged or closed within [`DONE_SHOWS`] of `at`,
 /// in milliseconds since the epoch. Each with its address, number,
-/// title, how it stands, how its CI does, the checks that failed, the
-/// chat that opened it, and whether that chat may be asked to fix it.
+/// title, how it stands, how its CI does, how many of its checks stand
+/// each way and the names of those that failed, what its reviews decided,
+/// whether it conflicts with its base, how much it changes, when it was
+/// opened and merged or closed, the chat that opened it, and whether that
+/// chat may be asked to fix it.
 fn pulls_in(told: &Told, root: &Path, at: i64) -> Vec<Value> {
     told.pulls
         .iter()
@@ -281,6 +287,20 @@ fn pulls_in(told: &Told, root: &Path, at: i64) -> Vec<Value> {
                 "state": state,
                 "ci": ci,
                 "failed": pull.failed_checks(),
+                "checks": status.map(checks_of),
+                "review": status.and_then(|status| status.review).map(|review| match review {
+                    coxd::github::Review::Approved => "approved",
+                    coxd::github::Review::ChangesRequested => "changes",
+                    coxd::github::Review::Required => "required",
+                }),
+                "conflicts": status.is_some_and(|status| status.mergeable == coxd::github::Mergeable::Conflicting),
+                "size": status.and_then(|status| status.size).map(|size| json!({
+                    "added": size.added,
+                    "removed": size.removed,
+                    "files": size.files,
+                })),
+                "opened": status.and_then(|status| status.times.opened),
+                "ended": status.and_then(|status| status.times.merged.or(status.times.closed)),
                 "where": where_of(told, &pull.project),
                 "author": author.map(|chat| json!({
                     "key": chat.key,
@@ -292,6 +312,25 @@ fn pulls_in(told: &Told, root: &Path, at: i64) -> Vec<Value> {
             })
         })
         .collect()
+}
+
+/// How many of the checks of `status` passed, failed, run or wait, and
+/// were skipped, of how many, as JSON.
+fn checks_of(status: &coxd::github::Status) -> Value {
+    let count = |state| {
+        status
+            .checks
+            .iter()
+            .filter(|check| check.state == state)
+            .count()
+    };
+    json!({
+        "passed": count(CheckState::Passed),
+        "failed": count(CheckState::Failed),
+        "running": count(CheckState::Pending),
+        "skipped": count(CheckState::Skipped),
+        "total": status.checks.len(),
+    })
 }
 
 /// How the window's chats stand, and its projects, by folder and name,
@@ -896,6 +935,7 @@ fn waiting_in(told: &Told, root: &Path, now: &dyn Fn(u64) -> Option<commands::No
                 "goal": chat.goal,
                 "sketch": chat.cwd != chat.project,
                 "where": where_of(told, &chat.project),
+                "active": chat.active,
             })
         })
         .collect()
@@ -1043,6 +1083,7 @@ fn row_of(
         "reported": chat.reported,
         "sketch": chat.cwd != chat.project,
         "where": where_of(told, &chat.project),
+        "active": chat.active,
         "said": does.said,
         "running": does.running.map(|(called, line)| json!({"called": called, "line": line})),
         "pulls": pulls_of(chat),
@@ -1391,6 +1432,7 @@ mod tests {
             archived: false,
             steers: false,
             on_steps: Vec::new(),
+            active: 0,
         }
     }
 
@@ -2709,6 +2751,9 @@ mod tests {
                     ended: None,
                 }],
                 times: coxd::github::Times::default(),
+                review: None,
+                mergeable: coxd::github::Mergeable::Unknown,
+                size: None,
             }),
             unseen,
         }
@@ -2855,6 +2900,61 @@ mod tests {
         assert_eq!(pulls[4]["state"], "open");
         assert_eq!(pulls[4]["author"], Value::Null);
         assert_eq!(pulls[4]["fix"], false);
+    }
+
+    #[test]
+    fn a_pull_request_tells_its_checks_review_conflicts_size_and_times() {
+        let home = TempDir::new();
+        let mut told = holding(&home);
+        let root = home.join("app");
+        {
+            let status = told.pulls[1].status.as_mut().unwrap();
+            let check = |name: &str, state| coxd::github::Check {
+                name: name.to_owned(),
+                state,
+                link: None,
+                ended: None,
+            };
+            status.checks.extend([
+                check("clippy", CheckState::Passed),
+                check("fmt", CheckState::Passed),
+                check("docs", CheckState::Pending),
+                check("deploy", CheckState::Skipped),
+            ]);
+            status.review = Some(coxd::github::Review::ChangesRequested);
+            status.mergeable = coxd::github::Mergeable::Conflicting;
+            status.size = Some(coxd::github::Size {
+                added: 412,
+                removed: 96,
+                files: 14,
+            });
+            status.times.opened = Some(PULLS_AT - 60_000);
+        }
+        let plans = Plans {
+            at: PULLS_AT,
+            ..NO_PLANS
+        };
+        let json = told_of(&told, &root, &plans, &|_| None);
+        let pull = &json["pulls"][1];
+        assert_eq!(
+            pull["checks"],
+            json!({"passed": 2, "failed": 1, "running": 1, "skipped": 1, "total": 5})
+        );
+        assert_eq!(pull["review"], "changes");
+        assert_eq!(pull["conflicts"], true);
+        assert_eq!(
+            pull["size"],
+            json!({"added": 412, "removed": 96, "files": 14})
+        );
+        assert_eq!(pull["opened"], PULLS_AT - 60_000);
+        assert_eq!(pull["ended"], Value::Null);
+        // One read before Cox read reviews: none asked for, no conflicts
+        // known, its size unknown; merged, it tells when.
+        let merged = &json["pulls"][3];
+        assert_eq!(merged["review"], Value::Null);
+        assert_eq!(merged["conflicts"], false);
+        assert_eq!(merged["size"], Value::Null);
+        assert_eq!(merged["ended"], PULLS_AT - 1000);
     }
 
     #[test]

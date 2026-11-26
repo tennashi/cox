@@ -7,14 +7,17 @@
 // On top, how it all stands: how many chats wait for the human, how many
 // are at work, and how many steps got done over the last 15 minutes,
 // hour or four hours, as the human picks; then every step of every plan
-// in one bar. Below, one line a chat, grouped by project in the home:
-// how it stands, its plan as a bar, how far it got, and what it does
-// now, those waiting for the human first, those done or stopped last,
-// stepped back; under it, stepped in, the subagents its agent opened,
-// those that came from a step of its plan under the step, and theirs
-// under them, as deep as they go, which a click on how many there are
-// folds away, as those three deep are at first, but for those over the
-// chat the window shows, whose line is marked. A click on its name
+// in one bar. Below, a card for each chat at the top of its tree, in
+// groups by the chat of it that most needs the human: one that waits for
+// them, one at work, the rest folded away. Each chat tells how it stands,
+// as a badge, its plan as a bar, how far it got, what it does now, in the
+// color of how it stands, when it last moved, where it is in the home, and,
+// when it waits for the human, a button that shows it, to answer or reply
+// there; under it, stepped in, the subagents its agent opened, a line
+// each, those that came from a step of its plan under the step, and
+// theirs under them, as deep as they go, which a click on how many there
+// are folds away, as those three deep are at first, but for those over
+// the chat the window shows, whose line is marked. A click on its name
 // shows the chat, by going to
 // `cox://chat/<key>`; a click elsewhere on the line opens it, and its
 // story is read, from `cox://api/activity/timeline/<chat>`, for it alone:
@@ -35,12 +38,17 @@
 // turn. A plan of a chat not at work the human may dismiss, until its
 // agent sends another.
 //
-// Last, the pull requests the project holds, whichever chat opened them:
-// each with its number, which opens it on GitHub, its title, how its CI
-// stands, and the chat that opened it, which a click shows; one whose CI
-// failed has a button that asks that chat to fix it, as a line the human
-// sends it, from `cox://api/activity/fix/<pull>`, which reopens it if it
-// was done. One merged or closed shows a while, as a chat done does.
+// Last, the pull requests the project holds, whichever chat opened them,
+// a card each, in groups by what they need: the human, as CI failed, a
+// review asked for changes or it conflicts; CI to end; nothing, ready to
+// merge; a review; drafts. Each tells how it stands, its number, which
+// opens it on GitHub, its title, how much it changes, its checks as a bar
+// and how many passed, failed and run, the names of those that failed,
+// what its reviews decided, when it was opened, and the chat that opened
+// it, which a click shows; one whose CI failed has a button that asks
+// that chat to fix it, as a line the human sends it, from
+// `cox://api/activity/fix/<pull>`, which reopens it if it was done. Those
+// merged or closed show a while, folded away, as a chat done does.
 
 const API = "cox://api/activity";
 const EVERY = 2000;
@@ -207,37 +215,106 @@ function now(chat) {
 /// How far a plan went, as Cox counted it, as "2/3".
 const counted = (progress) => `${progress.done}/${progress.of}`;
 
-/// The bar of `plan`, a block a step.
+/// The bar of `plan`, a block a step, as every step on the page shows.
 const bar = (plan) =>
   `<span class="bar">${plan.map((step) => `<i class="${esc(step.state)}" title="${esc(step.text)}"></i>`).join("")}</span>`;
 
-/// The line of `chat`, its name stepped in `indent` times, with what
-/// folds away the subagents under it, or shows them, and, while they are
-/// folded away, how many there are and are at work, and what opens under
-/// it.
+/// A bar of blocks, one each of `blocks`, each its class and what it
+/// says, as a chat's plan and a pull request's checks show: blocks of a
+/// size, as many as fit.
+const blocks = (all) =>
+  `<span class="blocks">${all.map(([as, title]) => `<s class="${as}"${title ? ` title="${esc(title)}"` : ""}></s>`).join("")}</span>`;
+
+/// How long ago `at`, in milliseconds since the epoch, was, roughly, as
+/// "4 min ago", "2 h ago" or "3 d ago", or "now".
+function ago(at) {
+  const minutes = Math.max(0, Math.round((Date.now() - at) / 60000));
+  if (minutes < 1) return "now";
+  if (minutes < 60) return `${minutes} min ago`;
+  if (minutes < 24 * 60) return `${Math.floor(minutes / 60)} h ago`;
+  return `${Math.floor(minutes / (24 * 60))} d ago`;
+}
+
+/// How `chat` stands, as its badge says it, and the class that colors
+/// it: what asks the human first, as the group it leads its card to.
+function badge(chat) {
+  switch (chat.stands.as) {
+    case "yours":
+      if (chat.asks || chat.waits === "asks you" || chat.why === "asks you") return { as: "ask", says: "Asking", group: "yours" };
+      if (chat.waits === "finished a turn" || chat.why === "finished a turn") return { as: "ask", says: "Your turn", group: "yours" };
+      return { as: "ask", says: "CI ended", group: "yours" };
+    case "work":
+      return { as: "work", says: "Working", group: "work" };
+    case "subs":
+      return { as: "work", says: "Waiting", group: "work" };
+    case "ci":
+      return { as: "work", says: "On CI", group: "work" };
+    case "done":
+      return { as: "quiet", says: chat.reported ? "Reported" : "Done", group: "rest" };
+    default:
+      return { as: "quiet", says: "Stopped", group: "rest" };
+  }
+}
+
+/// What `chat` asks of the human, as a button that shows the chat for
+/// them to do it there: to answer what it asks, or to reply once its
+/// turn ended.
+function act(chat) {
+  if (chat.stands.as !== "yours") return "";
+  const says = badge(chat).says === "Asking" ? "Answer" : "Reply";
+  return `<a class="btn" href="cox://chat/${chat.key}" title="shows the chat, to ${says.toLowerCase()} there">${says}</a>`;
+}
+
+/// The plan of `chat` as a bar, the step under way colored as the chat
+/// stands, and how far it got, as "2/3".
+function planBar(chat) {
+  const plan = chat.plan ?? [];
+  if (!plan.length) return "";
+  const under = chat.stands.as === "yours" ? "a" : "r";
+  const as = { completed: "p", in_progress: under };
+  return `<span class="ci">${blocks(plan.map((step) => [as[step.state] ?? "", step.text]))}<span>${counted(chat.progress)}</span></span>`;
+}
+
+/// What `chat` does now, in the color of how it stands.
+function nowLine(chat) {
+  const as = { ask: "ask", work: "run", quiet: "quiet" }[badge(chat).as];
+  return `<span class="chip ${as} now" title="${esc(now(chat))}">${esc(now(chat))}</span>`;
+}
+
+/// When `chat` last moved.
+const moved = (chat) => (chat.active ? `<span class="age">${ago(chat.active)}</span>` : "");
+
+/// The line, or two, of `chat`, its name stepped in `indent` times, with
+/// what folds away the subagents under it, or shows them, and, while they
+/// are folded away, how many there are, wait for the human and are at
+/// work, and what opens under it: the chat at the top of a card on two
+/// lines, a subagent's on one.
 function row(chat, indent) {
   const open = opened.has(chat.key);
   const hidden = folded(chat);
   const busy = busyUnder(chat);
+  const yours = chat.below.filter((sub) => sub.stands.as === "yours").length;
   const title = `${hidden ? "shows" : "folds away"} ${many(chat.below.length, "subagent", "subagents")} under it`;
   const fold = chat.subs.length
     ? `<button class="fold" data-fold="${chat.key}" title="${title}">${hidden ? "▸" : "▾"}</button>`
     : `<span class="fold"></span>`;
   const more =
     chat.subs.length && hidden
-      ? `<button class="fold more" data-fold="${chat.key}" title="${title}">+${chat.below.length}${busy ? ` · ${busy} at work` : ""}</button>`
+      ? `<button class="fold more" data-fold="${chat.key}" title="${title}">+${chat.below.length}${yours ? ` · <span class="ask">${yours} for you</span>` : ""}${busy ? ` · ${busy} at work` : ""}</button>`
       : "";
+  const stands = badge(chat);
   const named =
-    `${fold}<span class="dot"></span>` +
-    `<a href="cox://chat/${chat.key}" title="shows the chat">${chat.sketch ? "↳ " : ""}${esc(chat.name)}</a>${hint(chat)}${more}`;
-  const plan = chat.plan ?? [];
-  return (
-    `<div class="row ${chat.stands.as}${open ? " open" : ""}${chat.key === told.shown ? " shown" : ""}" style="--indent: ${indent}" data-key="${chat.key}" title="${esc(chat.key === told.shown ? `${chat.stands.says}, shown in the window` : chat.stands.says)}">` +
-    `<span class="name">${named}</span>` +
-    `${plan.length ? bar(plan) : `<span class="bar"></span>`}<span class="steps">${plan.length ? counted(chat.progress) : ""}</span>` +
-    `<span class="now">${esc(now(chat))}</span></div>` +
-    (open ? opening(chat) : "")
-  );
+    `${indent ? `<span class="arrow">↳</span>` : ""}<a class="cname" href="cox://chat/${chat.key}" title="shows the chat">${esc(chat.name)}</a>` +
+    `${hint(chat)}${chat.sketch ? ` <span class="where">sketch</span>` : ""}`;
+  const shown = chat.key === told.shown;
+  const head = `<div class="row is-${chat.stands.as}${indent ? " sub" : " root"}${open ? " open" : ""}${shown ? " shown" : ""}" style="--indent: ${indent}" data-key="${chat.key}" title="${esc(shown ? `${chat.stands.says}, shown in the window` : chat.stands.says)}">`;
+  const badged = `<span class="badge ${stands.as}">${stands.says}</span>`;
+  const line = indent
+    ? `${head}<span class="name">${fold}${named}${more}</span>${badged}${planBar(chat)}${nowLine(chat)}<span class="push">${moved(chat)}${act(chat)}</span></div>`
+    : `${head}<div class="l1">${fold}${badged}<span class="title">${named}</span>${more}` +
+      `<span class="meta">${told.home && chat.where ? `<span class="where">${esc(chat.where)}</span>` : ""}${moved(chat)}</span></div>` +
+      `<div class="l2">${planBar(chat)}${nowLine(chat)}<span class="push">${act(chat)}</span></div></div>`;
+  return line + (open ? opening(chat) : "");
 }
 
 /// The lines of `chat`, stepped in `indent` times, and, unless they are
@@ -267,6 +344,37 @@ function lines(chat, indent) {
       .join("")
   );
 }
+
+/// Every chat under `chat`, and itself.
+const tree = (chat) => [chat, ...chat.below];
+
+/// The group the card of the chat at the top, `chat`, falls in: the
+/// human's turn, if any chat of it waits for them, then at work, if any
+/// is, else the rest.
+function treeGroup(chat) {
+  const groups = tree(chat).map((one) => badge(one).group);
+  if (groups.includes("yours")) return "yours";
+  return groups.includes("work") ? "work" : "rest";
+}
+
+/// The card of the chat at the top, `chat`, with its subagents.
+const card = (chat) => `<div class="card tree ${treeGroup(chat)}">${lines(chat, 0)}</div>`;
+
+/// The folds the human opened, of the chats stopped or done and the pull
+/// requests merged or closed, by their name.
+const foldsOpen = new Set();
+
+/// A group of cards, under its name and how many it holds, of the class
+/// `as`, or nothing when it holds none.
+const group = (as, name, cards) =>
+  cards.length
+    ? `<div class="cards-group ${as}"><div class="group-head">${name} <span class="n">${cards.length}</span></div><div class="cards">${cards.join("")}</div></div>`
+    : "";
+
+/// A fold, by its name, `name`, which says `says`, of `inside`, open as the
+/// human last left it.
+const fold = (name, says, inside) =>
+  `<details class="folded" data-folded="${name}"${foldsOpen.has(name) ? " open" : ""}><summary>${says}</summary>${inside}</details>`;
 
 /// How each kind of what happened in a chat is marked.
 const MARKS = {
@@ -544,7 +652,7 @@ function opening(chat) {
     .map(
       (pull) =>
         `<div class="pull"><span class="number">#${pull.number}</span>${pull.draft ? " draft" : ""} ${esc(pull.title)}` +
-        (pull.ci ? ` <span class="ci ${esc(pull.ci)}">CI ${esc(pull.ci)}</span>` : "") +
+        (pull.ci ? ` <span class="pci ${esc(pull.ci)}">CI ${esc(pull.ci)}</span>` : "") +
         `</div>`,
     )
     .join("");
@@ -647,36 +755,132 @@ function numbers(all) {
   );
 }
 
-/// The pull requests the project holds, as a section of their own, or
+/// Whether `pull` is merged or closed.
+const ended = (pull) => pull.state === "merged" || pull.state === "closed";
+
+/// The group `pull` falls in, by what it needs: merged or closed, a
+/// draft, the human, as its CI failed, a review asked for changes or it
+/// conflicts, its CI to end, nothing, as it is ready to merge, a review,
+/// or Cox to read it.
+function need(pull) {
+  if (ended(pull)) return "done";
+  if (!pull.state) return "unread";
+  if (pull.state === "draft") return "draft";
+  if (pull.ci === "failed" || pull.review === "changes" || pull.conflicts) return "yours";
+  if (pull.ci === "running") return "running";
+  if (pull.review === "required") return "review";
+  return "ready";
+}
+
+/// The groups of pull requests, in the order they show, by their class
+/// and name.
+const NEEDS = [
+  ["yours", "Needs you"],
+  ["running", "CI running"],
+  ["ready", "Ready to merge"],
+  ["review", "Waiting on review"],
+  ["draft", "Drafts"],
+  ["unread", "Not read yet"],
+];
+
+/// How `pull` stands, as its badge says it.
+function pullBadge(pull) {
+  const says = { open: "Open", draft: "Draft", merged: "Merged", closed: "Closed" }[pull.state];
+  return says ? `<span class="badge ${pull.state}">${says}</span>` : "";
+}
+
+/// How the checks of `pull` stand: a block each, then how many passed,
+/// failed, run and were skipped, of how many.
+function checks(pull) {
+  const checks = pull.checks;
+  if (!checks || !checks.total) return `<span class="chip quiet">${pull.state ? "No CI" : ""}</span>`;
+  const all = [
+    ...Array(checks.passed).fill(["p"]),
+    ...Array(checks.failed).fill(["f"]),
+    ...Array(checks.running).fill(["r"]),
+    ...Array(checks.skipped).fill([""]),
+  ];
+  const parts = [`<span class="${checks.passed + checks.skipped === checks.total ? "p" : ""}">${checks.passed}/${checks.total} passed</span>`];
+  if (checks.failed) parts.push(`<span class="f">${checks.failed} failed</span>`);
+  if (checks.running) parts.push(ended(pull) ? `<span>${checks.running} cancelled</span>` : `<span class="r">${checks.running} running</span>`);
+  if (checks.skipped) parts.push(`<span>${checks.skipped} skipped</span>`);
+  return `<span class="ci">${blocks(all)}<span>${parts.join(` <span class="sep">·</span> `)}</span></span>`;
+}
+
+/// What the reviews of `pull` decided, while it is open.
+function review(pull) {
+  if (ended(pull) || !pull.state) return "";
+  switch (pull.review) {
+    case "approved":
+      return `<span class="chip good"><b>✓</b> Approved</span>`;
+    case "changes":
+      return `<span class="chip ask"><b>±</b> Changes requested</span>`;
+    case "required":
+      return `<span class="chip quiet"><b>○</b> Review required</span>`;
+    default:
+      return `<span class="chip quiet">No review needed</span>`;
+  }
+}
+
+/// How much `pull` changes, once Cox read it.
+const size = (pull) =>
+  pull.size
+    ? `<span class="diff"><span class="a">+${pull.size.added}</span> <span class="d">−${pull.size.removed}</span> <span>· ${many(pull.size.files, "file", "files")}</span></span>`
+    : "";
+
+/// When `pull` was opened, or merged or closed.
+function opens(pull) {
+  if (ended(pull) && pull.ended) return `<span class="age">${pull.state} ${ago(pull.ended)}</span>`;
+  return pull.opened ? `<span class="age">opened ${ago(pull.opened)}</span>` : "";
+}
+
+/// The card of `pull`: how it stands, its number, which opens it on
+/// GitHub, its title, where it is and how much it changes; how its checks
+/// stand, those that failed, what its reviews decided and whether it
+/// conflicts, when it was opened, the chat that opened it, which a click
+/// shows, and what asks that chat to fix its CI.
+function pullCard(pull) {
+  const where = told.home ? pull.where : pull.repo?.split("/").pop();
+  const failed = !ended(pull) && pull.failed.length ? `<span class="failnames">${pull.failed.map((name) => `<code>${esc(name)}</code>`).join(" ")}</span>` : "";
+  const conflicts = !ended(pull) && pull.conflicts ? `<span class="chip ask"><b>⚠</b> Conflicts</span>` : "";
+  const by = pull.author
+    ? `<a class="chatlink${pull.author.resolved ? " done" : ""}" href="cox://chat/${pull.author.key}" title="shows the chat">${esc(pull.author.name)}${hint(pull.author)}${pull.author.resolved ? " (done)" : ""}</a>`
+    : `<span class="chatlink none">opened by hand</span>`;
+  const fix = pull.fix
+    ? `<button class="btn fix" data-fix="${esc(JSON.stringify({ key: pull.author.key, repo: pull.repo, number: pull.number }))}" title="sends the chat that opened it a line asking it to fix its CI, reopening it if it is done">Ask to fix</button>`
+    : "";
+  const when = opens(pull);
+  return (
+    `<div class="card pr ${need(pull)}${pull.ci === "failed" && !ended(pull) ? " failed" : ""}">` +
+    `<div class="l1">${pullBadge(pull)}<a class="num" href="${esc(pull.url)}" target="_blank" title="${esc(pull.repo)}">#${pull.number}</a>` +
+    `<span class="title">${esc(pull.title ?? pull.url)}</span>` +
+    `<span class="meta">${where ? `<span class="where">${esc(where)}</span>` : ""}${size(pull)}</span></div>` +
+    `<div class="l2">${checks(pull)}${failed}${review(pull)}${conflicts}` +
+    `<span class="push">${when}${when ? `<span class="sep">·</span>` : ""}${by}${fix}</span></div>` +
+    `</div>`
+  );
+}
+
+/// The pull requests the project holds, as a section of their own, in
+/// groups by what they need, those merged or closed folded away; or
 /// nothing when it holds none.
 function pullRequests() {
   const pulls = told.pulls ?? [];
   if (!pulls.length) return "";
-  const rows = pulls.map((pull) => {
-    const where = told.home && pull.where ? `<span class="where">${esc(pull.where)}</span> ` : "";
-    const stands =
-      pull.state === "merged" || pull.state === "closed"
-        ? `<span class="ci done">${esc(pull.state)}</span>`
-        : pull.ci
-          ? `<span class="ci ${esc(pull.ci)}">CI ${esc(pull.ci)}</span>`
-          : `<span class="ci">${pull.state ? "no CI" : "not read yet"}</span>`;
-    const draft = pull.state === "draft" ? ` <span class="draft">draft</span>` : "";
-    const by = pull.author
-      ? `<span class="by">by <a href="cox://chat/${pull.author.key}" title="shows the chat">${esc(pull.author.name)}</a>${hint(pull.author)}${pull.author.resolved ? " (done)" : ""}</span>`
-      : "";
-    const fix = pull.fix
-      ? `<button class="fix" data-fix="${esc(JSON.stringify({ key: pull.author.key, repo: pull.repo, number: pull.number }))}" title="sends the chat that opened it a line asking it to fix its CI, reopening it if it is done">Ask to fix</button>`
-      : "";
-    const failed = pull.failed.length ? `<div class="failed">Failed: ${pull.failed.map(esc).join(", ")}</div>` : "";
-    return (
-      `<div class="prow ${esc(pull.ci ?? pull.state ?? "")}">` +
-      `<div class="line">${where}<a class="pull-number" href="${esc(pull.url)}" target="_blank" title="${esc(pull.repo)}">#${pull.number}</a> ` +
-      `<span class="title">${esc(pull.title ?? pull.url)}</span>${draft} ${stands} ${by}${fix}</div>` +
-      failed +
-      `</div>`
-    );
-  });
-  return `<div class="group pulls"><h2>Pull requests</h2>${rows.join("")}</div>`;
+  const count = (as) => pulls.filter((pull) => need(pull) === as).length;
+  const going = count("running") + count("review") + count("draft") + count("unread");
+  const sum = [
+    count("yours") ? `${count("yours")} ${count("yours") === 1 ? "needs" : "need"} you` : null,
+    count("ready") ? `${count("ready")} ready to merge` : null,
+    going ? `${going} in progress` : null,
+  ].filter(Boolean);
+  const done = pulls.filter(ended);
+  return (
+    `<div class="section"><div class="section-head"><h2>Pull requests</h2><span class="sum">${sum.join(" · ")}</span></div>` +
+    NEEDS.map(([as, name]) => group(as, name, pulls.filter((pull) => need(pull) === as).map(pullCard))).join("") +
+    (done.length ? fold("pulls", `${done.length} merged or closed lately`, `<div class="cards-group done"><div class="cards">${done.map(pullCard).join("")}</div></div>`) : "") +
+    `</div>`
+  );
 }
 
 /// Draws the page, keeping what the human was writing on a step, and
@@ -701,25 +905,38 @@ function drawn() {
     return;
   }
   const all = chats();
-  // A subagent's line stays under the chat that opened it.
+  // A subagent's line stays under the chat that opened it, in the card
+  // of the chat at the top.
   const tops = all.filter((chat) => chat.parent == null);
   tops.sort((one, other) => ORDER[one.stands.as] - ORDER[other.stands.as]);
-  const places = told.home ? [...new Set(tops.map((chat) => chat.where ?? ""))] : [""];
-  const groups = tops.length
-    ? places
-        .map((place) => {
-          const of = tops.filter((chat) => !told.home || (chat.where ?? "") === place);
-          return `<div class="group">${told.home ? `<h2>${esc(place || "~")}</h2>` : ""}${of.map((chat) => lines(chat, 0)).join("")}</div>`;
-        })
-        .join("")
+  const of = (as) => tops.filter((chat) => treeGroup(chat) === as).map(card);
+  const rest = of("rest");
+  const cards = tops.length
+    ? `<div class="section">` +
+      group("yours", "Needs you", of("yours")) +
+      group("work", "At work", of("work")) +
+      (rest.length ? fold("chats", `${rest.length} stopped or done`, `<div class="cards-group rest"><div class="cards">${rest.join("")}</div></div>`) : "") +
+      `</div>`
     : `<div class="none">No chat ${told.home ? "" : "here "}is at work, has a plan to finish, or waits for you.</div>`;
   app.innerHTML =
     `<div class="head"><h1>Activity</h1><span class="where" title="${esc(told.folder)}">${esc(told.folder)}</span></div>` +
     (told.github ? `<div class="notice">${esc(told.github)}</div>` : "") +
     numbers(all) +
-    groups +
+    cards +
     pullRequests();
 }
+
+// A fold stays as the human left it, as the page is drawn again.
+app.addEventListener(
+  "toggle",
+  (event) => {
+    const name = event.target.dataset?.folded;
+    if (!name) return;
+    if (event.target.open) foldsOpen.add(name);
+    else foldsOpen.delete(name);
+  },
+  true,
+);
 
 app.addEventListener("click", (event) => {
   const pick = event.target.closest("[data-window]");
