@@ -589,7 +589,8 @@ pub(super) async fn agent(
 }
 
 /// What the agent that waited for the subagent `name` is told once it
-/// stands as `waited`: its report, and `notes` of how it was set up.
+/// stands as `waited`: its report, and `notes` of how it was set up, then
+/// that Cox leaves it open, if it is a sketch.
 fn reported(name: &str, waited: &Waited, notes: Vec<String>) -> String {
     let mut told = match (&waited.asking, waited.ended_but(), &waited.said) {
         (Some(asking), _, _) => format!(
@@ -610,7 +611,7 @@ fn reported(name: &str, waited: &Waited, notes: Vec<String>) -> String {
         told.push_str("\n\n");
         told.push_str(&notes.join(" "));
     }
-    waited.with_ci(told)
+    crate::workflow::left_open(name, waited, waited.with_ci(told))
 }
 
 /// Sends the subagent `arguments` name, one this chat ran with `agent`,
@@ -806,8 +807,9 @@ async fn find(
 }
 
 /// Waits for the subagent's chat `arguments` name to end its turn, or to
-/// come to wait for the human, and tells how it stands, or, past `most`,
-/// when given, that it is at work still.
+/// come to wait for the human, and tells how it stands, and that Cox
+/// leaves it open, if it is a sketch, or, past `most`, when given, that
+/// it is at work still.
 pub(super) async fn agent_report(
     arguments: &Value,
     most: Option<Duration>,
@@ -848,7 +850,11 @@ pub(super) async fn agent_report(
         told.push_str("\n\n");
         told.push_str(unoffered);
     }
-    Ok(waited.with_ci(told))
+    Ok(crate::workflow::left_open(
+        &name,
+        &waited,
+        waited.with_ci(told),
+    ))
 }
 
 #[cfg(test)]
@@ -1582,6 +1588,41 @@ mod tests {
                 .contains("To stop one, call agent_stop, giving its title."),
             "{agent}"
         );
+    }
+
+    #[tokio::test]
+    async fn a_sketch_left_open_is_reported_with_the_number_that_marks_it_done() {
+        let (chats, asked) = unbounded_channel();
+        let stands = Waited {
+            said: Some("Tried it.".to_owned()),
+            sketch: Some(12),
+            ..Waited::default()
+        };
+        let window = window(asked, opened(7), vec![stands.clone()]);
+
+        let told = agent_report(&json!({ "title": "Review the parser" }), None, &chats)
+            .await
+            .unwrap();
+
+        let marks = "Cox leaves the chat of \"Review the parser\" open, as it is a sketch, which \
+                     the human ends. Once the human has seen what it made, as with \
+                     show_changes, what it goes on to is agreed, and you have what you need of \
+                     it, mark it done with resolve_chat, giving 12, the number the project \
+                     keeps its chat by: its folder stays as it is, and a line sent to it \
+                     reopens it.";
+        assert_eq!(
+            told,
+            format!(
+                "The subagent \"Review the parser\" ended its turn. It last said:\n\nTried \
+                 it.\n\n{marks}"
+            )
+        );
+        assert_eq!(
+            reported("Review the parser", &stands, Vec::new()),
+            format!("The subagent \"Review the parser\" reports:\n\nTried it.\n\n{marks}")
+        );
+        drop(chats);
+        window.await.unwrap();
     }
 
     #[tokio::test]

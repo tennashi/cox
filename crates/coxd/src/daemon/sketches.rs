@@ -8,7 +8,7 @@ use std::rc::Rc;
 use cox_core::goal::Goal;
 use cox_core::store::Named;
 
-use super::{Daemon, Ends, NAME_LENGTH, Sketching, make_sketch, working};
+use super::{Daemon, Ends, NAME_LENGTH, Sketching, Whose, make_sketch, working};
 use crate::agent;
 use crate::agent::mcp::{OpenedChat, Waited};
 use crate::agent::setup::{Policy, Setup, keeps_in_wiki};
@@ -133,6 +133,11 @@ impl Daemon {
         }
         self.reveals.push(key);
         self.read(key);
+        // The human takes it in hand to end it: its summing up is theirs,
+        // and the chat it was opened beside hears how it ended.
+        if let Some(slot) = self.slot_mut(key) {
+            slot.whose = Whose::Human;
+        }
         let Some(slot) = self.slot_mut(key) else {
             return;
         };

@@ -17,7 +17,13 @@ stopped or cut off, or to follow up on its report, continue that
 subagent with agent_continue, giving its title, so that it goes on in
 the chat that has its context; run a new subagent with agent only for
 new work. To stop one, use agent_stop, giving its title: its chat stays
-open, to go on with agent_continue. Claude Code's TaskStop, SendMessage
+open, to go on with agent_continue. Cox marks a subagent's chat done by
+itself once its report reached you and nothing of it runs. One it leaves
+open, as a subagent in a sketch, whose report says so, mark done
+yourself with resolve_chat, giving the number that report gives, once
+its work is over and you have what you need of it: a sketch only once
+the human has seen what it made, with show_changes, and what it goes on
+to is agreed, since its folder is what the human looks at. Claude Code's TaskStop, SendMessage
 and ListAgents do not reach Cox subagents: do not use them, or message
 other sessions, about one.
 
