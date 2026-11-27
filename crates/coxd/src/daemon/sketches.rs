@@ -302,7 +302,9 @@ impl Daemon {
                 ("source", source.as_str()),
             ];
             match workflow::say(text, &values) {
-                Some(line) => self.go_on(goes_on, &line),
+                Some(line) => {
+                    self.go_on(goes_on, &line);
+                }
                 None => {
                     if let Some(chat) = self.chat(goes_on) {
                         chat.note(format!(

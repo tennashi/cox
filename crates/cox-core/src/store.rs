@@ -22,7 +22,7 @@ use crate::settings::Setting;
 use crate::tabs::KeptTabs;
 
 /// The version of the tables below, as `SQLite`'s `user_version` holds it.
-const VERSION: i64 = 29;
+const VERSION: i64 = 30;
 
 const TABLES: &str = "
 CREATE TABLE projects (
@@ -85,7 +85,12 @@ CREATE TABLE chats (
     -- When it was marked done, in milliseconds since the epoch, and by
     -- whom, `human` or `agent`, while it is: both NULL, or both set.
     resolved_at INTEGER,
-    resolved_by TEXT
+    resolved_by TEXT,
+    -- Whether the agent of the chat that opened it, its parent, heard what
+    -- it came to last, `working`, `pending` or `heard`, while that agent
+    -- hears of it: NULL once the chat is the human's alone, as one with
+    -- no parent is.
+    report TEXT
 );
 CREATE TABLE entries (
     chat INTEGER NOT NULL REFERENCES chats (id),
@@ -352,6 +357,11 @@ const UPGRADES: &[&str] = &[
          PRIMARY KEY (repo, number)
      ) WITHOUT ROWID;",
     "ALTER TABLE turns ADD COLUMN why TEXT;",
+    // A chat an agent opened was that agent's again each time Cox started,
+    // unless it was a sketch, before Cox kept whose it is.
+    "ALTER TABLE chats ADD COLUMN report TEXT;
+     UPDATE chats SET report = 'working'
+         WHERE parent IS NOT NULL AND setup ->> '$.sketch' IS NULL;",
 ];
 
 /// What keeps an entry of a chat, in place of what was kept there.
@@ -446,6 +456,10 @@ pub struct KeptChat {
     pub spent: Option<String>,
     /// When it was marked done, and by whom, while it is.
     pub resolved: Option<Resolved>,
+    /// Whether the agent of the chat that opened it heard what it came to
+    /// last, as [`Store::keep_report`] kept it, while that agent hears of
+    /// it.
+    pub report: Option<String>,
     /// When it last moved, in milliseconds since the epoch: when the last
     /// entry of its conversation was written, or, with none, when it was
     /// opened.
@@ -852,7 +866,7 @@ impl Store {
             "SELECT id, project, name, named, archived, goal_command, parent, setup, goal_words,
              folder, spent, resolved_at, resolved_by,
              COALESCE((SELECT at FROM entries WHERE entries.chat = chats.id
-                       ORDER BY number DESC LIMIT 1), created)
+                       ORDER BY number DESC LIMIT 1), created), report
              FROM chats ORDER BY id",
         )?;
         let chats = statement.query_map([], |row| {
@@ -877,6 +891,7 @@ impl Store {
                     })
                 },
                 active: row.get(13)?,
+                report: row.get(14)?,
             })
         })?;
         Ok(chats.collect::<Result<_, _>>()?)
@@ -1155,6 +1170,21 @@ impl Store {
                 resolved.map(|resolved| resolved.at),
                 resolved.map(|resolved| resolved.by.word()),
             ],
+        )?;
+        Ok(())
+    }
+
+    /// Keeps whether the agent of the chat that opened `chat` heard what it
+    /// came to last, as the word `report`, or, with none, that the chat is
+    /// the human's alone.
+    ///
+    /// # Errors
+    ///
+    /// When the database cannot be written.
+    pub fn keep_report(&self, chat: ChatId, report: Option<&str>) -> anyhow::Result<()> {
+        self.connection.execute(
+            "UPDATE chats SET report = ?2 WHERE id = ?1",
+            params![chat.0, report],
         )?;
         Ok(())
     }
@@ -2624,6 +2654,71 @@ mod tests {
                 ("Chat 2".to_owned(), Named::Numbered, true),
             ]
         );
+    }
+
+    #[test]
+    fn keeps_whether_the_agent_that_opened_a_chat_heard_its_report_past_closing() {
+        let directory = scratch();
+        let path = directory.path().join("chats.sqlite");
+        let reports = |path: &Path| {
+            Store::open(path)
+                .unwrap()
+                .chats()
+                .unwrap()
+                .into_iter()
+                .map(|chat| chat.report)
+                .collect::<Vec<_>>()
+        };
+        let child = {
+            let store = Store::open(&path).unwrap();
+            let parent = store.add_chat(None, "Chat 1").unwrap();
+            store.add_chat_under(parent, None, "Chat 2", None).unwrap()
+        };
+        assert_eq!(reports(&path), [None, None]);
+
+        Store::open(&path)
+            .unwrap()
+            .keep_report(child, Some("pending"))
+            .unwrap();
+        assert_eq!(reports(&path), [None, Some("pending".to_owned())]);
+
+        Store::open(&path)
+            .unwrap()
+            .keep_report(child, None)
+            .unwrap();
+        assert_eq!(reports(&path), [None, None]);
+    }
+
+    #[test]
+    fn a_chat_an_agent_opened_before_cox_kept_whose_it_is_stays_that_agent_s_unless_a_sketch() {
+        let directory = scratch();
+        let path = directory.path().join("chats.sqlite");
+        {
+            let store = Store::open(&path).unwrap();
+            let parent = store.add_chat(None, "Chat 1").unwrap();
+            store.add_chat_under(parent, None, "Chat 2", None).unwrap();
+            store
+                .add_chat_under(parent, None, "Chat 3", Some(r#"{"sketch":null}"#))
+                .unwrap();
+            store
+                .add_chat_under(parent, None, "Chat 4", Some(r#"{"sketch":"empty"}"#))
+                .unwrap();
+        }
+        // As the Cox of version 29 left it.
+        Connection::open(&path)
+            .unwrap()
+            .execute_batch("ALTER TABLE chats DROP COLUMN report; PRAGMA user_version = 29;")
+            .unwrap();
+
+        let reports: Vec<_> = Store::open(&path)
+            .unwrap()
+            .chats()
+            .unwrap()
+            .into_iter()
+            .map(|chat| chat.report)
+            .collect();
+        let working = Some("working".to_owned());
+        assert_eq!(reports, [None, working.clone(), working, None]);
     }
 
     #[test]

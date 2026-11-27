@@ -785,11 +785,15 @@ impl Chat {
 
     /// Sends `text` to the agent in the human's place, as when the chat
     /// moves into a sketch and goes on there. A closed chat's agent is
-    /// started again first, by the daemon.
-    pub fn told(&mut self, text: &str) {
-        if let Some(command) = self.conversation.told(text) {
+    /// started again first, by the daemon. Answers whether the line went:
+    /// not unless the agent waits for one.
+    pub fn told(&mut self, text: &str) -> bool {
+        let command = self.conversation.told(text);
+        let went = command.is_some();
+        if let Some(command) = command {
             self.send(command);
         }
+        went
     }
 
     /// Asks the agent, in the human's place, to merge what it made, with
