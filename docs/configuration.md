@@ -449,7 +449,7 @@ more, so move them up out of it.
 | `triggers/*.md` | The project's [triggers](#triggers). |
 | `wiki/` | The project's own wiki, for what holds only of it. Only its chats see it. |
 | `raw/` | The project's own sources, what its chats read (`raw_keep`), as they read it. Only its chats see them. |
-| `maps/<name>.json` | The project's maps, one for each viewpoint of it; a repository of the project keeps its own the same way. See [Maps](#maps). |
+| `maps/<name>.json` | The project's maps; a repository of the project keeps its own the same way. See [Maps](#maps). |
 | `plugins/<name>/` | A [plugin](#plugins): a view of the project's own on the stage. |
 | `servers.json` | Language servers for the project. See [Language servers](#language-servers). |
 
@@ -594,6 +594,42 @@ a handler or middleware is, is not an end it can reach. The agent's
 a box or a type, and answers what is there, with the drift. The
 conversation keeps a row for each map the agent showed, which opens it
 there again: on the stage, or on the phone, over the chat.
+
+A map is told from whoever starts the project working: its drivers,
+which the vocabulary's `top` names in `drivers`, as the people who use
+the project, each by what they use it for, the systems that call into
+it, and the clocks and events that set it off. Opened, the Map shows the
+drivers alone; choose one, in the bar under the map's name or by its
+card, and it shows what that driver sets working, and nothing else: the
+boxes, the types inside them, and the people and systems around, placed
+anew so that no room is left for the rest. "Everything" shows all of the
+map, whoever starts it. A map with no drivers is shown whole.
+
+What a driver sets working is what is reached from it. First along the
+lines you wrote, each from its `from`, the end that starts it: through
+the people and systems on the way, and into a box, to the parts the
+level inside draws the line on to, by hand or by a rule, or else to all
+of the box. The types the lines come to are where the driver comes in.
+From there along the code, the way it goes: what a type's functions
+call and name, what its fields hold, and on through the functions that
+are no type's. And along a line you wrote from a box that owns code,
+as from one process to another, once the code has come into the box. A
+line from a box that opens on boxes is the part's that the level inside
+draws it on from; drawn on from none, it is followed only where a
+driver comes in at all of the box. So draw each line on, level by
+level, from the part that starts it. Where one
+driver's walk comes to a type another driver comes in at, it shows the
+type, with a dashed edge, and goes no further from it: what happens from
+there is the other's. So a type several drivers reach is in each one's
+slice, where it says how many others reach it, and one driver's slice
+is not all of the map only because the code is joined up somewhere.
+
+So write a line from the end that starts it: `both: true` only draws
+the answer's way too. And give a line `stops: true` where what a driver
+starts ends at the line's `to`, as from a build task to the app it
+starts: the `to` is shown, closed. The page's address names the driver
+first, as `#user/app/server`, and `*` there is all of the map; the
+agent's `show_map` takes the same as `driver`.
 
 The project's own maps are in `maps` in its folder. To keep a map with
 the code it shows, versioned in the same commits, put it in `maps` in

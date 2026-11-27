@@ -1,5 +1,5 @@
 {
- "says": "What runs when someone uses Cox: the processes, who and what they talk to, and the parts of each that do the work.",
+ "says": "Cox, from whoever sets it working: the people who use it and build it, and the agent that inspects it.",
  "nodes": {
   "cox": {
    "name": "Cox",
@@ -7,21 +7,16 @@
    "code": "cox, coxd"
   },
   "human": {
-   "name": "Person at a Mac",
+   "name": "Person using Cox",
    "icon": "person",
-   "kind": "outside"
+   "kind": "outside",
+   "code": "at the Mac, and on the phone"
   },
   "debugger": {
-   "name": "Debugging agent",
+   "name": "Agent inspecting Cox",
    "icon": "agent",
    "kind": "outside",
-   "code": "a terminal agent, or another Cox"
-  },
-  "phone": {
-   "name": "Person's phone",
-   "icon": "phone",
-   "kind": "outside",
-   "code": "a browser, on coxd's page"
+   "code": "cox --inspect"
   },
   "tailscale": {
    "name": "Tailnet",
@@ -738,17 +733,117 @@
    "claims": [
     "coxd/translate"
    ]
+  },
+  "dev": {
+   "name": "Person building Cox",
+   "icon": "person",
+   "kind": "outside",
+   "code": "cargo xtask, a person or an agent"
+  },
+  "pwa": {
+   "name": "Phone page",
+   "icon": "phone",
+   "code": "a PWA, coxd/daemon/phone",
+   "lines": "hand"
+  },
+  "ci": {
+   "name": "GitHub Actions",
+   "icon": "cycle",
+   "kind": "outside",
+   "code": "ci.yml, release.yml"
+  },
+  "cargo": {
+   "name": "Cargo",
+   "icon": "box",
+   "kind": "outside",
+   "code": "cargo, clippy, rustfmt, nextest"
+  },
+  "docker": {
+   "name": "Docker",
+   "icon": "server",
+   "kind": "outside",
+   "code": "the container of run --linux"
+  },
+  "keychain": {
+   "name": "macOS keychain",
+   "icon": "gear",
+   "kind": "outside",
+   "code": "security, codesign"
+  },
+  "cef": {
+   "name": "CEF",
+   "icon": "download",
+   "kind": "outside",
+   "code": "Chromium, as the cef crate gets it"
+  },
+  "tasks": {
+   "name": "Build tasks",
+   "icon": "run",
+   "code": "cargo xtask",
+   "claims": [
+    "xtask"
+   ],
+   "lines": "hand"
+  },
+  "fakeagent": {
+   "name": "Fake agent",
+   "icon": "agent",
+   "code": "cox-fake-agent",
+   "claims": [
+    "cox-fake-agent"
+   ],
+   "lines": "hand"
+  },
+  "fakeemu": {
+   "name": "Fake emulator",
+   "icon": "android",
+   "code": "cox-fake-emulator",
+   "files": [
+    "crates/cox-android/src/bin"
+   ],
+   "lines": "hand"
+  },
+  "scripts": {
+   "name": "Build scripts",
+   "icon": "gear",
+   "open": false,
+   "code": "build.rs",
+   "files": [
+    "crates/cox/build.rs",
+    "crates/coxd/build.rs",
+    "crates/cox-android/build.rs"
+   ]
+  },
+  "tests": {
+   "name": "Tests",
+   "icon": "check",
+   "code": "crates/*/tests",
+   "files": [
+    "crates/cox/tests",
+    "crates/coxd/tests",
+    "crates/cox-acp/tests",
+    "crates/cox-android/tests",
+    "crates/cox-fake-agent/tests"
+   ],
+   "lines": "hand"
+  },
+  "testhelpers": {
+   "name": "Test helpers",
+   "icon": "clock",
+   "claims": [
+    "coxd/testing"
+   ]
   }
  },
  "top": {
   "center": "cox",
-  "left": [
+  "drivers": [
    "human",
    "debugger",
-   "phone",
-   "tailscale"
+   "dev"
   ],
   "right": [
+   "tailscale",
    "agents",
    "browsertools",
    "codetools",
@@ -756,7 +851,12 @@
    "android",
    "macos",
    "web",
-   "folders"
+   "folders",
+   "ci",
+   "cargo",
+   "docker",
+   "keychain",
+   "cef"
   ],
   "lines": [
    {
@@ -770,12 +870,7 @@
     "both": true
    },
    {
-    "from": "phone",
-    "to": "tailscale",
-    "both": true
-   },
-   {
-    "from": "tailscale",
+    "from": "dev",
     "to": "cox",
     "both": true
    },
@@ -788,10 +883,6 @@
     "from": "browsertools",
     "to": "cox",
     "both": true
-   },
-   {
-    "from": "agents",
-    "to": "browsertools"
    },
    {
     "from": "cox",
@@ -822,6 +913,43 @@
     "from": "cox",
     "to": "folders",
     "both": true
+   },
+   {
+    "from": "ci",
+    "to": "cox"
+   },
+   {
+    "from": "cox",
+    "to": "cargo",
+    "both": true
+   },
+   {
+    "from": "cox",
+    "to": "docker",
+    "both": true
+   },
+   {
+    "from": "cox",
+    "to": "keychain",
+    "both": true
+   },
+   {
+    "from": "cox",
+    "to": "cef"
+   },
+   {
+    "from": "tailscale",
+    "to": "cox",
+    "both": true
+   },
+   {
+    "from": "dev",
+    "to": "ci",
+    "both": true
+   },
+   {
+    "from": "agents",
+    "to": "browsertools"
    }
   ]
  },
@@ -830,97 +958,163 @@
    "box": [
     0,
     0,
-    1300,
-    800
+    1660,
+    620
    ],
    "outer": {
     "human": [
      "left",
-     160
+     80
     ],
     "debugger": [
      "left",
-     320
+     230
     ],
-    "phone": [
+    "dev": [
      "left",
-     520
+     480
     ],
     "tailscale": [
-     "left",
-     680
+     "right",
+     -190
     ],
     "agents": [
      "right",
-     64
+     -114
     ],
     "browsertools": [
      "right",
-     160
+     -38
     ],
     "codetools": [
      "right",
-     256
+     38
     ],
     "git": [
      "right",
-     352
+     114
     ],
     "android": [
      "right",
-     448
+     190
     ],
     "macos": [
      "right",
-     544
+     266
     ],
     "web": [
      "right",
-     640
+     342
     ],
     "folders": [
      "right",
-     736
+     418
+    ],
+    "ci": [
+     "right",
+     494
+    ],
+    "cargo": [
+     "right",
+     570
+    ],
+    "docker": [
+     "right",
+     646
+    ],
+    "keychain": [
+     "right",
+     722
+    ],
+    "cef": [
+     "right",
+     798
     ]
    },
    "parts": {
     "inspectclient": [
      60,
-     280
+     80
     ],
     "window": [
      380,
-     280
+     80
     ],
     "daemon": [
      700,
-     280
+     80
     ],
     "bridge": [
      1020,
+     80
+    ],
+    "pagereader": [
+     1340,
+     80
+    ],
+    "pwa": [
+     60,
      280
     ],
     "waiting": [
+     380,
+     280
+    ],
+    "helpers": [
+     700,
+     280
+    ],
+    "store": [
+     1020,
+     280
+    ],
+    "fakeagent": [
+     1340,
+     280
+    ],
+    "tasks": [
      60,
      480
     ],
-    "helpers": [
+    "tests": [
      380,
      480
     ],
-    "store": [
+    "testhelpers": [
      700,
      480
     ],
-    "pagereader": [
+    "scripts": [
      1020,
+     480
+    ],
+    "fakeemu": [
+     1340,
      480
     ]
    },
    "lines": [
     {
      "from": "human",
-     "to": "window",
+     "to": {
+      "box": "window",
+      "implements": "Render"
+     },
+     "both": true
+    },
+    {
+     "from": "human",
+     "to": "pwa",
+     "both": true
+    },
+    {
+     "from": "pwa",
+     "to": "tailscale",
+     "both": true
+    },
+    {
+     "from": "tailscale",
+     "to": "daemon",
      "both": true
     },
     {
@@ -945,11 +1139,6 @@
     },
     {
      "from": "window",
-     "to": "daemon",
-     "both": true
-    },
-    {
-     "from": "tailscale",
      "to": "daemon",
      "both": true
     },
@@ -1050,6 +1239,88 @@
      "from": "store",
      "to": "folders",
      "both": true
+    },
+    {
+     "from": "dev",
+     "to": "tasks",
+     "both": true
+    },
+    {
+     "from": "dev",
+     "to": "ci",
+     "both": true
+    },
+    {
+     "from": "ci",
+     "to": "tasks"
+    },
+    {
+     "from": "tasks",
+     "to": "cargo",
+     "both": true
+    },
+    {
+     "from": "tasks",
+     "to": "docker",
+     "both": true
+    },
+    {
+     "from": "tasks",
+     "to": "keychain",
+     "both": true
+    },
+    {
+     "from": "tasks",
+     "to": "window",
+     "stops": true
+    },
+    {
+     "from": "tasks",
+     "to": "fakeagent"
+    },
+    {
+     "from": "fakeagent",
+     "to": "agents",
+     "stops": true
+    },
+    {
+     "from": "fakeemu",
+     "to": "android",
+     "stops": true
+    },
+    {
+     "from": "cargo",
+     "to": "scripts"
+    },
+    {
+     "from": "scripts",
+     "to": "cef"
+    },
+    {
+     "from": "cargo",
+     "to": "tests"
+    },
+    {
+     "from": "tests",
+     "to": "window",
+     "stops": true
+    },
+    {
+     "from": "tests",
+     "to": "daemon",
+     "stops": true
+    },
+    {
+     "from": "tests",
+     "to": "fakeagent"
+    },
+    {
+     "from": "tests",
+     "to": "fakeemu"
+    },
+    {
+     "from": "tests",
+     "to": "testhelpers"
     }
    ]
   },
@@ -1109,8 +1380,8 @@
      "both": true
     },
     {
-     "from": "daemon",
-     "to": "daemonlink",
+     "from": "daemonlink",
+     "to": "daemon",
      "both": true
     },
     {
@@ -1119,13 +1390,13 @@
      "both": true
     },
     {
-     "from": "waiting",
-     "to": "startup",
+     "from": "startup",
+     "to": "waiting",
      "both": true
     },
     {
-     "from": "helpers",
-     "to": "browser",
+     "from": "browser",
+     "to": "helpers",
      "both": true
     },
     {
@@ -1134,39 +1405,46 @@
      "both": true
     },
     {
-     "from": "web",
-     "to": "browser",
+     "from": "browser",
+     "to": "web",
      "both": true
     },
     {
-     "from": "codetools",
-     "to": "stage",
+     "from": "stage",
+     "to": "codetools",
      "both": true
     },
     {
-     "from": "git",
-     "to": "stage",
+     "from": "stage",
+     "to": "git",
      "both": true
     },
     {
-     "from": "android",
-     "to": "stage",
+     "from": "stage",
+     "to": "android",
      "both": true
     },
     {
-     "from": "macos",
-     "to": "stage",
+     "from": "stage",
+     "to": "macos",
      "both": true
     },
     {
-     "from": "macos",
-     "to": "startup",
+     "from": "startup",
+     "to": "macos",
      "both": true
     },
     {
-     "from": "folders",
-     "to": "stage",
+     "from": "stage",
+     "to": "folders",
      "both": true
+    },
+    {
+     "from": "inspectclient",
+     "to": {
+      "box": "main",
+      "uses": "on_action"
+     }
     }
    ]
   },
@@ -1225,28 +1503,28 @@
    },
    "lines": [
     {
-     "from": "codetools",
-     "to": "lsp",
+     "from": "lsp",
+     "to": "codetools",
      "both": true
     },
     {
-     "from": "git",
-     "to": "changes",
+     "from": "changes",
+     "to": "git",
      "both": true
     },
     {
-     "from": "android",
-     "to": "mirrors",
+     "from": "mirrors",
+     "to": "android",
      "both": true
     },
     {
-     "from": "macos",
-     "to": "macwin",
+     "from": "macwin",
+     "to": "macos",
      "both": true
     },
     {
-     "from": "folders",
-     "to": "codeview",
+     "from": "codeview",
+     "to": "folders",
      "both": true
     }
    ]
@@ -1304,13 +1582,13 @@
      "both": true
     },
     {
-     "from": "web",
-     "to": "server",
+     "from": "server",
+     "to": "web",
      "both": true
     },
     {
-     "from": "agents",
-     "to": "agentlink",
+     "from": "agentlink",
+     "to": "agents",
      "both": true
     },
     {
@@ -1319,43 +1597,43 @@
      "both": true
     },
     {
-     "from": "web",
-     "to": "agentlink",
+     "from": "agentlink",
+     "to": "web",
      "both": true
     },
     {
-     "from": "codetools",
-     "to": "maps",
+     "from": "maps",
+     "to": "codetools",
      "both": true
     },
     {
-     "from": "folders",
-     "to": "maps",
+     "from": "maps",
+     "to": "folders",
      "both": true
     },
     {
-     "from": "git",
-     "to": "repos",
+     "from": "repos",
+     "to": "git",
      "both": true
     },
     {
-     "from": "pagereader",
-     "to": "agentlink",
+     "from": "agentlink",
+     "to": "pagereader",
      "both": true
     },
     {
-     "from": "store",
-     "to": "server",
+     "from": "server",
+     "to": "store",
      "both": true
     },
     {
-     "from": "store",
-     "to": "chats",
+     "from": "chats",
+     "to": "store",
      "both": true
     },
     {
-     "from": "store",
-     "to": "agentlink",
+     "from": "agentlink",
+     "to": "store",
      "both": true
     }
    ]
@@ -1456,13 +1734,13 @@
      "both": true
     },
     {
-     "from": "web",
-     "to": "chromium",
+     "from": "chromium",
+     "to": "web",
      "both": true
     },
     {
-     "from": "helpers",
-     "to": "chromium",
+     "from": "chromium",
+     "to": "helpers",
      "both": true
     }
    ]
@@ -1522,8 +1800,8 @@
      "both": true
     },
     {
-     "from": "web",
-     "to": "phoneserver",
+     "from": "phoneserver",
+     "to": "web",
      "both": true
     }
    ]
@@ -1589,8 +1867,8 @@
    },
    "lines": [
     {
-     "from": "agents",
-     "to": "acp",
+     "from": "acp",
+     "to": "agents",
      "both": true
     },
     {
@@ -1599,13 +1877,13 @@
      "both": true
     },
     {
-     "from": "web",
-     "to": "catalog",
+     "from": "catalog",
+     "to": "web",
      "both": true
     },
     {
-     "from": "pagereader",
-     "to": "tools",
+     "from": "tools",
+     "to": "pagereader",
      "both": true
     }
    ]
@@ -1641,13 +1919,13 @@
    },
    "lines": [
     {
-     "from": "codetools",
-     "to": "indexrunner",
+     "from": "indexrunner",
+     "to": "codetools",
      "both": true
     },
     {
-     "from": "folders",
-     "to": "vocab",
+     "from": "vocab",
+     "to": "folders",
      "both": true
     }
    ]
@@ -1709,8 +1987,8 @@
      "both": true
     },
     {
-     "from": "folders",
-     "to": "knowledge",
+     "from": "knowledge",
+     "to": "folders",
      "both": true
     }
    ]

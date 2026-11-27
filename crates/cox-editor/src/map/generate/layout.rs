@@ -14,7 +14,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use super::Map;
-use crate::map::generated::{Level, Line};
+use crate::map::generated::{By, Level, Line};
 use crate::map::vocabulary::{self, Side};
 
 /// A card's width and its height, as the page draws them, whatever its
@@ -106,6 +106,8 @@ pub(super) fn place<'c>(map: &Map<'c, '_>) -> Placed<'c> {
                     both: 4 * forth.min(back) >= forth.max(back),
                     sides: None,
                     weak: !strong.contains(&(a, b)),
+                    stops: false,
+                    by: By::Code,
                 });
             }
             parts = swapped(&parts, &level.at, &lines, &counts, map);
@@ -404,7 +406,7 @@ fn lies(
     let top = &map.vocabulary.top;
     for id in map.and_around(node) {
         let Some(outer) = map.inside_of.get(id) else {
-            return if top.left.iter().any(|left| left == id) {
+            return if top.on_the_left().any(|left| left == id) {
                 Side::Left
             } else if top.right.iter().any(|right| right == id) {
                 Side::Right
@@ -433,10 +435,182 @@ fn lies(
 
 /// How big the page draws the card of the node `id`.
 fn card(map: &Map<'_, '_>, id: &str) -> [i32; 2] {
-    match map.vocabulary.nodes.get(id) {
+    card_of(map.vocabulary, id)
+}
+
+fn card_of(vocabulary: &vocabulary::Vocabulary, id: &str) -> [i32; 2] {
+    match vocabulary.nodes.get(id) {
         Some(node) if node.kind == vocabulary::Kind::Outside => OUTSIDE_CARD,
         _ => [CARD_WIDTH, CARD_HEIGHT],
     }
+}
+
+/// The steps of the grid a level's parts close up on, across and down,
+/// where the level's own parts are not a step apart that keeps two cards
+/// clear of each other.
+const STEP: [i32; 2] = [320, 200];
+
+/// `level`, a level of `vocabulary`, with only what is `shown` of what
+/// it places, and no room left where the rest was: a level that loses
+/// none of its parts keeps them where a person put them; one that loses
+/// some has those left in rows, in the order they read in, from the top
+/// left, on the level's own grid, and its box as much smaller as the
+/// rows and columns it lost. What it places beside its box by `outer`
+/// closes up around the middle of each side; what it places by `at`
+/// right of the box or below it, and the edges around, follow the box's
+/// edge in.
+pub(super) fn closed_up(
+    vocabulary: &vocabulary::Vocabulary,
+    level: &vocabulary::Level,
+    shown: &BTreeSet<String>,
+) -> vocabulary::Level {
+    if level
+        .parts
+        .keys()
+        .chain(level.outer.keys())
+        .all(|id| shown.contains(id))
+    {
+        let mut same = level.clone();
+        same.at.retain(|id, _| shown.contains(id));
+        same.frames.retain(|id, _| shown.contains(id));
+        return same;
+    }
+    let mut left: Vec<(&String, [i32; 2])> = level
+        .parts
+        .iter()
+        .filter(|(id, _)| shown.contains(*id))
+        .map(|(id, &at)| (id, at))
+        .collect();
+    left.sort_by_key(|&(id, [x, y])| (y, x, id));
+    let [area_x, area_y, area_width, area_height] = level.area;
+    let mut area = level.area;
+    let mut parts: BTreeMap<String, [i32; 2]> =
+        left.iter().map(|&(id, at)| (id.clone(), at)).collect();
+    if left.len() < level.parts.len() {
+        // The grid the person placed the parts on: where it starts, its
+        // steps, and how many columns it has.
+        let along = |axis: usize| -> (i32, i32, i32) {
+            let mut all: Vec<i32> = level.parts.values().map(|at| at[axis]).collect();
+            all.sort_unstable();
+            all.dedup();
+            let clear = [CARD_WIDTH, CARD_HEIGHT][axis] + BETWEEN;
+            let step = all
+                .windows(2)
+                .map(|pair| pair[1] - pair[0])
+                .min()
+                .filter(|&step| step >= clear)
+                .unwrap_or(STEP[axis]);
+            let (first, last) = (all[0], all[all.len() - 1]);
+            (first, step, last)
+        };
+        let (x, across, last_x) = along(0);
+        let (y, down, last_y) = along(1);
+        let columns = usize::try_from((last_x - x) / across + 1)
+            .unwrap_or(1)
+            .max(1);
+        parts = left
+            .iter()
+            .enumerate()
+            .map(|(index, &(id, _))| {
+                (
+                    id.clone(),
+                    [
+                        x + int(index % columns) * across,
+                        y + int(index / columns) * down,
+                    ],
+                )
+            })
+            .collect();
+        let right = x + int(left.len().min(columns) - 1) * across;
+        let bottom = y + int((left.len() - 1) / columns) * down;
+        area = [
+            area_x,
+            area_y,
+            (area_width - (last_x - right)).max(CARD_WIDTH),
+            (area_height - (last_y - bottom)).max(CARD_HEIGHT),
+        ];
+    }
+    let less = [area_width - area[2], area_height - area[3]];
+    let outer = beside_closed_up(vocabulary, level, area, shown);
+    let past = [area_x + area_width, area_y + area_height];
+    vocabulary::Level {
+        area,
+        outer,
+        at: level
+            .at
+            .iter()
+            .filter(|(id, _)| shown.contains(*id))
+            .map(|(id, &at)| {
+                let moved = [0, 1].map(|axis| {
+                    if at[axis] >= past[axis] {
+                        at[axis] - less[axis]
+                    } else {
+                        at[axis]
+                    }
+                });
+                (id.clone(), moved)
+            })
+            .collect(),
+        frames: level
+            .frames
+            .iter()
+            .filter(|(id, _)| shown.contains(*id))
+            .map(|(id, &[x, y, width, height])| {
+                (id.clone(), [x, y, width - less[0], height - less[1]])
+            })
+            .collect(),
+        parts,
+        lines: level.lines.clone(),
+    }
+}
+
+/// What `level` places beside its box by `outer`, of what is `shown`,
+/// around the box as it is at `area` now: each side's cards as far apart
+/// as the person put them, around the middle of the side.
+fn beside_closed_up(
+    vocabulary: &vocabulary::Vocabulary,
+    level: &vocabulary::Level,
+    area: [i32; 4],
+    shown: &BTreeSet<String>,
+) -> BTreeMap<String, vocabulary::Outer> {
+    let mut outer = BTreeMap::new();
+    for side in [Side::Left, Side::Right, Side::Top, Side::Bottom] {
+        let axis = usize::from(matches!(side, Side::Left | Side::Right));
+        let mut all: Vec<(i32, &String)> = level
+            .outer
+            .iter()
+            .filter(|(_, at)| at.0 == side)
+            .map(|(id, at)| (at.1, id))
+            .collect();
+        all.sort_unstable();
+        let most = all
+            .iter()
+            .map(|(_, id)| card_of(vocabulary, id)[axis])
+            .max()
+            .unwrap_or(0);
+        let step = all
+            .windows(2)
+            .map(|pair| pair[1].0 - pair[0].0)
+            .min()
+            .filter(|&step| step >= most)
+            .unwrap_or(most + BETWEEN);
+        let kept: Vec<&String> = all
+            .into_iter()
+            .map(|(_, id)| id)
+            .filter(|id| shown.contains(*id))
+            .collect();
+        let long = kept.last().map_or(0, |id| {
+            card_of(vocabulary, id)[axis] + int(kept.len() - 1) * step
+        });
+        let from = area[axis] + area[2 + axis] / 2 - long / 2;
+        for (index, id) in kept.into_iter().enumerate() {
+            outer.insert(
+                id.clone(),
+                vocabulary::Outer(side, from + int(index) * step),
+            );
+        }
+    }
+    outer
 }
 
 /// `parts`, with their places swapped, two at a time, the swap that

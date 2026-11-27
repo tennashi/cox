@@ -13,8 +13,13 @@
 //! itself: the boxes inside it own it. Where it is drawn closed, it
 //! stands for them, its lines for theirs.
 //!
-//! A map is told from one viewpoint, as "using it" or "building it": a
-//! project with several keeps a file for each.
+//! The top names the drivers: whoever starts the project working, as
+//! the people who use it, each by what they use it for, the systems that
+//! call it, and the clocks and events that set it off. Each is a node
+//! outside the project, and the map tells, for each, what it sets working
+//! (see [`super::generate`]): from the driver, along the lines a person
+//! drew, each from the end that starts it, into the code, and on as the
+//! code calls. A map with no drivers is told whole.
 //!
 //! ```json
 //! {
@@ -25,7 +30,7 @@
 //!     "server": { "name": "Server", "icon": "server", "claims": ["app/server"] },
 //!     "store": { "name": "Store", "icon": "store", "claims": ["app/store"] }
 //!   },
-//!   "top": { "center": "app", "left": ["user"], "lines": [{ "from": "user", "to": "app" }] },
+//!   "top": { "center": "app", "drivers": ["user"], "lines": [{ "from": "user", "to": "app" }] },
 //!   "levels": {
 //!     "app": {
 //!       "box": [-360, -260, 800, 520],
@@ -44,12 +49,23 @@
 //! code uses a name. The names are the code's, and the framework's,
 //! which the person who knows it writes: no type id kept by hand, to go
 //! stale as the code moves.
+//!
+//! A line goes from the end that starts what it stands for, as from the
+//! one that asks to the one that answers; `both` draws the answer's way
+//! too, and starts nothing from the far end. What a driver sets working
+//! follows a line from its `from` only. A line with `stops` is followed
+//! to its end and no further: the end is shown, and what is inside it
+//! is not the driver's, as the app a build task starts.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 use serde::de::{self, Deserializer};
 use serde::{Deserialize, Serialize};
+
+/// What stands for all of a map with drivers, whoever drives, where a
+/// driver's id would: in the page's address, and for `show_map`.
+pub const EVERYTHING: &str = "*";
 
 /// A map's vocabulary, as its file has it.
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
@@ -145,6 +161,12 @@ pub struct Top {
     /// The node in the middle, the project, which opens on the level
     /// inside it.
     pub center: String,
+    /// The drivers, in a column on its left, from the top, before
+    /// `left`: the nodes outside the project that start it working, as a
+    /// person by what they use it for, a system that calls it, or a
+    /// clock. The map tells what each sets working.
+    #[serde(default)]
+    pub drivers: Vec<String>,
     /// The nodes in a column on its left, from the top.
     #[serde(default)]
     pub left: Vec<String>,
@@ -206,7 +228,8 @@ pub enum Side {
 pub struct Line {
     pub from: String,
     pub to: String,
-    /// Whether it goes both ways, as a request and its answer.
+    /// Whether it is drawn both ways, as a request and its answer: it is
+    /// `from` that starts it.
     pub both: bool,
     /// The sides of `from` and `to` it leaves and meets, unless the
     /// nearest.
@@ -214,6 +237,9 @@ pub struct Line {
     /// The rules its ends at `from` and at `to` are, if they are: what
     /// it goes on to inside the box there as the box opens.
     pub rules: [Option<Rule>; 2],
+    /// Whether what a driver sets working ends at `to`: it is shown, and
+    /// the walk goes no further into it, nor on from it.
+    pub stops: bool,
 }
 
 /// Of the types inside a box, those a line to the box goes on to as it
@@ -266,6 +292,8 @@ struct LineText {
     both: bool,
     #[serde(default)]
     sides: Option<[Side; 2]>,
+    #[serde(default)]
+    stops: bool,
 }
 
 /// A line's end, as its file has it: a node's id, or a rule over the
@@ -348,6 +376,7 @@ impl TryFrom<LineText> for Line {
             both: text.both,
             sides: text.sides,
             rules,
+            stops: text.stops,
         })
     }
 }
@@ -380,6 +409,19 @@ impl Node {
     #[must_use]
     pub fn owns_code(&self) -> bool {
         !self.claims.is_empty() || !self.files.is_empty()
+    }
+}
+
+impl Top {
+    /// The nodes in the column on the left of the center, from the top:
+    /// the drivers, then the others.
+    pub fn on_the_left(&self) -> impl Iterator<Item = &String> {
+        self.drivers.iter().chain(&self.left)
+    }
+
+    /// The nodes around the center.
+    pub fn around(&self) -> impl Iterator<Item = &String> {
+        self.on_the_left().chain(&self.right)
     }
 }
 
@@ -481,9 +523,10 @@ impl Vocabulary {
             }
         }
         known(&self.top.center, "top.center", &mut problems);
-        for id in self.top.left.iter().chain(&self.top.right) {
+        for id in self.top.around() {
             known(id, "top", &mut problems);
         }
+        self.check_drivers(&mut problems);
         self.check_lines("top.lines", &self.top.lines, &mut problems);
         let mut inside: BTreeMap<&str, &str> = BTreeMap::new();
         for (opened, level) in &self.levels {
@@ -541,6 +584,37 @@ impl Vocabulary {
             }
         }
         problems
+    }
+
+    /// What does not hold of the top's drivers: each is a node outside
+    /// the project, around the center once.
+    fn check_drivers(&self, problems: &mut Vec<String>) {
+        for (at, id) in self.top.drivers.iter().enumerate() {
+            if self.top.drivers[..at].contains(id)
+                || self.top.left.contains(id)
+                || self.top.right.contains(id)
+            {
+                problems.push(format!(
+                    "top.drivers: `{id}` is around the center once, as a driver"
+                ));
+            }
+            if self
+                .nodes
+                .get(id)
+                .is_some_and(|node| node.kind != Kind::Outside)
+            {
+                problems.push(format!(
+                    "top.drivers: `{id}` is a part of the project; a driver is outside it, \
+                     with `\"kind\": \"outside\"`"
+                ));
+            }
+        }
+        if !self.top.drivers.is_empty() && self.nodes.contains_key(EVERYTHING) {
+            problems.push(format!(
+                "nodes.{EVERYTHING}: a map with drivers keeps `{EVERYTHING}` for all of it, \
+                 whoever drives"
+            ));
+        }
     }
 
     /// Whether the node `id` opens on types, or holds boxes that do, for
@@ -842,17 +916,60 @@ mod tests {
     }
 
     #[test]
-    fn coxs_own_maps_read() {
-        // Cox's maps of itself, which its agents keep as they move its code.
-        let maps = [
-            ("use", include_str!("../../../../maps/use.json")),
-            ("build", include_str!("../../../../maps/build.json")),
-        ];
-        for (name, text) in maps {
-            let vocabulary = Vocabulary::parse(text)
-                .unwrap_or_else(|error| panic!("maps/{name}.json does not read: {error}"));
-            assert_eq!(vocabulary.top.center, "cox", "{name}");
-        }
+    fn a_vocabulary_names_who_starts_the_project_working() {
+        let text = A_VOCABULARY
+            .replace(r#""left": ["user"]"#, r#""drivers": ["user"]"#)
+            .replace(
+                r#""lines": [{ "from": "window", "to": "server", "both": true, "sides": ["top", "bottom"] }]"#,
+                r#""lines": [{ "from": "window", "to": "server", "stops": true }]"#,
+            );
+        let vocabulary = Vocabulary::parse(&text).unwrap();
+        assert_eq!(vocabulary.top.drivers, ["user"]);
+        assert_eq!(vocabulary.top.left, Vec::<String>::new());
+        assert_eq!(
+            vocabulary.top.on_the_left().collect::<Vec<_>>(),
+            [&"user".to_owned()]
+        );
+        assert!(vocabulary.levels["app"].lines[0].stops);
+        assert!(!vocabulary.top.lines[0].stops);
+        // A map with none reads as it did.
+        assert_eq!(
+            Vocabulary::parse(A_VOCABULARY).unwrap().top.drivers,
+            Vec::<String>::new()
+        );
+
+        // A driver is a node outside the project, around the center once;
+        // and `*` stands for all of the map, so no node is named so.
+        let text = A_VOCABULARY
+            .replace(
+                r#""left": ["user"]"#,
+                r#""drivers": ["user", "server", "nobody", "user"], "left": ["user"]"#,
+            )
+            .replace(
+                r#""app": { "name": "App" },"#,
+                r#""app": { "name": "App" }, "*": { "name": "All" },"#,
+            );
+        assert_eq!(
+            Vocabulary::parse(&text).unwrap_err().problems,
+            [
+                "top: no node `nobody`",
+                "top.drivers: `user` is around the center once, as a driver",
+                "top.drivers: `server` is a part of the project; a driver is outside it, \
+                 with `\"kind\": \"outside\"`",
+                "top.drivers: `user` is around the center once, as a driver",
+                "nodes.*: a map with drivers keeps `*` for all of it, whoever drives",
+            ]
+        );
+    }
+
+    #[test]
+    fn coxs_own_map_reads() {
+        // Cox's map of itself, which its agents keep as they move its
+        // code: one map, told from whoever sets Cox working.
+        let vocabulary = Vocabulary::parse(include_str!("../../../../maps/cox.json"))
+            .unwrap_or_else(|error| panic!("maps/cox.json does not read: {error}"));
+        assert_eq!(vocabulary.top.center, "cox");
+        assert_eq!(vocabulary.top.drivers, ["human", "debugger", "dev"]);
     }
 
     #[test]

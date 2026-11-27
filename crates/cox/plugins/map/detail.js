@@ -9,7 +9,7 @@
 // drawer from below.
 
 import { ICON } from "./icons.js";
-import { afterRender, draw, esc, fitAbove, fitAll, focus, goTo, moving, node, render, view, whenStill } from "./canvas.js";
+import { afterRender, draw, esc, fitAbove, fitAll, focus, goTo, moving, node, placed, render, view, whenStill } from "./canvas.js";
 
 const dt = document.getElementById("dt");
 const fl = document.getElementById("fl");
@@ -316,7 +316,7 @@ export function showType(id) {
 function showTypeNow(id) {
   const t = types[id];
   if (!t) return;
-  if (view.stack.at(-1) !== t.box) goTo(t.box, id);
+  if (view.stack.at(-1) !== t.box || !placed(id)) goTo(t.box, id);
   else {
     view.sel = id;
     render();

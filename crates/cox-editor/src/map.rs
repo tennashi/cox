@@ -1,8 +1,9 @@
 //! The maps of a project: pictures of it, for the human to see where
 //! things are before they read them, and to talk through with the agents
-//! where what the project's parts mean and its code disagree. A project
-//! can have several, each from a viewpoint of its own, as one of what
-//! runs when someone uses it and one of how it is built: each is a file
+//! where what the project's parts mean and its code disagree. A map is
+//! told from whoever starts the project working, its drivers, each of
+//! which it shows what it sets working. A project can have several
+//! maps: each is a file
 //! of the project, in [`MAPS_FOLDER`], named after the map, so that it is
 //! there whenever it is opened, kept by the agents that change the code,
 //! in the change that moves it. A repository of the project keeps maps

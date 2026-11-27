@@ -1195,7 +1195,7 @@ mod tests {
             .iter()
             .filter_map(|a| a["name"].as_str())
             .collect();
-        assert_eq!(arguments, ["name", "viewpoint"]);
+        assert_eq!(arguments, ["name", "drivers"]);
     }
 
     #[test]
@@ -1214,17 +1214,28 @@ mod tests {
             messages[0]["content"]["text"].as_str().unwrap().to_owned()
         };
 
-        let given = text(json!({ "name": "build", "viewpoint": "building it" }));
+        let given = text(json!({ "name": "shop", "drivers": "buyers, and the nightly job" }));
         assert!(
-            given.starts_with("Make the map `build` of this project with me, from building it."),
+            given.starts_with(
+                "Make the map `shop` of this project with me. What starts the project \
+                 working: buyers, and the nightly job."
+            ),
             "{given}"
         );
         assert!(
-            given.contains("call `show_map` with the map `build`"),
+            given.contains("call `show_map` with the map `shop`"),
             "{given}"
         );
         assert!(
-            !given.contains("{name}") && !given.contains("{viewpoint}"),
+            !given.contains("{name}") && !given.contains("{drivers}"),
+            "{given}"
+        );
+        // It has the agent settle who starts the project before any box,
+        // and check what each sets working with the human.
+        let settles = given.find("Settle the drivers with me").unwrap();
+        assert!(settles < given.find("Split the project into boxes").unwrap());
+        assert!(
+            given.contains("Check each driver's slice with me"),
             "{given}"
         );
         assert!(
@@ -1234,11 +1245,13 @@ mod tests {
 
         let defaulted = text(json!({}));
         assert!(
-            defaulted.starts_with("Make the map `use` of this project"),
+            defaulted.starts_with(
+                "Make the map `map` of this project with me. What starts the project \
+                 working: for us to settle together."
+            ),
             "{defaulted}"
         );
-        assert!(!defaulted.contains("{viewpoint}"), "{defaulted}");
-        assert_eq!(text(json!({ "name": "", "viewpoint": " " })), defaulted);
+        assert_eq!(text(json!({ "name": "", "drivers": " " })), defaulted);
     }
 
     /// A server with no tools and no prompts of its own, as one that

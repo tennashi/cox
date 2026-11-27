@@ -22,7 +22,10 @@
 //!   what, and where each name is used;
 //! - inside each box that opens, on its types or on boxes, the lines it
 //!   has closed that go on to none of its parts, to its edge;
-//! - where the vocabulary and the code disagree, as drift.
+//! - where the vocabulary and the code disagree, as drift;
+//! - for each driver the vocabulary's top names, what it sets working
+//!   (see `slices.rs`): the map drawn again with only that, each level
+//!   closed up over what is left out, and each box's types placed anew.
 //!
 //! It reads the index as SCIP defines it, the same for every language,
 //! but for the few conventions it holds to where the index does not say,
@@ -38,13 +41,16 @@ mod layout;
 mod members;
 mod references;
 mod rules;
+mod slices;
 mod text;
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::Path;
 
 use self::code::{Code, SymbolId, under};
-use super::generated::{Call, Edge, Generated, Line, Node, NodeKind, Site, Top, Type, Use};
+use super::generated::{
+    By, Call, Drift, Edge, Generated, Level, Line, Node, NodeKind, Site, Slice, Top, Type, Use,
+};
 use super::vocabulary::{self, Vocabulary};
 use crate::scip::Index;
 use crate::scip::symbol::Suffix;
@@ -142,6 +148,13 @@ struct FunctionRec {
     calls: Vec<Call>,
 }
 
+/// The map as a vocabulary places it (see [`Map::drawn`]).
+struct Drawn<'c> {
+    top: Vec<Line>,
+    levels: BTreeMap<String, Level>,
+    standing: BTreeMap<(&'c str, &'c str), usize>,
+}
+
 /// The map as it is generated.
 struct Map<'c, 'a> {
     code: &'c Code<'a>,
@@ -175,6 +188,9 @@ struct Map<'c, 'a> {
     /// box owns, and which boxes, as often, in the order first seen.
     free: HashMap<&'c str, usize>,
     free_boxes: HashMap<&'c str, Vec<(&'c str, usize)>>,
+    /// The types drawn, by id, when not all are: those a driver reaches,
+    /// as its slice of the map is drawn.
+    only: Option<&'c BTreeSet<String>>,
 }
 
 impl<'c, 'a> Map<'c, 'a> {
@@ -210,6 +226,7 @@ impl<'c, 'a> Map<'c, 'a> {
             edge_sites: HashMap::new(),
             free: HashMap::new(),
             free_boxes: HashMap::new(),
+            only: None,
         };
         let modules = code.symbols.iter().map(|sym| sym.module.as_str()).chain(
             code.documents
@@ -439,28 +456,134 @@ impl<'c, 'a> Map<'c, 'a> {
         }
     }
 
-    /// The map, as generated: the vocabulary's levels with the lines the
-    /// code gives, a level for each box that opens, and the drift.
-    fn into_generated(mut self) -> Generated {
-        let reaches = self.reaches();
-        let placed = layout::place(&self);
+    /// Whether the type at `index` of the map's is drawn.
+    fn shows(&self, index: usize) -> bool {
+        self.only
+            .is_none_or(|only| only.contains(&self.types[index].id))
+    }
+
+    /// The map as its vocabulary places it: the top's lines, and the
+    /// levels, the vocabulary's with the lines the code gives and one for
+    /// each box that opens on its types, with the lines whose end is a
+    /// rule drawn on, and those a box keeps as it opens; and how often
+    /// the code of each two boxes meets that a level draws a line between
+    /// for boxes inside them.
+    fn drawn(&self, reaches: &[rules::Reach<'_>]) -> Drawn<'c> {
+        let placed = layout::place(self);
         let mut levels = placed.levels;
+        for (owner, level) in self.type_levels(&placed.slots, &levels, reaches) {
+            levels.insert(owner.to_owned(), level);
+        }
+        let top: Vec<Line> = self.vocabulary.top.lines.iter().map(hand_line).collect();
+        self.reach(reaches, &mut levels);
+        kept::keep(self.vocabulary, &top, &mut levels);
+        Drawn {
+            top,
+            levels,
+            standing: placed.standing,
+        }
+    }
+
+    /// The slice of the map each driver sets working, placed: the map
+    /// drawn again from the vocabulary with what the driver does not
+    /// reach left out, of the types those it reaches alone.
+    ///
+    /// `driven` is what each sets working, and `cuts` the vocabulary cut
+    /// to each. It leaves the map with the last of them for vocabulary.
+    fn slices(&mut self, driven: &'c [slices::Driven], cuts: &'c [Vocabulary]) -> Vec<Slice> {
+        let map = self;
+        let mut slices = Vec::new();
+        for (at, (one, cut)) in driven.iter().zip(cuts).enumerate() {
+            map.vocabulary = cut;
+            map.inside_of = cut.inside_of();
+            map.only = Some(&one.shown);
+            let drawn = map.drawn(&map.reaches());
+            let placed: BTreeSet<&str> = drawn
+                .levels
+                .values()
+                .flat_map(|level| level.parts.keys())
+                .chain(cut.top.around())
+                .map(String::as_str)
+                .collect();
+            let types: Vec<&String> = one
+                .shown
+                .iter()
+                .filter(|id| map.type_ids.contains_key(*id) && placed.contains(id.as_str()))
+                .collect();
+            let of_kind = |kind: vocabulary::Kind| {
+                placed
+                    .iter()
+                    .filter(|id| cut.nodes.get(**id).is_some_and(|node| node.kind == kind))
+                    .count()
+            };
+            slices.push(Slice {
+                driver: one.driver.clone(),
+                own: types
+                    .iter()
+                    .filter(|id| {
+                        driven
+                            .iter()
+                            .enumerate()
+                            .all(|(other, theirs)| other == at || !theirs.shown.contains(**id))
+                    })
+                    .map(|id| (*id).clone())
+                    .collect(),
+                ends: one
+                    .ends
+                    .iter()
+                    .filter(|id| placed.contains(id.as_str()))
+                    .cloned()
+                    .collect(),
+                boxes: of_kind(vocabulary::Kind::Part),
+                types: types.len(),
+                outside: of_kind(vocabulary::Kind::Outside) - 1,
+                top: Top {
+                    center: cut.top.center.clone(),
+                    drivers: cut.top.drivers.clone(),
+                    left: cut.top.on_the_left().cloned().collect(),
+                    right: cut.top.right.clone(),
+                    lines: drawn.top,
+                },
+                levels: drawn.levels,
+            });
+        }
+        slices
+    }
+
+    /// The map, as generated: the vocabulary's levels with the lines the
+    /// code gives, a level for each box that opens, the drift, and what
+    /// each driver sets working.
+    fn into_generated(self) -> Generated {
+        let reaches = self.reaches();
+        let whole = self.drawn(&reaches);
+        let drift = drift::find(&self, &whole.levels, &reaches);
+        let vocabulary = self.vocabulary;
+        let driven = self.driven(&whole.levels, &whole.top);
+        let cuts: Vec<Vocabulary> = driven.iter().map(|one| one.cut(vocabulary)).collect();
+        // The map, for as long as the cuts are there, which it borrows.
+        let mut map: Map<'_, 'a> = self;
+        let slices = map.slices(&driven, &cuts);
+        map.vocabulary = vocabulary;
+        map.inside_of = vocabulary.inside_of();
+        map.only = None;
+        map.output(whole, drift, slices)
+    }
+
+    fn output(&mut self, whole: Drawn<'_>, drift: Vec<Drift>, slices: Vec<Slice>) -> Generated {
+        let Drawn {
+            top: top_lines,
+            levels,
+            standing,
+        } = whole;
         let mut edges = self.edges.clone();
-        edges.extend(placed.standing);
+        edges.extend(standing);
         let mut nodes: BTreeMap<String, Node> = self
             .vocabulary
             .nodes
             .iter()
             .map(|(id, node)| (id.clone(), drawn(node)))
             .collect();
-        for (owner, level) in self.type_levels(&placed.slots, &levels, &reaches) {
-            levels.insert(owner.to_owned(), level);
-        }
         let top = &self.vocabulary.top;
-        let top_lines: Vec<Line> = top.lines.iter().map(hand_line).collect();
-        self.reach(&reaches, &mut levels);
-        kept::keep(self.vocabulary, &top_lines, &mut levels);
-        let drift = drift::find(&self, &levels, &reaches);
         let files = self
             .code
             .documents
@@ -492,7 +615,8 @@ impl<'c, 'a> Map<'c, 'a> {
             nodes,
             top: Top {
                 center: top.center.clone(),
-                left: top.left.clone(),
+                drivers: top.drivers.clone(),
+                left: top.on_the_left().cloned().collect(),
                 right: top.right.clone(),
                 lines: top_lines,
             },
@@ -508,6 +632,7 @@ impl<'c, 'a> Map<'c, 'a> {
                 .collect(),
             drift,
             files,
+            slices,
         }
     }
 
@@ -582,6 +707,8 @@ fn hand_line(line: &vocabulary::Line) -> Line {
         both: line.both,
         sides: line.sides,
         weak: false,
+        stops: line.stops,
+        by: By::Hand,
     }
 }
 

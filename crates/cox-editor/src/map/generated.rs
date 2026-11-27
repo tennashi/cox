@@ -39,6 +39,43 @@ pub struct Generated {
     /// in the JSON a page draws from.
     #[serde(skip)]
     pub files: BTreeMap<String, String>,
+    /// What each driver of the top sets working, in the top's order: the
+    /// map as it is drawn for that driver alone.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub slices: Vec<Slice>,
+}
+
+/// What a driver sets working: the map with what the driver does not
+/// reach left out, placed anew, so that what is left sits together.
+///
+/// The driver starts at the types the lines a person drew from it go on
+/// to, each line from the end that starts it, through the people and
+/// systems on the way, and from there follows the code, the way it goes:
+/// what a type's functions call and name, and what its fields hold. A
+/// line a person drew from a box that owns code is followed once the code
+/// comes into the box, as from one process to another. Coming to a type
+/// another driver starts at, it shows the type and goes no further from
+/// it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct Slice {
+    /// The driver's node.
+    pub driver: String,
+    /// The top, with the driver alone of the drivers, and of the others
+    /// around the center those it reaches.
+    pub top: Top,
+    /// The levels of what it reaches, by the node each is inside of: a
+    /// box none of whose parts it reaches has none, and stays closed.
+    pub levels: BTreeMap<String, Level>,
+    /// Of the types it shows, those no other driver's slice shows.
+    pub own: Vec<String>,
+    /// The nodes its walk ended at, shown and not gone into: the types
+    /// another driver starts at, and the ends of the lines that stop.
+    pub ends: Vec<String>,
+    /// How many boxes it shows, how many types, and how many people and
+    /// systems around the project, itself not counted.
+    pub boxes: usize,
+    pub types: usize,
+    pub outside: usize,
 }
 
 /// A node, as drawn.
@@ -72,6 +109,10 @@ pub enum NodeKind {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct Top {
     pub center: String,
+    /// The drivers, which `left` starts with: the nodes that start the
+    /// project working, each with a slice of the map.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub drivers: Vec<String>,
     pub left: Vec<String>,
     pub right: Vec<String>,
     pub lines: Vec<Line>,
@@ -105,7 +146,7 @@ pub struct Level {
 pub struct Line {
     pub from: String,
     pub to: String,
-    /// Whether it goes both ways.
+    /// Whether it is drawn both ways: it is `from` that starts it.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub both: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -115,6 +156,23 @@ pub struct Line {
     /// between two types that no field gives, only a name in a function.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub weak: bool,
+    /// Whether what a driver sets working ends at `to`.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub stops: bool,
+    /// What draws it, for what a driver sets working to follow: it stays
+    /// with whoever drew the map.
+    #[serde(skip)]
+    pub by: By,
+}
+
+/// What draws a line.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum By {
+    /// A person, in the vocabulary, or a rule a person wrote there.
+    #[default]
+    Hand,
+    /// The code.
+    Code,
 }
 
 /// A type of a box that opens.
