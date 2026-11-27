@@ -621,8 +621,9 @@ level, from the part that starts it. Where one
 driver's walk comes to a type another driver comes in at, it shows the
 type, with a dashed edge, and goes no further from it: what happens from
 there is the other's. So a type several drivers reach is in each one's
-slice, where it says how many others reach it, and one driver's slice
-is not all of the map only because the code is joined up somewhere.
+slice, a type only one reaches is marked "only" in that one's, and one
+driver's slice is not all of the map only because the code is joined up
+somewhere.
 
 So write a line from the end that starts it: `both: true` only draws
 the answer's way too. And give a line `stops: true` where what a driver

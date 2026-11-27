@@ -1124,7 +1124,10 @@
     },
     {
      "from": "inspectclient",
-     "to": "window",
+     "to": {
+      "box": "window",
+      "implements": "Render"
+     },
      "both": true
     },
     {
@@ -1438,13 +1441,6 @@
      "from": "stage",
      "to": "folders",
      "both": true
-    },
-    {
-     "from": "inspectclient",
-     "to": {
-      "box": "main",
-      "uses": "on_action"
-     }
     }
    ]
   },
