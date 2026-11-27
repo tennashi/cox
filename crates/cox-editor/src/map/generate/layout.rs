@@ -6,11 +6,11 @@
 //! stays around it. Around another, what its lines reach and the person
 //! did not place, the map places beside the box, on the side it lies on
 //! in the level above. The types inside
-//! a box are placed on a grid, each near what it is wired to, and pulled
-//! toward the side of the box that the boxes it is wired to are on; those
-//! wired to nothing after them, in name order.
+//! a box are placed on a grid, the one most lines end on in the middle
+//! and each near what it is wired to, pulled toward the side of the box
+//! that the boxes it is wired to are on; those wired to nothing after
+//! them, in name order.
 
-use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use super::Map;
@@ -42,12 +42,12 @@ const MOST_COLUMNS: usize = 5;
 /// The room between the types wired to something and those wired to
 /// nothing, beyond a row's.
 const APART: i32 = CARD_HEIGHT;
-/// How many times the types are placed again, each nearer what it is
-/// wired to.
-const ROUNDS: usize = 12;
 /// What a line no code backs weighs, against `1 + log10(references)` for
 /// one the code gives: a person drew it, so it holds its ends together.
 const HAND_WEIGHT: f64 = 6.0;
+/// What a line between types that is always drawn weighs as the types
+/// are placed, against one drawn only while an end is chosen.
+const DRAWN: f64 = 3.0;
 
 /// The levels of the vocabulary, with the lines the code gives, and
 /// where each box of them sits now, by the level it is in; and how often
@@ -507,8 +507,9 @@ pub(super) struct Card<'t> {
 }
 
 /// Places the `cards` of a box sitting at `me`, with `lines` between
-/// them and to the boxes `around`. Those a line ends on sit together, on
-/// a grid sized by their own count. Those wired to nothing
+/// them and to the boxes `around`, and the `weak` ones, drawn only while
+/// an end is chosen. Those a line ends on sit together, on a grid sized
+/// by their own count. Those wired to nothing
 /// follow below, a little apart, in rows as wide as the grid of all the
 /// cards would be, in name order, so that they read as a list and leave
 /// the others where they are. Gives the level's size, and where each
@@ -516,16 +517,18 @@ pub(super) struct Card<'t> {
 pub(super) fn types(
     cards: &[Card<'_>],
     lines: &BTreeSet<(String, String)>,
+    weak: &BTreeSet<(String, String)>,
     around: &BTreeMap<&str, [i32; 2]>,
     me: [i32; 2],
 ) -> ([i32; 2], BTreeMap<String, [i32; 2]>) {
     let ends: BTreeSet<&str> = lines
         .iter()
+        .chain(weak)
         .flat_map(|(a, b)| [a.as_str(), b.as_str()])
         .collect();
     let (wired, mut loose): (Vec<&Card>, Vec<&Card>) =
         cards.iter().partition(|card| ends.contains(card.id));
-    let grid = wired_grid(&wired, lines, around, me);
+    let grid = wired_grid(&wired, [lines, weak], around, me);
     let mut parts: BTreeMap<String, [i32; 2]> = grid
         .iter()
         .map(|(&id, &(column, row))| {
@@ -566,15 +569,21 @@ fn columns(count: usize) -> usize {
 }
 
 /// Where each of the `cards` that a line ends on sits, by column and
-/// row, on a grid of their own: placed again each round in the order of
-/// where each wants to be, the mean of what it is wired to, another box
-/// being where it lies as seen from this one.
+/// row, on a grid of their own. The one most lines end on takes the
+/// middle, and each after it the free cell nearest what it is wired to,
+/// those wired most to what is placed first: so the types a type names
+/// sit around it, and its lines do not fan from a corner. Another box is
+/// where it lies as seen from this one, and pulls what is wired to it
+/// toward that side. Two cards then trade cells, or one moves to a free
+/// cell, while that shortens the lines. A line always drawn counts as
+/// [`DRAWN`] of those drawn only while an end is chosen, to be the
+/// shorter.
 fn wired_grid<'t>(
     cards: &[&Card<'t>],
-    lines: &BTreeSet<(String, String)>,
+    [lines, weak]: [&BTreeSet<(String, String)>; 2],
     around: &BTreeMap<&str, [i32; 2]>,
     me: [i32; 2],
-) -> BTreeMap<&'t str, (usize, usize)> {
+) -> BTreeMap<&'t str, Cell> {
     let count = cards.len();
     let columns = columns(count);
     let rows = count.div_ceil(columns);
@@ -599,82 +608,199 @@ fn wired_grid<'t>(
             )
         })
         .collect();
-    // Where a card in a cell is pulled from: its middle.
-    let cell = |column: usize, row: usize| {
-        (
-            f64::from(int(column) * COLUMN + CARD_WIDTH / 2),
-            f64::from(int(row) * ROW + CARD_HEIGHT / 2),
-        )
-    };
-    let mut by_name: Vec<&Card> = cards.to_vec();
+    let mut by_name: Vec<&Card<'t>> = cards.to_vec();
     by_name.sort_by(|a, b| a.name.cmp(b.name).then(a.id.cmp(b.id)));
-    let mut at: BTreeMap<&str, (f64, f64)> = by_name
+    let index: BTreeMap<&str, usize> = by_name
         .iter()
         .enumerate()
-        .map(|(index, card)| (card.id, cell(index % columns, index / columns)))
+        .map(|(index, card)| (card.id, index))
         .collect();
-    let mut grid: BTreeMap<&'t str, (usize, usize)> = BTreeMap::new();
-    for _ in 0..ROUNDS {
-        let mut want: BTreeMap<&str, (f64, f64)> = BTreeMap::new();
-        for card in cards {
-            let mut points: Vec<(f64, f64)> = Vec::new();
-            for (a, b) in lines {
-                let other = if a == card.id {
-                    b.as_str()
-                } else if b == card.id {
-                    a.as_str()
-                } else {
-                    continue;
-                };
-                points.extend(at.get(other).copied());
-            }
-            for (a, b) in lines {
-                let other = if a == card.id {
-                    b.as_str()
-                } else if b == card.id {
-                    a.as_str()
-                } else {
-                    continue;
-                };
-                points.extend(pull.get(other).copied());
-            }
-            let mean = if points.is_empty() {
-                at[card.id]
-            } else {
-                let n = float(points.len());
-                (
-                    points.iter().map(|point| point.0).sum::<f64>() / n,
-                    points.iter().map(|point| point.1).sum::<f64>() / n,
-                )
+    let mut wires = Wires {
+        cards: vec![Vec::new(); count],
+        boxes: vec![Vec::new(); count],
+        middle: (
+            f64::from(int(columns - 1) * COLUMN + CARD_WIDTH) / 2.0,
+            f64::from(int(rows.max(1) - 1) * ROW + CARD_HEIGHT) / 2.0,
+        ),
+    };
+    let weighed = lines
+        .iter()
+        .map(|line| (line, DRAWN))
+        .chain(weak.iter().map(|line| (line, 1.0)));
+    for ((a, b), weight) in weighed {
+        for (end, other) in [(a, b), (b, a)] {
+            let Some(&end) = index.get(end.as_str()) else {
+                continue;
             };
-            want.insert(card.id, mean);
-        }
-        let mut by_x: Vec<&'t str> = cards.iter().map(|card| card.id).collect();
-        by_x.sort_by(|a, b| wanted(&want, a, b, |point| point.0));
-        for (column, chunk) in by_x.chunks(rows.max(1)).enumerate() {
-            let mut chunk = chunk.to_vec();
-            chunk.sort_by(|a, b| wanted(&want, a, b, |point| point.1));
-            for (row, id) in chunk.into_iter().enumerate() {
-                at.insert(id, cell(column, row));
-                grid.insert(id, (column, row));
+            if let Some(&other) = index.get(other.as_str()) {
+                wires.cards[end].push((other, weight));
+            } else if let Some(&toward) = pull.get(other.as_str()) {
+                wires.boxes[end].push((toward, weight));
             }
         }
     }
-    grid
+    // The free cells, row by row.
+    let mut free: Vec<Cell> = (0..rows)
+        .flat_map(|row| (0..columns).map(move |column| (column, row)))
+        .collect();
+    let mut at = wires.placed(&mut free);
+    wires.trade(&mut at, &mut free);
+    by_name
+        .iter()
+        .zip(at)
+        .filter_map(|(card, at)| Some((card.id, at?)))
+        .collect()
 }
 
-/// `a` before `b` if it wants to be further up or left, as `pick` reads
-/// where it wants to be, or else by id.
-fn wanted(
-    want: &BTreeMap<&str, (f64, f64)>,
-    a: &str,
-    b: &str,
-    pick: fn(&(f64, f64)) -> f64,
-) -> Ordering {
-    pick(&want[a])
-        .partial_cmp(&pick(&want[b]))
-        .unwrap_or(Ordering::Equal)
-        .then(a.cmp(b))
+/// A cell of the grid: its column and its row.
+type Cell = (usize, usize);
+
+/// The middle of a card in the cell `at`, where its lines pull it from.
+fn middle_of((column, row): Cell) -> (f64, f64) {
+    (
+        f64::from(int(column) * COLUMN + CARD_WIDTH / 2),
+        f64::from(int(row) * ROW + CARD_HEIGHT / 2),
+    )
+}
+
+/// What the cards of a grid are wired to, each card being its place in
+/// name order.
+struct Wires {
+    /// For each card, the cards its lines go to, and what each line
+    /// weighs.
+    cards: Vec<Vec<(usize, f64)>>,
+    /// For each card, where the boxes around that its lines go to pull
+    /// it toward, and what each line weighs.
+    boxes: Vec<Vec<((f64, f64), f64)>>,
+    /// The middle of the grid.
+    middle: (f64, f64),
+}
+
+/// A way to shorten the lines: a card trades cells with another, or
+/// moves to a free cell, by its place among the free ones.
+#[derive(Clone, Copy)]
+enum Trade {
+    With(usize),
+    To(usize),
+}
+
+impl Wires {
+    /// How long the lines of `card` are, weighed, with it in the cell
+    /// `here` and the others `at` their cells, one not placed yet
+    /// counted as in the middle.
+    fn length(&self, card: usize, here: Cell, at: &[Option<Cell>]) -> f64 {
+        let here = middle_of(here);
+        let to_cards: f64 = self.cards[card]
+            .iter()
+            .map(|&(other, weight)| weight * far(here, at[other].map_or(self.middle, middle_of)))
+            .sum();
+        let to_boxes: f64 = self.boxes[card]
+            .iter()
+            .map(|&(toward, weight)| weight * far(here, toward))
+            .sum();
+        to_cards + to_boxes
+    }
+
+    /// What the lines of `card` weigh: those to the cards placed `at` a
+    /// cell, or, with none given, all of them.
+    fn weight(&self, card: usize, at: Option<&[Option<Cell>]>) -> f64 {
+        let to_cards = self.cards[card]
+            .iter()
+            .filter(|(other, _)| at.is_none_or(|at| at[*other].is_some()))
+            .map(|&(_, weight)| weight);
+        match at {
+            Some(_) => to_cards.sum(),
+            None => to_cards
+                .chain(self.boxes[card].iter().map(|&(_, weight)| weight))
+                .sum(),
+        }
+    }
+
+    /// Places the cards, one at a time, each in the cell of `free` that
+    /// leaves its lines shortest, and takes the cell from `free`: first
+    /// the card wired most to those placed, or else the one most lines
+    /// end on.
+    fn placed(&self, free: &mut Vec<Cell>) -> Vec<Option<Cell>> {
+        let count = self.cards.len();
+        let mut at: Vec<Option<Cell>> = vec![None; count];
+        for _ in 0..count {
+            let mut next: Option<(usize, f64, f64)> = None;
+            for card in (0..count).filter(|&card| at[card].is_none()) {
+                let (placed, all) = (self.weight(card, Some(&at)), self.weight(card, None));
+                if next.is_none_or(|(_, most, of_all)| {
+                    placed > most || (placed >= most && all > of_all)
+                }) {
+                    next = Some((card, placed, all));
+                }
+            }
+            let Some((next, ..)) = next else {
+                break;
+            };
+            let mut best: Option<(f64, usize)> = None;
+            for (index, &cell) in free.iter().enumerate() {
+                // Of cells as near what it is wired to, the one nearest
+                // the middle.
+                let cost = self.length(next, cell, &at) + far(middle_of(cell), self.middle) * 1e-3;
+                if best.is_none_or(|(least, _)| cost < least - 1e-6) {
+                    best = Some((cost, index));
+                }
+            }
+            let Some((_, index)) = best else {
+                break;
+            };
+            at[next] = Some(free.remove(index));
+        }
+        at
+    }
+
+    /// Has two cards trade cells, or one move to a cell of `free`, the
+    /// trade that shortens the lines most each time, while one does. A
+    /// trade changes only the lines of the two cards, and the one
+    /// between them stays as long.
+    fn trade(&self, at: &mut [Option<Cell>], free: &mut [Cell]) {
+        let count = at.len();
+        for _ in 0..count * count {
+            let mut gain: Option<(f64, usize, Trade)> = None;
+            let mut better = |less: f64, card: usize, trade: Trade| {
+                if less > 1e-6 && gain.is_none_or(|(most, ..)| less > most + 1e-6) {
+                    gain = Some((less, card, trade));
+                }
+            };
+            for a in 0..count {
+                let Some(here) = at[a] else {
+                    continue;
+                };
+                for b in a + 1..count {
+                    let Some(there) = at[b] else {
+                        continue;
+                    };
+                    let before = self.length(a, here, at) + self.length(b, there, at);
+                    let mut tried = at.to_vec();
+                    tried.swap(a, b);
+                    let after = self.length(a, there, &tried) + self.length(b, here, &tried);
+                    better(before - after, a, Trade::With(b));
+                }
+                for (index, &cell) in free.iter().enumerate() {
+                    let less = self.length(a, here, at) - self.length(a, cell, at);
+                    better(less, a, Trade::To(index));
+                }
+            }
+            match gain {
+                Some((_, a, Trade::With(b))) => at.swap(a, b),
+                Some((_, a, Trade::To(index))) => {
+                    if let Some(was) = at[a].replace(free[index]) {
+                        free[index] = was;
+                    }
+                }
+                None => break,
+            }
+        }
+    }
+}
+
+/// How far two points are apart.
+fn far(a: (f64, f64), b: (f64, f64)) -> f64 {
+    ((a.0 - b.0).powi(2) + (a.1 - b.1).powi(2)).sqrt()
 }
 
 fn distance(a: [i32; 2], b: [i32; 2]) -> f64 {

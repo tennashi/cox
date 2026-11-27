@@ -1366,7 +1366,7 @@ fn a_type_wired_to_nothing_leaves_those_wired_where_they_were() {
     .collect();
     let around = BTreeMap::from([("west", [-800, 0]), ("mid", [0, 0]), ("east", [800, 0])]);
     let cards: Vec<Card> = wired.into_iter().map(card).collect();
-    let (_, alone) = types(&cards, &lines, &around, [0, 0]);
+    let (_, alone) = types(&cards, &lines, &BTreeSet::new(), &around, [0, 0]);
     // However many come, wherever their names sort, until the level is
     // as wide as it grows.
     let mut cards = cards;
@@ -1374,15 +1374,195 @@ fn a_type_wired_to_nothing_leaves_those_wired_where_they_were() {
         "0", "Ca", "Zz", "1", "Ab", "Y", "2", "Fa", "X", "3", "W", "4",
     ] {
         cards.push(card(name));
-        let (_, with) = types(&cards, &lines, &around, [0, 0]);
+        let (_, with) = types(&cards, &lines, &BTreeSet::new(), &around, [0, 0]);
         for id in wired {
             assert_eq!(with[id], alone[id], "{id} with {name}");
         }
     }
     // The cards' order does not matter.
-    let forth = types(&cards, &lines, &around, [0, 0]);
+    let forth = types(&cards, &lines, &BTreeSet::new(), &around, [0, 0]);
     cards.reverse();
-    assert_eq!(types(&cards, &lines, &around, [0, 0]), forth);
+    assert_eq!(
+        types(&cards, &lines, &BTreeSet::new(), &around, [0, 0]),
+        forth
+    );
+}
+
+/// A box `mid`: `Keys`, whose function names `Open` and `Close`, and
+/// `Probe` in a test; and `Holder`, whose field holds `Open`, which its
+/// function names too.
+fn handlers() -> (Index, BTreeMap<String, String>) {
+    let mut mid = File::new(
+        "src/mid.rs",
+        "pub struct Keys {}\n\
+         impl Keys {\n    \
+             fn bind(&self) {\n        \
+                 on(Open, Close);\n        \
+                 check(Probe);\n    \
+             }\n\
+         }\n\
+         pub struct Open {}\n\
+         pub struct Close {}\n\
+         pub struct Probe {}\n\
+         pub struct Holder {\n    \
+             open: Open,\n\
+         }\n\
+         impl Holder {\n    \
+             fn again(&self) {\n        \
+                 on(Open);\n    \
+             }\n\
+         }",
+    );
+    mid.define(&rust("mid/Keys#"), kind::STRUCT, 0, "Keys", (0, 0));
+    mid.define(
+        &rust("mid/impl#[Keys]bind()."),
+        kind::METHOD,
+        2,
+        "bind",
+        (2, 5),
+    );
+    mid.refer(&rust("mid/Open#"), 3, "Open");
+    mid.refer(&rust("mid/Close#"), 3, "Close");
+    mid.refer_as(&rust("mid/Probe#"), 4, "Probe", role::TEST);
+    for (line, name) in [(7, "Open"), (8, "Close"), (9, "Probe")] {
+        mid.define(
+            &rust(&format!("mid/{name}#")),
+            kind::STRUCT,
+            line,
+            name,
+            (line, line),
+        );
+    }
+    mid.define(&rust("mid/Holder#"), kind::STRUCT, 10, "Holder", (10, 12));
+    mid.define(&rust("mid/Holder#open."), kind::FIELD, 11, "open", (11, 11));
+    mid.refer(&rust("mid/Open#"), 11, "Open");
+    mid.define(
+        &rust("mid/impl#[Holder]again()."),
+        kind::METHOD,
+        14,
+        "again",
+        (14, 16),
+    );
+    mid.refer(&rust("mid/Open#"), 15, "Open");
+    index(&[mid])
+}
+
+#[test]
+fn a_type_a_function_names_gets_a_line_drawn_while_an_end_is_chosen() {
+    let map = generated(MID, &handlers());
+    let line =
+        |from: &str, to: &str, weak| (format!("app/mid/{from}"), format!("app/mid/{to}"), weak);
+    // The field's line is always drawn, and is the only one between its
+    // two types; what only a function names is drawn while an end is
+    // chosen; what only a test names has no line.
+    assert_eq!(
+        line_ends(&map, "mid"),
+        [
+            line("Holder", "Open", false),
+            line("Keys", "Close", true),
+            line("Keys", "Open", true),
+        ]
+    );
+    // A type a function names is wired, so it sits with the others, and
+    // the one nothing names after them.
+    let level = &map.levels["mid"];
+    let y = |name: &str| level.parts[&format!("app/mid/{name}")][1];
+    for name in ["Keys", "Open", "Close", "Holder"] {
+        assert!(y(name) < y("Probe"), "{name}");
+    }
+}
+
+/// The place of each card in `parts`, as a column and a row of the grid.
+fn cells(parts: &BTreeMap<String, [i32; 2]>) -> BTreeMap<&str, (i32, i32)> {
+    let xs: BTreeSet<i32> = parts.values().map(|at| at[0]).collect();
+    let ys: BTreeSet<i32> = parts.values().map(|at| at[1]).collect();
+    let nth = |all: &BTreeSet<i32>, one: i32| {
+        i32::try_from(all.iter().position(|&each| each == one).unwrap()).unwrap()
+    };
+    parts
+        .iter()
+        .map(|(id, at)| (id.as_str(), (nth(&xs, at[0]), nth(&ys, at[1]))))
+        .collect()
+}
+
+#[test]
+fn the_type_most_lines_end_on_sits_in_the_middle_of_those_it_names() {
+    use super::layout::{Card, types};
+    let card = |id: &'static str| Card { id, name: id };
+    // `Hub` names fourteen types in its functions, and comes last by
+    // name; `Kept` it holds in a field.
+    let named = [
+        "A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N",
+    ];
+    let mut cards: Vec<Card> = named.into_iter().map(card).collect();
+    cards.extend([card("Kept"), card("Zz Hub")]);
+    let weak: BTreeSet<(String, String)> = named
+        .into_iter()
+        .map(|name| ("Zz Hub".to_owned(), name.to_owned()))
+        .collect();
+    let lines = BTreeSet::from([("Zz Hub".to_owned(), "Kept".to_owned())]);
+    let around = BTreeMap::new();
+    let (_, parts) = types(&cards, &lines, &weak, &around, [0, 0]);
+    let at = cells(&parts);
+    let (columns, rows) = (
+        at.values().map(|cell| cell.0).max().unwrap() + 1,
+        at.values().map(|cell| cell.1).max().unwrap() + 1,
+    );
+    // Sixteen cards, on a grid of five columns and four rows: the hub is
+    // on no edge of it.
+    assert_eq!((columns, rows), (5, 4));
+    let hub = at["Zz Hub"];
+    assert!(0 < hub.0 && hub.0 < columns - 1, "{hub:?}");
+    assert!(0 < hub.1 && hub.1 < rows - 1, "{hub:?}");
+    // The cells around it are all taken by what it names, and the one it
+    // holds, whose line is always drawn, is right above or below it.
+    let beside = at
+        .values()
+        .filter(|cell| **cell != hub && (cell.0 - hub.0).abs() <= 1 && (cell.1 - hub.1).abs() <= 1)
+        .count();
+    assert_eq!(beside, 8);
+    let kept = at["Kept"];
+    assert_eq!((kept.0, (kept.1 - hub.1).abs()), (hub.0, 1));
+    // The cards' order does not matter.
+    cards.reverse();
+    assert_eq!(types(&cards, &lines, &weak, &around, [0, 0]).1, parts);
+}
+
+#[test]
+fn two_types_many_lines_end_on_each_keep_what_they_name_on_their_side() {
+    use super::layout::{Card, types};
+    let card = |id: &'static str| Card { id, name: id };
+    // Two hubs, one holding the other, each naming five types of its own,
+    // whose names sort between each other's.
+    let (left, right) = (
+        ["A1", "C1", "E1", "G1", "I1"],
+        ["B2", "D2", "F2", "H2", "J2"],
+    );
+    let cards: Vec<Card> = left
+        .into_iter()
+        .chain(right)
+        .chain(["One", "Two"])
+        .map(card)
+        .collect();
+    let weak: BTreeSet<(String, String)> = left
+        .into_iter()
+        .map(|name| ("One", name))
+        .chain(right.into_iter().map(|name| ("Two", name)))
+        .map(|(hub, name)| (hub.to_owned(), name.to_owned()))
+        .collect();
+    let lines = BTreeSet::from([("One".to_owned(), "Two".to_owned())]);
+    let (_, parts) = types(&cards, &lines, &weak, &BTreeMap::new(), [0, 0]);
+    let far = |a: &str, b: &str| {
+        let (a, b) = (parts[a], parts[b]);
+        f64::from((a[0] - b[0]).pow(2) + (a[1] - b[1]).pow(2)).sqrt()
+    };
+    // Each named type is nearer the hub that names it than the other.
+    for name in left {
+        assert!(far(name, "One") < far(name, "Two"), "{name}");
+    }
+    for name in right {
+        assert!(far(name, "Two") < far(name, "One"), "{name}");
+    }
 }
 
 #[test]
