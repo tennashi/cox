@@ -15,9 +15,9 @@
 // project working, is drawn for one of them at a time: its slice, what
 // that driver sets working, which the map gives laid out on its own; or,
 // with none chosen, the drivers alone, to choose from; or all of it,
-// whoever drives. In a slice, a type that other drivers set working too
-// says how many, and what the slice ends at, as a type another driver
-// starts at, has a dashed edge.
+// whoever drives. In a slice, a type that no other driver sets working
+// says so, and what the slice ends at, as a type another driver starts
+// at, has a dashed edge.
 //
 // A function chosen splits the level: the cards of what it relates to
 // inside the open box leave their places for an area at the top of the
@@ -93,9 +93,9 @@ export const view = {
 export const EVERYTHING = "*";
 
 let nodes = {};
-// In the slice drawn: the nodes it ends at, and, for each type other
-// drivers set working too, those drivers.
-let marks = { idle: false, ends: new Set(), also: {} };
+// In the slice drawn: the nodes it ends at, and the types no other
+// driver sets working, which a map with one driver has none to tell of.
+let marks = { idle: false, ends: new Set(), own: new Set(), driver: undefined };
 let top = { center: "", left: [], right: [], wires: [] };
 let levels = {};
 let parents = {};
@@ -116,15 +116,7 @@ export function setMap(map, changed, who = null) {
   const drawn = idle
     ? { top: { ...map.top, left: drivers, right: [], lines: map.top.lines.filter((line) => among(line.from) && among(line.to)) }, levels: {} }
     : (slice ?? map);
-  marks = { idle, ends: new Set(slice?.ends ?? []), also: {} };
-  if (slice) {
-    const own = new Set(slice.own);
-    for (const other of slices) {
-      if (other === slice) continue;
-      for (const level of Object.values(other.levels))
-        for (const id of Object.keys(level.parts)) if (nodes[id]?.kind === "type" && !own.has(id)) (marks.also[id] ??= []).push(other.driver);
-    }
-  }
+  marks = { idle, ends: new Set(slice?.ends ?? []), own: new Set(slices.length > 1 ? slice?.own : []), driver: slice?.driver };
   map = { ...map, top: drawn.top, levels: drawn.levels };
   const wire = (line) => [
     line.from,
@@ -486,20 +478,19 @@ function card(id, r, op = 1, appearing = 0) {
       ? `<g class="open" data-open="${esc(id)}" transform="translate(${w - 26},6)"><title>Open</title><rect width="20" height="20" rx="5" fill="transparent"/><g transform="translate(3,3) scale(.6)" fill="none" stroke="var(--dim)" stroke-width="2" stroke-linecap="round">${ICON.drill}</g></g>`
       : "";
   const text = label(p, 58, w - 58 - (canOpen(id) ? 30 : 12), h);
-  // Where the slice drawn ends, and who else sets a type working.
+  // Where the slice drawn ends, and what no other driver sets working.
   const ended = marks.ends.has(id);
   const end = ended
     ? `<title>${p.kind === "type" ? "Another driver starts here: what happens from it is theirs" : "What this driver sets working ends here"}</title>`
     : "";
-  const others = marks.also[id];
-  const also =
-    others && !anim
-      ? `<g class="also" transform="translate(${w - 36},${h - 19})"><title>Also set working by ${esc(others.map((other) => node(other).name).join(", "))}</title><rect width="28" height="14" rx="7" fill="var(--button)" stroke="var(--border-strong)"/><text x="14" y="10.5" text-anchor="middle" font-size="9.5" font-weight="600" fill="var(--dim)">+${others.length}</text></g>`
+  const only =
+    marks.own.has(id) && !anim
+      ? `<g class="only" transform="translate(${w - 40},${h - 19})"><title>Only ${esc(node(marks.driver).name)} sets this working</title><rect width="32" height="14" rx="7" fill="var(--accent-ground)" stroke="var(--accent)" stroke-opacity=".5"/><text x="16" y="10.5" text-anchor="middle" font-size="9.5" font-weight="600" fill="var(--accent)">only</text></g>`
       : "";
   return `<g class="obj${inn ? " in" : ""}${marks.idle && top.left.includes(id) ? " pick" : ""}" data-id="${esc(id)}" opacity="${op}" transform="${tf}">${stack}<rect class="body" width="${w}" height="${h}" rx="10" fill="var(--raised)" stroke="${on ? "var(--accent)" : inn ? "rgba(111,211,197,.45)" : "var(--border-strong)"}" stroke-width="${on ? 1.8 : 1}"${ended ? ' stroke-dasharray="5 4"' : ""}>${end}</rect>
   <rect x="11" y="${(h - 36) / 2}" width="36" height="36" rx="8" fill="${inn ? "var(--accent-ground)" : "var(--button)"}"/>
   <g transform="translate(17,${(h - 36) / 2 + 6})" fill="none" stroke="${inn ? "var(--accent)" : "var(--dim)"}" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">${ICON[iconOf(id)] ?? ICON.box}</g>
-  ${text}${open}${also}${anim ? "" : changedTab(id)}${driftBadge(id, w)}</g>`;
+  ${text}${open}${only}${anim ? "" : changedTab(id)}${driftBadge(id, w)}</g>`;
 }
 
 // The node of the project, in the middle of the top.
