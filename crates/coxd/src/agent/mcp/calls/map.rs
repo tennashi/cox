@@ -8,7 +8,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 use std::path::Path;
 
-use cox_editor::map::generated::{CallKind, Function, Generated, Line, Type, Use};
+use cox_editor::map::generated::{
+    CallKind, Function, Generated, Level, Line, Slice, Top, Type, Use,
+};
+use cox_editor::map::vocabulary::EVERYTHING;
 use serde_json::{Value, json};
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::oneshot;
@@ -23,14 +26,15 @@ pub(super) const SHOW_MAP: &str = "show_map";
 /// to write one: the form the Map page draws, not what to put in it,
 /// which is the project's to decide.
 pub(super) const MAP_FORMAT: &str = "\
-A project has a map for each viewpoint of it, as one of what runs when someone uses it and one \
-of how it is built, each a file in `maps` in the project's folder, named after the map, as \
-`maps/use.json` for the map `use`; or in `maps` in the folder of one of the project's \
-repositories, to keep it with the repository's code, as `directories/app/maps/use.json` for \
-the map `app/use`, whose `files` are from the repository's folder. A chat working in a checkout \
-of the repository has it as `use`. The file is the map's vocabulary: what the code cannot say. \
-Cox reads the rest from an index of the code of each commit, which it makes itself, and marks \
-drift where the two disagree. The vocabulary is a JSON object:\n\
+A project's map is a file in `maps` in the project's folder, named after the map, as \
+`maps/map.json` for the map `map`; or in `maps` in the folder of one of the project's \
+repositories, to keep it with the repository's code, as `directories/app/maps/map.json` for \
+the map `app/map`, whose `files` are from the repository's folder. A chat working in a checkout \
+of the repository has it as `map`. A project may keep several. The file is the map's \
+vocabulary: what the code cannot say. Cox reads the rest from an index of the code of each \
+commit, which it makes itself, and marks drift where the two disagree. The map is told from \
+whoever starts the project working, its drivers, which its top names: it is shown for one \
+driver at a time, what that driver sets working. The vocabulary is a JSON object:\n\
 - `says`: one line on what the map shows, as against the project's other maps.\n\
 - `nodes`: the boxes, and the people and systems around them, by id, each `{\"name\", \"icon\", \
 \"kind\", \"code\", \"many\", \"claims\", \"files\", \"open\", \"lines\"}`. `kind` is `part`, \
@@ -45,9 +49,19 @@ holds the map's `maps`, the project's or its repository's, for code whose smalle
 holds several files, as a package of Go does; they win over `claims`. `open: false` keeps a \
 box that owns code closed. `lines: \"hand\"` takes its lines from the vocabulary rather than \
 from the code.\n\
-- `top`: `{\"center\", \"left\", \"right\", \"lines\"}`: the node of the project in the \
-middle, which opens on the level inside it, the nodes in a column on its left and on its \
-right, from the top, and the lines between them.\n\
+- `top`: `{\"center\", \"drivers\", \"left\", \"right\", \"lines\"}`: the node of the \
+project in the middle, which opens on the level inside it; the drivers, `outside` nodes that \
+start the project working, as a person by what they use it for, a system that calls it, or a \
+clock that sets it off; the other nodes around it, in a column on its left, under the \
+drivers, and on its right, from the top; and the lines between them. What a driver sets \
+working is what Cox reaches from it: along the lines you write, each from its `from`, through \
+the people and systems on the way, into a box, to the parts the level inside draws the line on \
+to, or else to all of the box; then, from the types the lines come in at, along the code, the \
+way it calls and names; and along a line you wrote from a box that owns code once the code \
+has come into the box. A line from a box that opens on boxes is followed from the part the \
+level inside draws it on from, or else only where a driver comes in at all of the box: so \
+draw each line on, level by level, from the part that starts it. Where it comes to a type another driver's lines come in at, it shows the type and goes \
+no further: from there on is the other's. A map with no `drivers` is shown whole.\n\
 - `levels`: the levels a person places, by the node each opens, in the coordinates of the \
 picture, `y` down: `{\"box\": [x, y, width, height], \"outer\": {id: [side, along]}, \"at\": \
 {id: [x, y]}, \"frames\": {id: [x, y, width, height]}, \"parts\": {id: [x, y]}, \"lines\"}`. \
@@ -60,9 +74,11 @@ the nodes above that it is inside of; `parts` are the boxes inside it, each 216 
 box that owns code, Cox lays out its types. A box with too many types to read on one level \
 owns no code itself, and opens on a level of boxes that own it; drawn closed, it stands for \
 them, its lines for theirs.\n\
-- A line is `{\"from\", \"to\", \"both\", \"sides\"}`: `both: true` for one that goes both \
-ways, as a request and its answer; `sides` the sides of `from` and of `to` it leaves and \
-meets, unless the nearest. Write only the lines no code backs, as between processes, or to the \
+- A line is `{\"from\", \"to\", \"both\", \"sides\", \"stops\"}`: `from` is the end that \
+starts it, as the one that asks, and what a driver sets working follows it from there only; \
+`both: true` draws it both ways, as a request and its answer; `sides` the sides of `from` and \
+of `to` it leaves and meets, unless the nearest; `stops: true` ends what a driver sets working \
+at `to`, which is shown and not gone into, as the app a build task starts. Write only the lines no code backs, as between processes, or to the \
 people and systems around: those between boxes that own code, or hold boxes that do, come from \
 the code, and writing one is a mistake the map reports. A box opened keeps the lines it has \
 closed: in the level inside it, draw one on from the same node to the part it reaches, or it \
@@ -81,29 +97,30 @@ Change the vocabulary as you move the code it claims.";
 
 /// The prompt that has the agent make a map with the human, as the
 /// agent's client offers it, as a slash command; its text is in
-/// `make_map.md`, with `{name}` and `{viewpoint}` for its arguments.
+/// `make_map.md`, with `{name}` and `{drivers}` for its arguments.
 pub(super) const MAKE_MAP: &str = "make_map";
 const MAKE_MAP_TEXT: &str = include_str!("map/make_map.md");
-const MAP_NAMED: &str = "use";
-const ANY_VIEWPOINT: &str = "the viewpoint we settle on together";
+const MAP_NAMED: &str = "map";
+const ANY_DRIVERS: &str = "for us to settle together";
 
 /// The prompt `make_map`, as `prompts/list` lists it.
 pub(super) fn prompt() -> Value {
     json!({
         "name": MAKE_MAP,
         "title": "Make a map of the project",
-        "description": "Has the agent survey the project, write a map's vocabulary, and \
-            work its drift down with you.",
+        "description": "Has the agent survey the project, settle with you who starts it \
+            working, write a map's vocabulary, and work its drift down with you.",
         "arguments": [
             {
                 "name": "name",
-                "description": "The map's name, its file in `maps` without `.json`; `use` \
+                "description": "The map's name, its file in `maps` without `.json`; `map` \
                     when not given.",
             },
             {
-                "name": "viewpoint",
-                "description": "Whose view of the project the map takes, as \"using it\" \
-                    or \"building it\"; settled with you when not given.",
+                "name": "drivers",
+                "description": "Who and what starts the project working, as you know it \
+                    already, as \"people using it, people building it, the nightly job\"; \
+                    settled with you when not given.",
             },
         ],
     })
@@ -119,10 +136,10 @@ pub(super) fn make_map(arguments: &Value) -> Result<Value, String> {
         Some(_) => Err(format!("{name} is to be a string")),
     };
     let name = argument("name", MAP_NAMED)?;
-    let viewpoint = argument("viewpoint", ANY_VIEWPOINT)?;
+    let drivers = argument("drivers", ANY_DRIVERS)?;
     let text = MAKE_MAP_TEXT
         .replace("{name}", name)
-        .replace("{viewpoint}", viewpoint);
+        .replace("{drivers}", drivers);
     Ok(json!({
         "description": format!("Make the map `{name}` of the project"),
         "messages": [{
@@ -163,7 +180,9 @@ pub(super) fn tool() -> Value {
             before you talk it through or show the diff: open it at the box or the type you \
             talk of. Answers what the map shows there, how the indexes of the code stand, and \
             the drift, each by its id, to talk through with the human: to fix the vocabulary, \
-            change the code, or agree to leave it. Write a vocabulary when the project has \
+            change the code, or agree to leave it. A map whose top names drivers, who \
+            starts the project working, is shown for one of them at a time, what that \
+            driver sets working: name it as `driver`. Write a vocabulary when the project has \
             none, or when the human wants another viewpoint of it, deciding with the human \
             what it is to show; shown with none, or with one that does not read, the tool says \
             how it is written.",
@@ -176,6 +195,15 @@ pub(super) fn tool() -> Value {
                         in `maps` without `.json`, after its repository's name and `/` when a \
                         repository of the project keeps it, as `app/use`; the project's first \
                         when not given.",
+                },
+                "driver": {
+                    "type": "string",
+                    "description": "Whose slice of the map to open, when the map's top names \
+                        drivers, the people and systems that start the project working: a \
+                        driver's id, as \"user\", for what that driver sets working alone, \
+                        or \"*\" for all of the map, whoever starts it. When not given, the \
+                        first driver's slice that shows what `at` names, or, with no `at`, \
+                        the drivers alone, each with how much of the map it sets working.",
                 },
                 "at": {
                     "type": "array",
@@ -216,14 +244,15 @@ pub(super) async fn show_map(
             })
             .collect::<Result<_, _>>()?,
     };
-    let name = match arguments.get("map") {
-        None | Some(Value::Null) => None,
-        Some(name) => Some(
-            name.as_str()
-                .ok_or("map is to be a map's name, as a string")?
-                .to_owned(),
-        ),
+    let text = |argument: &str, what: &str| match arguments.get(argument) {
+        None | Some(Value::Null) => Ok(None),
+        Some(given) => given
+            .as_str()
+            .map(|given| Some(given.to_owned()))
+            .ok_or(format!("{argument} is to be {what}, as a string")),
     };
+    let name = text("map", "a map's name")?;
+    let driver = text("driver", "a driver's id")?;
     let (answer, drawn) = oneshot::channel();
     chats
         .send(ChatRequest::Map {
@@ -235,17 +264,138 @@ pub(super) async fn show_map(
     let told = drawn
         .await
         .map_err(|_| "the chat closed before the map was drawn".to_owned())??;
-    let (at, text) = told_at(&told, name.as_deref(), &at)?;
+    let (at, text) = told_at(&told, name.as_deref(), driver.as_deref(), &at)?;
     ask(requests, ToolRequest::ShowMap { map: name, at })?;
     Ok(text)
 }
 
+/// What of a map is shown: all of it, or what one of its drivers sets
+/// working, whose top and levels are its own.
+#[derive(Clone, Copy)]
+struct View<'m> {
+    top: &'m Top,
+    levels: &'m BTreeMap<String, Level>,
+    slice: Option<&'m Slice>,
+}
+
+/// What of `map` is shown for `driver`, with what the page is told to
+/// draw it for, a driver's id or [`EVERYTHING`]: the driver's slice, or
+/// all of the map; with no driver given, the first slice that shows what
+/// `at` names, or all of it when none does. Nothing for a map with
+/// drivers when neither is given: its drivers alone are shown.
+fn viewed<'m>(
+    map: &'m Generated,
+    driver: Option<&str>,
+    at: &[String],
+) -> Result<Option<(View<'m>, Option<&'m str>)>, String> {
+    let whole = View {
+        top: &map.top,
+        levels: &map.levels,
+        slice: None,
+    };
+    let of = |slice: &'m Slice| View {
+        top: &slice.top,
+        levels: &slice.levels,
+        slice: Some(slice),
+    };
+    let drivers = || {
+        map.slices
+            .iter()
+            .map(|slice| format!("`{}`", slice.driver))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    match driver {
+        Some(_) if map.slices.is_empty() => Err(
+            "the map's top names no drivers, so it is shown whole: leave `driver` out".to_owned(),
+        ),
+        Some(EVERYTHING) => Ok(Some((whole, Some(EVERYTHING)))),
+        Some(driver) => match map.slices.iter().find(|slice| slice.driver == driver) {
+            Some(slice) => Ok(Some((of(slice), Some(slice.driver.as_str())))),
+            None => Err(format!(
+                "the map has no driver `{driver}`; its drivers are: {}, and `{EVERYTHING}` \
+                 is all of it",
+                drivers()
+            )),
+        },
+        None if map.slices.is_empty() => Ok(Some((whole, None))),
+        None => {
+            let Some(last) = at.last() else {
+                return Ok(None);
+            };
+            let node = type_of_function(map, last).map_or(last.as_str(), |ty| ty.id.as_str());
+            let shows = |slice: &&Slice| {
+                slice.top.center == node
+                    || slice.top.left.iter().any(|id| id == node)
+                    || slice.top.right.iter().any(|id| id == node)
+                    || slice
+                        .levels
+                        .values()
+                        .any(|level| level.parts.contains_key(node))
+            };
+            Ok(Some(match map.slices.iter().find(shows) {
+                Some(slice) => (of(slice), Some(slice.driver.as_str())),
+                None => (whole, Some(EVERYTHING)),
+            }))
+        }
+    }
+}
+
+/// The drivers of `map`, as the agent is told them where none is chosen:
+/// each with how much of the map it sets working.
+fn drivers_told(map: &Generated) -> String {
+    let mut text = String::from(
+        "\nIts top names who starts the project working, and the map is shown for one of \
+         them at a time, what that driver sets working. Show it again with `driver`:",
+    );
+    for slice in &map.slices {
+        let name = map
+            .nodes
+            .get(&slice.driver)
+            .map_or(slice.driver.as_str(), |node| node.name.as_str());
+        let _ = write!(
+            text,
+            "\n`{}` {name}: {}, {} of {}, {} of them its own",
+            slice.driver,
+            boxes(slice.boxes),
+            slice.types,
+            counted(map.types.len(), "type"),
+            slice.own.len()
+        );
+    }
+    let _ = write!(text, "\n`{EVERYTHING}`: all of the map, whoever starts it");
+    text
+}
+
+/// Whose slice of `map` is shown, as the agent is told it: how much of
+/// the map the driver sets working, and the map's other drivers.
+fn slice_told(map: &Generated, slice: &Slice) -> String {
+    format!(
+        "\nIt is shown as `{}` sets it working: {}, {} of {}, {} of them its own. The map's \
+         other drivers: {}; `{EVERYTHING}` is all of it.",
+        slice.driver,
+        boxes(slice.boxes),
+        slice.types,
+        counted(map.types.len(), "type"),
+        slice.own.len(),
+        map.slices
+            .iter()
+            .filter(|other| other.driver != slice.driver)
+            .map(|other| format!("`{}`", other.driver))
+            .collect::<Vec<_>>()
+            .join(", ")
+    )
+}
+
 /// Where the map `told`, asked for as `name`, opens `at`, from the top
-/// down, and what the agent is told of it there; or why it cannot open
-/// there, as when it has no node `at` names.
+/// down, as `driver` sets it working, and what the agent is told of it
+/// there; or why it cannot open there, as when it has no node `at`
+/// names. What it opens at starts with whose slice it is, for a map
+/// with drivers.
 fn told_at(
     told: &Told,
     name: Option<&str>,
+    driver: Option<&str>,
     at: &[String],
 ) -> Result<(Vec<String>, String), String> {
     let (Some(named), Some(file)) = (&told.name, &told.file) else {
@@ -285,13 +435,17 @@ fn told_at(
             ),
         ));
     };
-    let at = opened(map, at).map_err(|why| {
-        if told.state == State::Ready {
-            why
-        } else {
-            format!("{why}; not all the code is indexed yet, so its types may be missing")
-        }
-    })?;
+    let viewed = viewed(map, driver, at)?;
+    let at = match viewed {
+        Some((view, _)) => opened(map, view, at).map_err(|why| {
+            if told.state == State::Ready {
+                why
+            } else {
+                format!("{why}; not all the code is indexed yet, so its types may be missing")
+            }
+        })?,
+        None => Vec::new(),
+    };
     let mut text = format!(
         "{which} is on the stage, open at {}, for the human to see where things are.",
         where_(map, &at)
@@ -300,12 +454,23 @@ fn told_at(
         let _ = write!(text, "\nIt shows: {}", map.says);
     }
     let _ = write!(text, "{}", indexes(told));
-    let _ = write!(text, "\n{}", there(map, &told.changed, &at));
-    let _ = write!(
-        text,
-        "{}",
-        drift(map, told, &file.to_string(), &shown(map, &at))
-    );
+    let shown = if let Some((view, _)) = viewed {
+        if let Some(slice) = view.slice {
+            let _ = write!(text, "{}", slice_told(map, slice));
+        }
+        let _ = write!(text, "\n{}", there(map, view, &told.changed, &at));
+        shown(map, view, &at)
+    } else {
+        let _ = write!(text, "{}", drivers_told(map));
+        map.top.left.iter().map(String::as_str).collect()
+    };
+    let _ = write!(text, "{}", drift(map, told, &file.to_string(), &shown));
+    let at: Vec<String> = viewed
+        .and_then(|(_, driver)| driver)
+        .map(str::to_owned)
+        .into_iter()
+        .chain(at)
+        .collect();
     let others: Vec<_> = told
         .maps
         .iter()
@@ -323,11 +488,11 @@ fn told_at(
     Ok((at, text))
 }
 
-/// The node each node of `map` is a part of: the one that opens the
+/// The node each node `view` shows is a part of: the one that opens the
 /// level it is in.
-fn parents(map: &Generated) -> BTreeMap<&str, &str> {
+fn parents(view: View<'_>) -> BTreeMap<&str, &str> {
     let mut parents = BTreeMap::new();
-    for (opens, level) in &map.levels {
+    for (opens, level) in view.levels {
         for part in level.parts.keys() {
             parents.entry(part.as_str()).or_insert(opens.as_str());
         }
@@ -343,11 +508,11 @@ fn type_of_function<'a>(map: &'a Generated, key: &str) -> Option<&'a Type> {
         .filter(|ty| ty.functions.iter().any(|function| function.key == key))
 }
 
-/// Where `at` opens `map`: the nodes from the top down to the last it
-/// names, each opening the level the next is in, and then the last; or
-/// why it does not, as when the map has no node of the last, or the
-/// others are not on the way to it.
-fn opened(map: &Generated, at: &[String]) -> Result<Vec<String>, String> {
+/// Where `at` opens `map`, as `view` shows it: the nodes from the top
+/// down to the last it names, each opening the level the next is in, and
+/// then the last; or why it does not, as when the map has no node of the
+/// last, the view leaves it out, or the others are not on the way to it.
+fn opened(map: &Generated, view: View<'_>, at: &[String]) -> Result<Vec<String>, String> {
     let Some(last) = at.last() else {
         return Ok(Vec::new());
     };
@@ -367,7 +532,34 @@ fn opened(map: &Generated, at: &[String]) -> Result<Vec<String>, String> {
             boxes.join(", ")
         ));
     };
-    let parents = parents(map);
+    let parents = parents(view);
+    let top = view.top;
+    if let Some(slice) = view.slice
+        && !parents.contains_key(node)
+        && top.center != node
+        && !top.left.iter().chain(&top.right).any(|id| id == node)
+    {
+        let others: Vec<String> = map
+            .slices
+            .iter()
+            .filter(|other| {
+                other
+                    .levels
+                    .values()
+                    .any(|level| level.parts.contains_key(node))
+            })
+            .map(|other| format!("`{}`", other.driver))
+            .collect();
+        let elsewhere = if others.is_empty() {
+            format!("no driver's slice has it: show it with the driver `{EVERYTHING}`")
+        } else {
+            format!("it is in what {} sets working", others.join(", "))
+        };
+        return Err(format!(
+            "`{node}` is not in what `{}` sets working; {elsewhere}",
+            slice.driver
+        ));
+    }
     let mut way = vec![node.to_owned()];
     while let Some(&parent) = parents.get(way[0].as_str()) {
         if way.iter().any(|on| on == parent) {
@@ -392,10 +584,10 @@ fn opened(map: &Generated, at: &[String]) -> Result<Vec<String>, String> {
     Ok(way)
 }
 
-/// The nodes the map shows where `at` opens it: those of the level it
-/// shows, and the one chosen.
-fn shown<'a>(map: &'a Generated, at: &'a [String]) -> BTreeSet<&'a str> {
-    let top = &map.top;
+/// The nodes the map shows where `at` opens it, in `view`: those of the
+/// level it shows, and the one chosen.
+fn shown<'a>(map: &'a Generated, view: View<'a>, at: &'a [String]) -> BTreeSet<&'a str> {
+    let top = view.top;
     let Some(last) = at.last() else {
         return top
             .left
@@ -408,10 +600,10 @@ fn shown<'a>(map: &'a Generated, at: &'a [String]) -> BTreeSet<&'a str> {
     let ty = map.types.get(last).or_else(|| type_of_function(map, last));
     let level = match ty {
         Some(ty) => Some(ty.owner.as_str()),
-        None if map.levels.contains_key(last) => Some(last.as_str()),
+        None if view.levels.contains_key(last) => Some(last.as_str()),
         None => at.len().checked_sub(2).map(|parent| at[parent].as_str()),
     };
-    let mut shown: BTreeSet<&str> = match level.and_then(|level| map.levels.get_key_value(level)) {
+    let mut shown: BTreeSet<&str> = match level.and_then(|level| view.levels.get_key_value(level)) {
         Some((level, inside)) => inside
             .parts
             .keys()
@@ -508,62 +700,83 @@ fn counted(count: usize, what: &str) -> String {
     }
 }
 
+/// `count` boxes, as `1 box` or `3 boxes`.
+fn boxes(count: usize) -> String {
+    if count == 1 {
+        "1 box".to_owned()
+    } else {
+        format!("{count} boxes")
+    }
+}
+
 /// A commit, by the first characters of its name, as Git shortens it.
 fn short(commit: &str) -> &str {
     commit.get(..7).unwrap_or(commit)
 }
 
-/// What the map shows at `at`, node by node, with what `changed` in each.
-fn there(map: &Generated, changed: &BTreeMap<String, Changed>, at: &[String]) -> String {
+/// What the map shows at `at`, in `view`, node by node, with what
+/// `changed` in each.
+fn there(
+    map: &Generated,
+    view: View<'_>,
+    changed: &BTreeMap<String, Changed>,
+    at: &[String],
+) -> String {
     let Some(last) = at.last() else {
-        let top = &map.top;
+        let top = view.top;
         let mut text = String::from("At the top:");
         for id in top.left.iter().chain([&top.center]).chain(&top.right) {
-            text.push_str(&node_line(map, changed, id));
+            text.push_str(&node_line(map, view, changed, id));
         }
         text.push_str(&lines_told(map, &top.lines));
         return text;
     };
     if let Some(ty) = map.types.get(last) {
-        let mut text = level_told(map, changed, &ty.owner);
+        let mut text = level_told(map, view, changed, &ty.owner);
         let _ = write!(text, "\nChosen: {}", type_told(ty));
         return text;
     }
     if let Some(ty) = type_of_function(map, last) {
-        let mut text = level_told(map, changed, &ty.owner);
+        let mut text = level_told(map, view, changed, &ty.owner);
         let _ = write!(text, "\nChosen: {}", type_told(ty));
         if let Some(function) = ty.functions.iter().find(|function| function.key == *last) {
             let _ = write!(text, "\n{}", function_told(map, function));
         }
         return text;
     }
-    if map.levels.contains_key(last) {
-        return level_told(map, changed, last);
+    if view.levels.contains_key(last) {
+        return level_told(map, view, changed, last);
     }
     let parent = at.len().checked_sub(2).map(|parent| at[parent].as_str());
     let mut text = parent.map_or_else(
         || {
             let mut text = String::from("At the top:");
-            text.push_str(&node_line(map, changed, &map.top.center));
+            text.push_str(&node_line(map, view, changed, &view.top.center));
             text
         },
-        |parent| level_told(map, changed, parent),
+        |parent| level_told(map, view, changed, parent),
     );
-    let _ = write!(text, "\nChosen:{}", node_line(map, changed, last));
+    let _ = write!(text, "\nChosen:{}", node_line(map, view, changed, last));
     text
 }
 
-/// The level inside `opens`, as the agent is told it: its nodes, then
-/// its lines.
-fn level_told(map: &Generated, changed: &BTreeMap<String, Changed>, opens: &str) -> String {
+/// The level inside `opens`, as `view` shows it and the agent is told
+/// it: its nodes, then its lines.
+fn level_told(
+    map: &Generated,
+    view: View<'_>,
+    changed: &BTreeMap<String, Changed>,
+    opens: &str,
+) -> String {
     let name = map
         .nodes
         .get(opens)
         .map_or(opens, |node| node.name.as_str());
     let mut text = format!("Inside `{opens}` {name}:");
-    let Some(level) = map.levels.get(opens) else {
+    let Some(level) = view.levels.get(opens) else {
         return text;
     };
+    let ends = |id: &String| view.slice.is_some_and(|slice| slice.ends.contains(id));
     let mut parts: Vec<(&String, &[i32; 2])> = level.parts.iter().collect();
     // As the page draws them, from the top left.
     parts.sort_by_key(|(_, [x, y])| (*y, *x));
@@ -581,17 +794,26 @@ fn level_told(map: &Generated, changed: &BTreeMap<String, Changed>, opens: &str)
                 if !ty.doc.is_empty() {
                     let _ = write!(text, "; {}", ty.doc);
                 }
+                if ends(id) {
+                    text.push_str("; another driver starts here, and the slice goes no further");
+                }
                 text.push_str(&changed_told(changed.get(id.as_str())));
             }
-            None => text.push_str(&node_line(map, changed, id)),
+            None => text.push_str(&node_line(map, view, changed, id)),
         }
     }
     text.push_str(&lines_told(map, &level.lines));
     text
 }
 
-/// A node of `map`, on a line of its own, as the agent is told it.
-fn node_line(map: &Generated, changed: &BTreeMap<String, Changed>, id: &str) -> String {
+/// A node of `map`, on a line of its own, as `view` shows it and the
+/// agent is told it.
+fn node_line(
+    map: &Generated,
+    view: View<'_>,
+    changed: &BTreeMap<String, Changed>,
+    id: &str,
+) -> String {
     let Some(node) = map.nodes.get(id) else {
         return format!("\n`{id}`: not in the map");
     };
@@ -602,7 +824,7 @@ fn node_line(map: &Generated, changed: &BTreeMap<String, Changed>, id: &str) -> 
     if node.many {
         line.push_str(", several of it");
     }
-    if let Some(level) = map.levels.get(id) {
+    if let Some(level) = view.levels.get(id) {
         let types = level
             .parts
             .keys()
@@ -613,6 +835,12 @@ fn node_line(map: &Generated, changed: &BTreeMap<String, Changed>, id: &str) -> 
         } else {
             line.push_str("; opens");
         }
+    }
+    if view
+        .slice
+        .is_some_and(|slice| slice.ends.iter().any(|end| end == id))
+    {
+        line.push_str("; what the driver sets working ends here");
     }
     line.push_str(&changed_told(changed.get(id)));
     let drift = map

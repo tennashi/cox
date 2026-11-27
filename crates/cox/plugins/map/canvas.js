@@ -11,6 +11,14 @@
 // often; a box's two heaviest are always drawn, the rest, weak, only
 // while one of its ends is chosen or pointed at from a list.
 //
+// A map whose top names drivers, the people and systems that start the
+// project working, is drawn for one of them at a time: its slice, what
+// that driver sets working, which the map gives laid out on its own; or,
+// with none chosen, the drivers alone, to choose from; or all of it,
+// whoever drives. In a slice, a type that other drivers set working too
+// says how many, and what the slice ends at, as a type another driver
+// starts at, has a dashed edge.
+//
 // A function chosen splits the level: the cards of what it relates to
 // inside the open box leave their places for an area at the top of the
 // box, laid out as the calls flow, from the left to the right, and the
@@ -80,7 +88,14 @@ export const view = {
   changed: {},
 };
 
+/// What stands for all of a map with drivers, whoever drives, where a
+/// driver's id would.
+export const EVERYTHING = "*";
+
 let nodes = {};
+// In the slice drawn: the nodes it ends at, and, for each type other
+// drivers set working too, those drivers.
+let marks = { idle: false, ends: new Set(), also: {} };
 let top = { center: "", left: [], right: [], wires: [] };
 let levels = {};
 let parents = {};
@@ -88,9 +103,29 @@ let weights = {};
 let heaviest = 10;
 
 /// Reads `map`, the map as generated, for drawing, with what `changed`
-/// in its nodes' code.
-export function setMap(map, changed) {
+/// in its nodes' code: of a map with drivers, the slice of the driver
+/// `who`, all of it for `EVERYTHING`, or else its drivers alone.
+export function setMap(map, changed, who = null) {
   nodes = map.nodes;
+  const slices = map.slices ?? [];
+  const slice = slices.find((one) => one.driver === who);
+  const idle = slices.length > 0 && !slice && who !== EVERYTHING;
+  const drivers = map.top.drivers ?? [];
+  const among = (id) => id === map.top.center || drivers.includes(id);
+  // What is drawn of the map: a slice has a top and levels of its own.
+  const drawn = idle
+    ? { top: { ...map.top, left: drivers, right: [], lines: map.top.lines.filter((line) => among(line.from) && among(line.to)) }, levels: {} }
+    : (slice ?? map);
+  marks = { idle, ends: new Set(slice?.ends ?? []), also: {} };
+  if (slice) {
+    const own = new Set(slice.own);
+    for (const other of slices) {
+      if (other === slice) continue;
+      for (const level of Object.values(other.levels))
+        for (const id of Object.keys(level.parts)) if (nodes[id]?.kind === "type" && !own.has(id)) (marks.also[id] ??= []).push(other.driver);
+    }
+  }
+  map = { ...map, top: drawn.top, levels: drawn.levels };
   const wire = (line) => [
     line.from,
     line.to,
@@ -137,6 +172,17 @@ export const center = () => top.center;
 export const canOpen = (id) => Boolean(levels[id]);
 /// The node that opens the level `id` is in, or "root" at the top.
 export const parentOf = (id) => parents[id] ?? "root";
+/// Whether what is drawn of the map places the node `id`: a slice leaves
+/// out what its driver does not set working.
+export const placed = (id) => id in parents || id === top.center || top.left.includes(id) || top.right.includes(id);
+let chooseDriver = () => {};
+/// Has `hook` told the driver whose card is pressed while the drivers
+/// alone are drawn.
+export const onDriver = (hook) => (chooseDriver = hook);
+let elsewhere = () => {};
+/// Has `hook` told the node the page is asked to go to that what is
+/// drawn does not place, before it goes: for it to draw what does.
+export const whenElsewhere = (hook) => (elsewhere = hook);
 /// The nodes to open, from the top down, to come to the level inside
 /// `f`, `f` last.
 export function chain(f) {
@@ -440,10 +486,20 @@ function card(id, r, op = 1, appearing = 0) {
       ? `<g class="open" data-open="${esc(id)}" transform="translate(${w - 26},6)"><title>Open</title><rect width="20" height="20" rx="5" fill="transparent"/><g transform="translate(3,3) scale(.6)" fill="none" stroke="var(--dim)" stroke-width="2" stroke-linecap="round">${ICON.drill}</g></g>`
       : "";
   const text = label(p, 58, w - 58 - (canOpen(id) ? 30 : 12), h);
-  return `<g class="obj${inn ? " in" : ""}" data-id="${esc(id)}" opacity="${op}" transform="${tf}">${stack}<rect class="body" width="${w}" height="${h}" rx="10" fill="var(--raised)" stroke="${on ? "var(--accent)" : inn ? "rgba(111,211,197,.45)" : "var(--border-strong)"}" stroke-width="${on ? 1.8 : 1}"/>
+  // Where the slice drawn ends, and who else sets a type working.
+  const ended = marks.ends.has(id);
+  const end = ended
+    ? `<title>${p.kind === "type" ? "Another driver starts here: what happens from it is theirs" : "What this driver sets working ends here"}</title>`
+    : "";
+  const others = marks.also[id];
+  const also =
+    others && !anim
+      ? `<g class="also" transform="translate(${w - 36},${h - 19})"><title>Also set working by ${esc(others.map((other) => node(other).name).join(", "))}</title><rect width="28" height="14" rx="7" fill="var(--button)" stroke="var(--border-strong)"/><text x="14" y="10.5" text-anchor="middle" font-size="9.5" font-weight="600" fill="var(--dim)">+${others.length}</text></g>`
+      : "";
+  return `<g class="obj${inn ? " in" : ""}${marks.idle && top.left.includes(id) ? " pick" : ""}" data-id="${esc(id)}" opacity="${op}" transform="${tf}">${stack}<rect class="body" width="${w}" height="${h}" rx="10" fill="var(--raised)" stroke="${on ? "var(--accent)" : inn ? "rgba(111,211,197,.45)" : "var(--border-strong)"}" stroke-width="${on ? 1.8 : 1}"${ended ? ' stroke-dasharray="5 4"' : ""}>${end}</rect>
   <rect x="11" y="${(h - 36) / 2}" width="36" height="36" rx="8" fill="${inn ? "var(--accent-ground)" : "var(--button)"}"/>
   <g transform="translate(17,${(h - 36) / 2 + 6})" fill="none" stroke="${inn ? "var(--accent)" : "var(--dim)"}" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">${ICON[iconOf(id)] ?? ICON.box}</g>
-  ${text}${open}${anim ? "" : changedTab(id)}${driftBadge(id, w)}</g>`;
+  ${text}${open}${also}${anim ? "" : changedTab(id)}${driftBadge(id, w)}</g>`;
 }
 
 // The node of the project, in the middle of the top.
@@ -996,6 +1052,8 @@ export function goTo(f, chosen = null) {
     whenStill(() => goTo(f, chosen));
     return;
   }
+  const asked = chosen ?? f;
+  if (asked !== "root" && !placed(asked)) elsewhere(asked);
   view.stack = ["root", ...chain(f)];
   view.sel = chosen;
   pair = null;
@@ -1141,6 +1199,7 @@ addEventListener("pointerup", (e) => {
   if (drag && drag.moved <= 4 && !anim) {
     if (drag.open) open(drag.open);
     else if (drag.shut) close(drag.shut);
+    else if (marks.idle && top.left.includes(drag.on)) chooseDriver(drag.on);
     else {
       view.sel = drag.on && drag.on !== view.sel ? drag.on : null;
       render();

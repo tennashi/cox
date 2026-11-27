@@ -1,5 +1,5 @@
 // A map of the project, drawn by a page of the stage: one of the
-// project's maps, each a viewpoint of it, as coxd draws it from the map's
+// project's maps, as coxd draws it from the map's
 // vocabulary, a file of the project's `maps`, and the indexes of its
 // code, read as JSON from `cox://api/map/<name>` and read again every few
 // seconds, as Cox's own tabs follow what they show: what changed in the
@@ -14,6 +14,13 @@
 // The last alone will do: the boxes above it open for it. A box that
 // opens is opened, one that does not is chosen.
 //
+// A map whose top names drivers is drawn for one of them at a time, what
+// that driver sets working, as the bar under the top one chooses; with
+// none chosen, the drivers alone. The driver is the first id of the hash,
+// as `#human/cox/window`, and `*` there is all of the map, whoever
+// drives. With neither, the page draws the first driver's slice that
+// shows what the hash names, or all of it when none does.
+//
 // The map itself, megabytes of JSON for a large project, is read only as
 // it changes: the page gives back the tag of the map it has, and is told
 // the rest alone, as what changed in the code, while the map is the same.
@@ -27,7 +34,24 @@
 // stage, a file of the code opens on a tab of its own; on the phone, its
 // place is told as text.
 
-import { afterRender, canOpen, chain, esc, goTo, node, parentOf, render, setMap, view, whenStill } from "./canvas.js";
+import {
+  EVERYTHING,
+  afterRender,
+  canOpen,
+  chain,
+  esc,
+  fitAll,
+  goTo,
+  node,
+  onDriver,
+  parentOf,
+  placed,
+  render,
+  setMap,
+  view,
+  whenElsewhere,
+  whenStill,
+} from "./canvas.js";
 import { chosenFunction, jump, setTypes } from "./detail.js";
 import { setDrift, show as showDrift } from "./drift.js";
 
@@ -45,6 +69,7 @@ const EVERY_READY = 6000;
 const note = document.getElementById("note");
 const empty = document.getElementById("empty");
 const crumb = document.getElementById("crumb");
+const driverBar = document.getElementById("drv");
 
 let told = null;
 let lastText = null;
@@ -56,6 +81,95 @@ let tag = null;
 let drawn = null;
 // Where the hash asks the page to be once its map is drawn.
 let wanted = null;
+// Of a map with drivers, whose slice is drawn: a driver's id, `EVERYTHING`
+// for all of it, or null for the drivers alone.
+let driver = null;
+
+// What each driver of the map sets working, if its top names drivers.
+const slices = () => told?.map?.slices ?? [];
+// Whether `slice` shows the node `id`.
+const shows = (slice, id) =>
+  id === slice.top.center ||
+  slice.top.left.includes(id) ||
+  slice.top.right.includes(id) ||
+  Object.values(slice.levels).some((level) => id in level.parts);
+
+// Reads the map for drawing as `who` has it: a driver's slice, all of it,
+// or the drivers alone.
+function drawFor(who) {
+  const known = who === EVERYTHING || slices().some((slice) => slice.driver === who);
+  driver = slices().length && known ? who : null;
+  setMap(told.map, told.changed, driver);
+}
+
+// Draws the map for `who`, where the page is, as far as that is there.
+function choose(who) {
+  whenStill(() => {
+    drawFor(who);
+    stay();
+    render();
+    fitAll();
+  });
+}
+
+// Keeps the page where it is, as far as what is drawn still has it.
+function stay() {
+  const stack = ["root"];
+  for (const f of view.stack.slice(1)) {
+    if (!canOpen(f) || parentOf(f) !== stack.at(-1)) break;
+    stack.push(f);
+  }
+  view.stack = stack;
+  if (view.sel && !placed(view.sel)) view.sel = null;
+}
+
+onDriver(choose);
+// Asked to go to what is not drawn: the first slice that shows it is, or
+// else all of the map.
+function reveal(id) {
+  if (!slices().length || placed(id)) return;
+  const found = slices().find((slice) => shows(slice, id));
+  drawFor(found ? found.driver : EVERYTHING);
+}
+whenElsewhere(reveal);
+
+// The bar of the drivers: each, and all of the map; and how much of the
+// map the one chosen sets working.
+function drivers() {
+  const all = slices();
+  driverBar.hidden = !all.length;
+  if (!all.length) return;
+  const tab = (id, name, title) =>
+    `<button class="tab${id === driver ? " on" : ""}" data-driver="${esc(id)}" title="${esc(title)}">${esc(name)}</button>`;
+  const slice = all.find((one) => one.driver === driver);
+  const types = Object.keys(told.map.types).length;
+  const count = (n, what) => `${n} ${what}${n === 1 ? "" : "s"}`;
+  const says = slice
+    ? `${slice.boxes} box${slice.boxes === 1 ? "" : "es"} · ${slice.types} of ${count(types, "type")}, ${slice.own.length} its own · ${count(slice.outside, "system")} around`
+    : driver === EVERYTHING
+      ? "All of the map, whoever starts it"
+      : "Choose who starts it, to see what they set working";
+  driverBar.innerHTML =
+    `<span class="says">Started by</span>` +
+    all.map((one) => tab(one.driver, node(one.driver).name, `What ${node(one.driver).name} sets working`)).join("") +
+    tab(EVERYTHING, "Everything", "All of the map, whoever starts it") +
+    `<span class="count">${esc(says)}</span>`;
+}
+driverBar.addEventListener("click", (e) => {
+  const id = e.target.closest("[data-driver]")?.dataset.driver;
+  if (id) choose(id === driver ? null : id);
+});
+// The drift is of all of the map: its list opens on all of it.
+document.addEventListener(
+  "click",
+  (e) => {
+    if (e.target.closest("#dfb") && slices().length && driver !== EVERYTHING) {
+      drawFor(EVERYTHING);
+      stay();
+    }
+  },
+  true,
+);
 
 // A part of the hash, decoded; as it is, when it is no encoding.
 const decoded = (part) => {
@@ -138,6 +252,15 @@ function goWhere(at) {
 function goWhereNow(at) {
   const map = told.map;
   if (!map) return;
+  if (slices().length) {
+    // The driver first, if the hash names one; with nothing after it,
+    // the drivers alone.
+    const first = at[0];
+    if (first === EVERYTHING || slices().some((slice) => slice.driver === first)) {
+      if (first !== driver) drawFor(first);
+      at = at.slice(1);
+    } else if (!at.length && driver !== null) drawFor(null);
+  }
   const last = at.at(-1);
   let id = last;
   let fn = null;
@@ -149,6 +272,8 @@ function goWhereNow(at) {
       fn = last;
     } else id = null;
   }
+  // What is drawn may leave it out.
+  if (id) reveal(id);
   if (!id) goTo("root");
   else if (canOpen(id)) goTo(id);
   else {
@@ -163,6 +288,7 @@ function fragment() {
   const first = told.maps[0]?.name;
   const name = mapAsked() !== null || told.name !== first ? `${encodeURIComponent(told.name)}:` : "";
   const ids = view.stack.slice(1);
+  if (driver) ids.unshift(driver);
   if (view.sel) ids.push(view.sel);
   const fn = chosenFunction();
   if (fn) ids.push(fn);
@@ -173,6 +299,7 @@ afterRender(() => {
   const hash = fragment();
   if (hash !== location.hash && !(hash === "#" && !location.hash)) history.replaceState(null, "", hash);
   bar();
+  drivers();
 });
 
 // The bar: the project, then the map's tabs at the top, or the levels
@@ -254,7 +381,10 @@ function layout() {
   const lines = told.map ? noteLines() : "";
   note.innerHTML = lines;
   note.hidden = !lines;
-  const below = 44 + (note.hidden ? 0 : note.offsetHeight);
+  drivers();
+  const bars = 44 + (driverBar.hidden ? 0 : driverBar.offsetHeight);
+  note.style.top = `${bars}px`;
+  const below = bars + (note.hidden ? 0 : note.offsetHeight);
   document.documentElement.style.setProperty("--top", `${below}px`);
 }
 
@@ -270,13 +400,15 @@ function shown(json) {
     empty.innerHTML = why();
     crumb.innerHTML = told.project ? `<b>${esc(told.project)}</b>` : "";
     note.hidden = true;
+    driverBar.hidden = true;
     document.getElementById("dfb").hidden = true;
     drawn = null;
     layout();
     return;
   }
   const map = told.map;
-  setMap(map, told.changed);
+  // Another map's drivers are not this one's.
+  drawFor(was === told.name ? driver : null);
   setTypes(map, told.root, onStage);
   setDrift(map, relative(told.file), told.state === "ready");
   layout();
@@ -292,13 +424,7 @@ function shown(json) {
   }
   // The same map drawn again: the page stays where it is, as far as what
   // it shows is still there.
-  const stack = ["root"];
-  for (const f of view.stack.slice(1)) {
-    if (!canOpen(f) || parentOf(f) !== stack.at(-1)) break;
-    stack.push(f);
-  }
-  view.stack = stack;
-  if (view.sel && !map.nodes[view.sel]) view.sel = null;
+  stay();
   render();
 }
 

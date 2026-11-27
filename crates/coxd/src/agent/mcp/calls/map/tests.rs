@@ -47,8 +47,13 @@ const ROOT: &str = "/work/shop";
 /// The map `shop` of a project that has it and the maps `others`, drawn
 /// from the crate's index, as coxd tells it when it is ready.
 fn told(others: &[&str]) -> Told {
+    told_of(VOCABULARY, others)
+}
+
+/// The same, of the map whose vocabulary is `vocabulary`.
+fn told_of(vocabulary: &str, others: &[&str]) -> Told {
     let index = Index::decode(FIXTURE).unwrap();
-    let vocabulary = Vocabulary::parse(VOCABULARY).unwrap();
+    let vocabulary = Vocabulary::parse(vocabulary).unwrap();
     let sources = BTreeMap::from([("src/lib.rs".to_owned(), LIB.to_owned())]);
     let map = generate(&index, &vocabulary, "", &sources);
     let mut maps: Vec<Named> = others
@@ -476,5 +481,111 @@ async fn callers_are_told_a_function_once_and_tests_as_a_count() {
              2 places in tests\n"
         ),
         "{answered}"
+    );
+}
+
+/// The map with two drivers: the buyer, who comes in at the cart, and
+/// the clerk, who comes in at the box that owns nothing.
+fn driven() -> Told {
+    let vocabulary = VOCABULARY
+        .replace(
+            r#""buyer": { "name": "Buyer", "icon": "person", "kind": "outside" },"#,
+            r#""buyer": { "name": "Buyer", "icon": "person", "kind": "outside" },
+               "clerk": { "name": "Clerk", "icon": "person", "kind": "outside" },"#,
+        )
+        .replace(
+            r#""left": ["buyer"], "lines": ["#,
+            r#""drivers": ["buyer", "clerk"], "lines": [{ "from": "clerk", "to": "shop" }, "#,
+        )
+        .replace(
+            r#""outer": { "buyer": ["left", 0] },"#,
+            r#""outer": { "buyer": ["left", 0], "clerk": ["left", 100] },"#,
+        )
+        .replace(
+            r#""lines": [{ "from": "buyer", "to": "cart" }]"#,
+            r#""lines": [{ "from": "buyer", "to": "cart" }, { "from": "clerk", "to": "gone" }]"#,
+        );
+    told_of(&vocabulary, &[])
+}
+
+#[tokio::test]
+async fn a_map_with_drivers_tells_who_starts_it_until_one_is_named() {
+    let (answered, asked) = shown(json!({}), driven()).await;
+    assert_eq!(opened_at(&asked), Some((None, Vec::new())));
+    let answered = answered.unwrap();
+    assert!(
+        answered.contains(
+            "Its top names who starts the project working, and the map is shown for one of \
+             them at a time, what that driver sets working. Show it again with `driver`:\n\
+             `buyer` Buyer: 1 box, 1 of 1 type, 1 of them its own\n\
+             `clerk` Clerk: 1 box, 0 of 1 type, 0 of them its own\n\
+             `*`: all of the map, whoever starts it"
+        ),
+        "{answered}"
+    );
+    assert!(!answered.contains("At the top:"), "{answered}");
+}
+
+#[tokio::test]
+async fn a_driver_named_opens_what_it_sets_working() {
+    let (answered, asked) = shown(json!({ "driver": "buyer", "at": ["shop"] }), driven()).await;
+    assert_eq!(
+        opened_at(&asked),
+        Some((None, vec!["buyer".to_owned(), "shop".to_owned()]))
+    );
+    let answered = answered.unwrap();
+    assert!(
+        answered.contains("It is shown as `buyer` sets it working: 1 box, "),
+        "{answered}"
+    );
+    assert!(
+        answered.contains("The map's other drivers: `clerk`; `*` is all of it."),
+        "{answered}"
+    );
+    // The box the buyer does not reach is not there.
+    assert!(
+        answered.contains("Inside `shop` Shop:\n`cart` Cart (shop); opens on its "),
+        "{answered}"
+    );
+    assert!(!answered.contains("`gone` Gone"), "{answered}");
+
+    // With no driver named, what `at` names says whose slice opens: the
+    // first that shows it.
+    let (answered, asked) = shown(json!({ "at": ["shop/Cart"] }), driven()).await;
+    assert_eq!(
+        opened_at(&asked).unwrap().1,
+        ["buyer", "shop", "cart", "shop/Cart"]
+    );
+    assert!(answered.unwrap().contains("as `buyer` sets it working"));
+
+    // All of the map, whoever starts it.
+    let (answered, asked) = shown(json!({ "driver": "*", "at": ["shop"] }), driven()).await;
+    assert_eq!(opened_at(&asked).unwrap().1, ["*", "shop"]);
+    let answered = answered.unwrap();
+    assert!(answered.contains("`gone` Gone"), "{answered}");
+    assert!(!answered.contains("sets it working"), "{answered}");
+}
+
+#[tokio::test]
+async fn a_driver_that_does_not_reach_what_is_asked_says_who_does() {
+    let (answered, asked) =
+        shown(json!({ "driver": "clerk", "at": ["shop/Cart"] }), driven()).await;
+    assert!(asked.is_empty());
+    assert_eq!(
+        answered.unwrap_err(),
+        "`shop/Cart` is not in what `clerk` sets working; it is in what `buyer` sets working"
+    );
+
+    let (answered, _) = shown(json!({ "driver": "nobody" }), driven()).await;
+    assert_eq!(
+        answered.unwrap_err(),
+        "the map has no driver `nobody`; its drivers are: `buyer`, `clerk`, and `*` is all of it"
+    );
+
+    // A map with no drivers is shown whole, as it was.
+    let (answered, _) = shown(json!({ "driver": "buyer" }), told(&[])).await;
+    assert_eq!(
+        answered.unwrap_err(),
+        "the map's top names no drivers, so it is shown whole: leave `driver` out"
     );
 }
