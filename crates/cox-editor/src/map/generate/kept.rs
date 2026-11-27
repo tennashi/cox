@@ -84,15 +84,8 @@ pub(super) fn around<'l>(
         );
     }
     let Some(&parent) = inside_of.get(opened) else {
-        return (opened == vocabulary.top.center).then(|| {
-            vocabulary
-                .top
-                .left
-                .iter()
-                .chain(&vocabulary.top.right)
-                .map(String::as_str)
-                .collect()
-        });
+        return (opened == vocabulary.top.center)
+            .then(|| vocabulary.top.around().map(String::as_str).collect());
     };
     let above = levels.get(parent)?;
     Some(

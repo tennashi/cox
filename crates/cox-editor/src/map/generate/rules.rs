@@ -10,7 +10,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use super::code::{SymbolId, module_parts};
 use super::{Map, kept};
-use crate::map::generated::{Level, Line};
+use crate::map::generated::{By, Level, Line};
 use crate::map::vocabulary::{self, Rule};
 use crate::scip::role;
 
@@ -77,8 +77,10 @@ impl<'c> Map<'c, '_> {
                 let node = if end == 0 { &line.from } else { &line.to };
                 let inside: BTreeSet<usize> = (0..self.types.len())
                     .filter(|&index| {
-                        self.and_around(self.types[index].owner)
-                            .contains(&node.as_str())
+                        self.shows(index)
+                            && self
+                                .and_around(self.types[index].owner)
+                                .contains(&node.as_str())
                     })
                     .collect();
                 let picked = match rule {
@@ -303,6 +305,8 @@ impl<'c> Map<'c, '_> {
                             both: reach.line.both,
                             sides: None,
                             weak: rank >= STRONG,
+                            stops: reach.line.stops,
+                            by: By::Hand,
                         },
                     ));
                 }

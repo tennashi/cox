@@ -7,7 +7,8 @@ use prost::Message;
 
 use super::text::{doc_of, sig_of};
 use super::*;
-use crate::map::generated::{CallKind, DriftKind};
+use crate::map::generated::{CallKind, DriftKind, Slice};
+use crate::map::vocabulary::{Outer, Side};
 use crate::scip::{Document, Occurrence, SymbolInformation, kind, role};
 
 /// A file of a project, and what an index says of it.
@@ -1624,3 +1625,358 @@ fn a_map_generates_from_what_real_indexers_wrote() {
 }
 
 mod rules;
+
+/// An app two drivers start: a screen, whose view draws by the core and
+/// a helper; a tool, which runs the core and draws the view; the core,
+/// which holds its data; helpers, one that the view calls and one that
+/// nothing does, each naming a type; and a box nothing calls.
+fn driven() -> (Index, BTreeMap<String, String>) {
+    let mut ui = File::new(
+        "src/ui.rs",
+        "pub struct View {}\n\
+         impl View {\n    \
+             pub fn draw(&self) {\n        \
+                 Core::work();\n        \
+                 helper();\n    \
+             }\n\
+         }",
+    );
+    ui.define(&rust("ui/View#"), kind::STRUCT, 0, "View", (0, 0));
+    ui.define(
+        &rust("ui/impl#[View]draw()."),
+        kind::METHOD,
+        2,
+        "draw",
+        (2, 5),
+    );
+    ui.refer(&rust("core/impl#[Core]work()."), 3, "work");
+    ui.refer(&rust("util/helper()."), 4, "helper");
+
+    let mut core = File::new(
+        "src/core.rs",
+        "pub struct Core {\n    \
+             data: Data,\n\
+         }\n\
+         impl Core {\n    \
+             pub fn work() {}\n\
+         }\n\
+         pub struct Data {}",
+    );
+    core.define(&rust("core/Core#"), kind::STRUCT, 0, "Core", (0, 2));
+    core.define(&rust("core/Core#data."), kind::FIELD, 1, "data", (1, 1));
+    core.refer(&rust("core/Data#"), 1, "Data");
+    core.define(
+        &rust("core/impl#[Core]work()."),
+        kind::METHOD,
+        4,
+        "work",
+        (4, 4),
+    );
+    core.define(&rust("core/Data#"), kind::STRUCT, 6, "Data", (6, 6));
+
+    let mut util = File::new(
+        "src/util.rs",
+        "pub fn helper() {\n    \
+             Aux {};\n\
+         }\n\
+         pub fn unused() {\n    \
+             Lone {};\n\
+         }\n\
+         pub struct Aux {}\n\
+         pub struct Lone {}",
+    );
+    util.define(&rust("util/helper()."), kind::FUNCTION, 0, "helper", (0, 2));
+    util.refer(&rust("util/Aux#"), 1, "Aux");
+    util.define(&rust("util/unused()."), kind::FUNCTION, 3, "unused", (3, 5));
+    util.refer(&rust("util/Lone#"), 4, "Lone");
+    util.define(&rust("util/Aux#"), kind::STRUCT, 6, "Aux", (6, 6));
+    util.define(&rust("util/Lone#"), kind::STRUCT, 7, "Lone", (7, 7));
+
+    let mut tool = File::new(
+        "src/tool.rs",
+        "pub struct Tool {}\n\
+         impl Tool {\n    \
+             pub fn run(&self) {\n        \
+                 Core::work();\n        \
+                 View::draw();\n    \
+             }\n\
+         }",
+    );
+    tool.define(&rust("tool/Tool#"), kind::STRUCT, 0, "Tool", (0, 0));
+    tool.define(
+        &rust("tool/impl#[Tool]run()."),
+        kind::METHOD,
+        2,
+        "run",
+        (2, 5),
+    );
+    tool.refer(&rust("core/impl#[Core]work()."), 3, "work");
+    tool.refer(&rust("ui/impl#[View]draw()."), 4, "draw");
+
+    let mut extra = File::new("src/extra.rs", "pub struct Extra {}");
+    extra.define(&rust("extra/Extra#"), kind::STRUCT, 0, "Extra", (0, 0));
+
+    index(&[ui, core, util, tool, extra])
+}
+
+const DRIVEN: &str = r#"{
+  "nodes": {
+    "app": { "name": "App" },
+    "user": { "name": "User", "kind": "outside" },
+    "admin": { "name": "Admin", "kind": "outside" },
+    "db": { "name": "Database", "kind": "outside" },
+    "ui": { "name": "Screen", "claims": ["app/ui"] },
+    "core": { "name": "Core", "claims": ["app/core"] },
+    "util": { "name": "Helpers", "claims": ["app/util"] },
+    "tool": { "name": "Tool", "claims": ["app/tool"], "lines": "hand" },
+    "extra": { "name": "Extra", "claims": ["app/extra"] }
+  },
+  "top": {
+    "center": "app", "drivers": ["user", "admin"], "right": ["db"],
+    "lines": [{ "from": "user", "to": "app" }, { "from": "admin", "to": "app" },
+              { "from": "app", "to": "db", "both": true }]
+  },
+  "levels": {
+    "app": {
+      "box": [0, 0, 1080, 420],
+      "outer": { "user": ["left", 80], "admin": ["left", 280], "db": ["right", 180] },
+      "parts": { "ui": [60, 80], "core": [380, 80], "util": [700, 80],
+                 "tool": [60, 280], "extra": [380, 280] },
+      "lines": [{ "from": "user", "to": "ui" }, { "from": "admin", "to": "tool" },
+                { "from": "core", "to": "db", "both": true },
+                { "from": "tool", "to": "extra", "stops": true }]
+    }
+  }
+}"#;
+
+/// The slice of `map` that `driver` sets working.
+fn slice<'m>(map: &'m Generated, driver: &str) -> &'m Slice {
+    map.slices
+        .iter()
+        .find(|slice| slice.driver == driver)
+        .unwrap_or_else(|| panic!("no slice of `{driver}`"))
+}
+
+/// The nodes a slice shows inside the level of `opened`, in id order.
+fn shown_in<'m>(slice: &'m Slice, opened: &str) -> Vec<&'m str> {
+    slice
+        .levels
+        .get(opened)
+        .into_iter()
+        .flat_map(|level| level.parts.keys().map(String::as_str))
+        .collect()
+}
+
+#[test]
+fn a_driver_sets_working_what_its_lines_and_the_code_reach_from_it() {
+    let map = generated(DRIVEN, &driven());
+    assert_eq!(map.top.drivers, ["user", "admin"]);
+    assert_eq!(map.top.left, ["user", "admin"]);
+    assert_eq!(
+        map.slices
+            .iter()
+            .map(|slice| slice.driver.as_str())
+            .collect::<Vec<_>>(),
+        ["user", "admin"]
+    );
+
+    // The user comes in at the screen, whose view the code leads on from:
+    // to the core and what it holds, and, through the one helper the view
+    // calls, to the type that names. The line a person drew from the core
+    // is followed once the code comes there.
+    let user = slice(&map, "user");
+    assert_eq!(user.top.left, ["user"]);
+    assert_eq!(user.top.drivers, ["user"]);
+    assert_eq!(user.top.right, ["db"]);
+    assert_eq!(shown_in(user, "app"), ["core", "ui", "util"]);
+    assert_eq!(shown_in(user, "ui"), ["app/ui/View"]);
+    assert_eq!(shown_in(user, "core"), ["app/core/Core", "app/core/Data"]);
+    // Not what the helper nothing calls names, though it is in the box.
+    assert_eq!(shown_in(user, "util"), ["app/util/Aux"]);
+    assert_eq!(shown_in(&map.slices[0], "tool"), Vec::<&str>::new());
+    assert_eq!(
+        (user.boxes, user.types, user.outside),
+        (3, 4, 1),
+        "the screen, the core and the helpers; four types; the database"
+    );
+
+    // The admin comes in at the tool, which runs the core and draws the
+    // view: the view is the user's way in, so it is shown, and what
+    // happens from it, as the helper it calls, is the user's.
+    let admin = slice(&map, "admin");
+    assert_eq!(admin.top.left, ["admin"]);
+    assert_eq!(shown_in(admin, "app"), ["core", "extra", "tool", "ui"]);
+    assert_eq!(shown_in(admin, "tool"), ["app/tool/Tool"]);
+    assert_eq!(shown_in(admin, "ui"), ["app/ui/View"]);
+    assert_eq!(shown_in(admin, "core"), ["app/core/Core", "app/core/Data"]);
+    assert!(!admin.levels.contains_key("util"));
+    // The line that stops shows its end, closed.
+    assert!(!admin.levels.contains_key("extra"));
+    assert_eq!(admin.ends, ["app/ui/View", "extra"]);
+    assert_eq!(user.ends, Vec::<String>::new());
+
+    // A type several drivers reach is in each one's slice, and is no
+    // one's own.
+    assert_eq!(user.own, ["app/util/Aux"]);
+    assert_eq!(admin.own, ["app/tool/Tool"]);
+
+    // The whole map is as it is with no drivers named.
+    let whole = generated(
+        &DRIVEN.replace(
+            r#""drivers": ["user", "admin"]"#,
+            r#""left": ["user", "admin"]"#,
+        ),
+        &driven(),
+    );
+    assert_eq!(whole.slices, []);
+    assert_eq!(whole.top.drivers, Vec::<String>::new());
+    assert_eq!(whole.levels, map.levels);
+    assert_eq!(whole.top.left, map.top.left);
+    assert_eq!(whole.types, map.types);
+    let json = serde_json::to_value(&whole).unwrap();
+    assert!(json.get("slices").is_none());
+    assert!(json["top"].get("drivers").is_none());
+}
+
+#[test]
+fn a_line_is_followed_from_the_end_that_starts_it() {
+    // Drawn both ways, the line to the database still starts at the
+    // core: turned around, nothing a driver reaches starts it.
+    let turned = DRIVEN
+        .replace(
+            r#"{ "from": "core", "to": "db", "both": true }"#,
+            r#"{ "from": "db", "to": "core", "both": true }"#,
+        )
+        .replace(
+            r#"{ "from": "app", "to": "db", "both": true }"#,
+            r#"{ "from": "db", "to": "app", "both": true }"#,
+        );
+    let map = generated(&turned, &driven());
+    for driver in ["user", "admin"] {
+        let slice = slice(&map, driver);
+        assert!(slice.top.right.is_empty(), "{driver}");
+        assert_eq!(slice.outside, 0, "{driver}");
+        assert!(!slice.levels["app"].outer.contains_key("db"), "{driver}");
+    }
+    assert_eq!(map.top.right, ["db"]);
+}
+
+#[test]
+fn a_slice_is_placed_with_no_room_left_for_what_it_leaves_out() {
+    let map = generated(DRIVEN, &driven());
+    let places = |slice: &Slice| -> BTreeSet<[i32; 2]> {
+        slice.levels["app"].parts.values().copied().collect()
+    };
+    // The user's three boxes fill the first row, and the box is as much
+    // lower as the row it lost; those beside it sit at its middle.
+    let user = slice(&map, "user");
+    assert_eq!(places(user), [[60, 80], [380, 80], [700, 80]].into());
+    assert_eq!(user.levels["app"].area, Some([0, 0, 1080, 220]));
+    assert_eq!(
+        user.levels["app"].outer,
+        BTreeMap::from([
+            ("user".to_owned(), Outer(Side::Left, 80)),
+            ("db".to_owned(), Outer(Side::Right, 80)),
+        ])
+    );
+    // The admin's four fill the first row and start the next.
+    let admin = slice(&map, "admin");
+    assert_eq!(
+        places(admin),
+        [[60, 80], [380, 80], [700, 80], [60, 280]].into()
+    );
+    assert_eq!(admin.levels["app"].area, Some([0, 0, 1080, 420]));
+    // Inside a box, the types a driver reaches are laid out alone.
+    let whole = &map.levels["util"];
+    let cut = &user.levels["util"];
+    assert_eq!(whole.parts.len(), 2);
+    assert_eq!(cut.parts.len(), 1);
+    assert!(
+        cut.size.unwrap()[0] < whole.size.unwrap()[0]
+            || cut.size.unwrap()[1] < whole.size.unwrap()[1]
+    );
+    // The lines are those between what is left.
+    for slice in &map.slices {
+        let there: BTreeSet<&String> = slice
+            .levels
+            .values()
+            .flat_map(|level| level.parts.keys())
+            .chain(&slice.top.left)
+            .chain(&slice.top.right)
+            .chain([&slice.top.center])
+            .collect();
+        let lines = slice
+            .levels
+            .values()
+            .flat_map(|level| &level.lines)
+            .chain(&slice.top.lines);
+        for line in lines {
+            assert!(
+                there.contains(&line.from),
+                "{}: {}",
+                slice.driver,
+                line.from
+            );
+            assert!(there.contains(&line.to), "{}: {}", slice.driver, line.to);
+        }
+    }
+}
+
+/// The app of [`driven`] with the screen and the core inside one box,
+/// `inner`, which the user comes in at by `way_in`, and whose level has
+/// the lines `inside`; the line to the database leaves `inner`.
+fn grouped_drivers(way_in: &str, inside: &str) -> String {
+    format!(
+        r#"{{
+          "nodes": {{
+            "app": {{ "name": "App" }},
+            "user": {{ "name": "User", "kind": "outside" }},
+            "db": {{ "name": "Database", "kind": "outside" }},
+            "inner": {{ "name": "Inner", "lines": "hand" }},
+            "ui": {{ "name": "Screen", "claims": ["app/ui"] }},
+            "core": {{ "name": "Core", "claims": ["app/core"] }},
+            "util": {{ "name": "Helpers", "claims": ["app/util"] }}
+          }},
+          "top": {{ "center": "app", "drivers": ["user"], "right": ["db"],
+                   "lines": [{{ "from": "user", "to": "app" }}, {{ "from": "app", "to": "db" }}] }},
+          "levels": {{
+            "app": {{
+              "box": [0, 0, 760, 220],
+              "outer": {{ "user": ["left", 80], "db": ["right", 80] }},
+              "parts": {{ "inner": [60, 80], "util": [380, 80] }},
+              "lines": [{{ "from": "user", "to": {way_in} }}, {{ "from": "inner", "to": "db" }}]
+            }},
+            "inner": {{
+              "box": [0, 0, 760, 220],
+              "at": {{ "user": [-400, 80], "db": [900, 80] }},
+              "parts": {{ "ui": [60, 80], "core": [380, 80] }},
+              "lines": [{inside}]
+            }}
+          }}
+        }}"#
+    )
+}
+
+#[test]
+fn a_line_that_leaves_a_box_of_boxes_is_the_parts_the_level_inside_draws_it_on_from() {
+    let reaches_db = |way_in: &str, inside: &str| {
+        let map = generated(&grouped_drivers(way_in, inside), &driven());
+        let user = slice(&map, "user");
+        // Whichever way, the code leads from the screen to the core.
+        assert_eq!(shown_in(user, "inner"), ["core", "ui"]);
+        user.top.right == ["db"]
+    };
+    // The user comes in at the screen alone: the line that leaves the
+    // box around it is no part's, so nothing the user reaches starts it.
+    assert!(!reaches_db(
+        r#""inner""#,
+        r#"{ "from": "user", "to": "ui" }"#
+    ));
+    // Drawn on from the core, it is the core's, which the code comes to.
+    assert!(reaches_db(
+        r#""inner""#,
+        r#"{ "from": "user", "to": "ui" }, { "from": "core", "to": "db" }"#
+    ));
+    // And a user who comes in at all of the box starts all its lines.
+    assert!(reaches_db(r#""inner""#, ""));
+}

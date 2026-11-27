@@ -9,7 +9,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use super::code::SymbolId;
 use super::rules::Reach;
 use super::{Map, layout};
-use crate::map::generated::{Level, Line};
+use crate::map::generated::{By, Level, Line};
 use crate::scip::role;
 
 impl<'c> Map<'c, '_> {
@@ -43,7 +43,10 @@ impl<'c> Map<'c, '_> {
         levels: &BTreeMap<String, Level>,
         reaches: &[Reach<'_>],
     ) -> Vec<(&'c str, Level)> {
-        let owners: BTreeSet<&str> = self.types.iter().map(|ty| ty.owner).collect();
+        let owners: BTreeSet<&str> = (0..self.types.len())
+            .filter(|&index| self.shows(index))
+            .map(|index| self.types[index].owner)
+            .collect();
         let mut out = Vec::new();
         for owner in owners {
             let Some(&(level, me)) = slots.get(owner) else {
@@ -57,7 +60,7 @@ impl<'c> Map<'c, '_> {
                 .map(|(id, &at)| (id.as_str(), at))
                 .collect();
             let mut types: Vec<usize> = (0..self.types.len())
-                .filter(|&index| self.types[index].owner == owner)
+                .filter(|&index| self.types[index].owner == owner && self.shows(index))
                 .collect();
             types.sort_by(|&a, &b| {
                 let (a, b) = (&self.types[a], &self.types[b]);
@@ -112,6 +115,8 @@ impl<'c> Map<'c, '_> {
                             both: false,
                             sides: None,
                             weak,
+                            stops: false,
+                            by: By::Code,
                         })
                         .collect(),
                 },
