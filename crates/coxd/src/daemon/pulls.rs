@@ -10,9 +10,21 @@
 //! GitHub, as `gh pr list --author @me` lists them, however the human
 //! opened them: in Cox, by hand, or with another tool. Cox lists them
 //! now and then, once for each repository, and holds each it does not
-//! yet, with no chat that opened it, unless a chat is seen to open it
-//! later. Not everyone's: a busy repository's would fill the Activity
+//! yet. Not everyone's: a busy repository's would fill the Activity
 //! page.
+//!
+//! The chat that opened a pull request is the one whose `gh pr create`
+//! printed its address (see [`github::opened`]). One found on GitHub
+//! alone, as when the command cut what `gh` printed, or the chat was not
+//! read since coxd started, is the chat's that is on its branch (see
+//! [`Daemon::on_branch`]): the one chat of the project that works in a
+//! checkout of the repository with that branch checked out, or that Cox
+//! made a worktree on it for; or else the one whose `gh pr create`
+//! named the branch with `--head`. Cox does not guess: with no such
+//! chat, as for one the human opened by hand on a branch no chat works
+//! on, or with several it cannot tell apart, it holds the pull request
+//! with no chat that opened it, and looks again each time it lists them,
+//! until a chat is seen to open it.
 //!
 //! A chat's work does not wait on its pull requests: one marked done
 //! stays done as CI ends, which the Activity page shows. While it is
@@ -22,17 +34,18 @@
 //! long as its own chat is open.
 
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use tokio::sync::mpsc::UnboundedSender;
 
 use cox_core::store::{ChatId, ProjectId};
 
-use super::{Daemon, FromDaemon, Hears, Internal, Whose};
+use super::{Daemon, FromDaemon, Hears, Internal, Slot, Whose};
 use crate::daemon::wire::{ProjectPull, PullRow};
 use crate::github::{self, CheckState, Problem, Pull, Status};
 use crate::workflow;
+use crate::worktrees;
 
 /// How many of a chat's pull requests, the last it opened, Cox reads: the
 /// ones it waits on, and not those of long ago.
@@ -106,6 +119,54 @@ pub(super) struct Listing {
     reading: HashSet<ProjectId>,
 }
 
+/// A pull request of the human's that `gh` listed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Found {
+    pub pull: Pull,
+    /// The branch it is of, by its short name; empty when `gh` did not
+    /// tell.
+    pub head: String,
+    /// The chats on that branch, each by the number it is kept by (see
+    /// [`worktrees::chats_on`]).
+    pub on: Vec<i64>,
+}
+
+/// The chats on each branch, by its short name, of each repository on
+/// GitHub, as `owner/name`, that the Git repositories at `folders`, of
+/// the project in `project`, are of, each repository once: of `chats`,
+/// each by the number it is kept by with the folder it works in, and
+/// those Cox made a worktree for (see [`worktrees::chats_on`]). It runs
+/// Git, so not on the daemon's own thread.
+pub(super) fn chats_on(
+    project: &Path,
+    folders: &[PathBuf],
+    chats: &[(i64, PathBuf)],
+) -> Vec<(String, HashMap<String, Vec<i64>>)> {
+    let mut repos: Vec<(String, HashMap<String, Vec<i64>>)> = Vec::new();
+    for folder in folders {
+        let Some(repo) = github::repo_at(folder) else {
+            continue;
+        };
+        let here = worktrees::chats_on(folder, project, chats);
+        let at = repos
+            .iter()
+            .position(|(known, _)| *known == repo)
+            .unwrap_or_else(|| {
+                repos.push((repo, HashMap::new()));
+                repos.len() - 1
+            });
+        for (branch, chats) in here {
+            let on = repos[at].1.entry(branch).or_default();
+            for chat in chats {
+                if !on.contains(&chat) {
+                    on.push(chat);
+                }
+            }
+        }
+    }
+    repos
+}
+
 /// Has the daemon look, now and then, which pull requests are due to be
 /// read, as `internal` tells it.
 pub(super) async fn look(internal: UnboundedSender<Internal>) {
@@ -123,13 +184,24 @@ impl Daemon {
     pub(super) fn look_at_pulls(&mut self, now: Instant) {
         for (project, folders) in self.due_listings(now) {
             let internal = self.internal.clone();
+            let (folder, chats) = self.works_in(project);
             tokio::task::spawn_local(async move {
-                let repos = tokio::task::spawn_blocking(move || github::repos(&folders))
-                    .await
-                    .unwrap_or_default();
+                let repos =
+                    tokio::task::spawn_blocking(move || chats_on(&folder, &folders, &chats))
+                        .await
+                        .unwrap_or_default();
                 let mut read = Vec::new();
-                for repo in repos {
-                    let listed = github::mine(&repo).await;
+                for (repo, on) in repos {
+                    let listed = github::mine(&repo).await.map(|listed| {
+                        listed
+                            .into_iter()
+                            .map(|listed| Found {
+                                on: on.get(&listed.head).cloned().unwrap_or_default(),
+                                pull: listed.pull,
+                                head: listed.head,
+                            })
+                            .collect()
+                    });
                     read.push((repo, listed));
                 }
                 let _ = internal.send(Internal::Listed { project, read });
@@ -245,15 +317,86 @@ impl Daemon {
         due
     }
 
+    /// The folder of `project`, and where each of its chats that is kept
+    /// works, by the number it is kept by, for Git to tell which branch
+    /// each is on.
+    pub(super) fn works_in(&self, project: ProjectId) -> (PathBuf, Vec<(i64, PathBuf)>) {
+        let folder = self
+            .projects
+            .iter()
+            .find(|held| held.id == Some(project))
+            .map_or_default(|held| held.folder.clone());
+        let chats = self
+            .of_project(project)
+            .filter_map(|slot| Some((slot.kept?.number(), self.cwd(slot))))
+            .collect();
+        (folder, chats)
+    }
+
+    /// The chats of `project`, those put away too.
+    fn of_project(&self, project: ProjectId) -> impl Iterator<Item = &Slot> {
+        self.chats.iter().chain(&self.archived).filter(move |slot| {
+            self.projects
+                .get(slot.project)
+                .is_some_and(|held| held.id == Some(project))
+        })
+    }
+
+    /// The chat of `project` that is on the branch of `found`, a pull
+    /// request no chat was seen to open, to take as the one that opened
+    /// it: the one chat `found` tells is on that branch; or, of several,
+    /// the one whose conversation has a `gh pr create` that completed
+    /// and printed no address (see [`github::cut`]), naming no other
+    /// branch with `--head`; or, of none, the one whose conversation has
+    /// such a command that named that branch. None when no chat is, or
+    /// when it cannot tell which of several: Cox does not guess.
+    fn on_branch(&self, project: ProjectId, found: &Found) -> Option<ChatId> {
+        if found.head.is_empty() {
+            return None;
+        }
+        let cut = |slot: &Slot| {
+            slot.chat
+                .as_ref()
+                .map_or_default(|chat| github::cut(chat.conversation().entries()))
+        };
+        let kept = || self.of_project(project).filter(|slot| slot.kept.is_some());
+        let on: Vec<&Slot> = kept()
+            .filter(|slot| {
+                slot.kept
+                    .is_some_and(|kept| found.on.contains(&kept.number()))
+            })
+            .collect();
+        let opened: Vec<&Slot> = match on.len() {
+            0 => kept()
+                .filter(|slot| cut(slot).contains(&Some(found.head.clone())))
+                .collect(),
+            1 => on,
+            _ => on
+                .into_iter()
+                .filter(|slot| {
+                    cut(slot)
+                        .iter()
+                        .any(|head| head.as_ref().is_none_or(|head| *head == found.head))
+                })
+                .collect(),
+        };
+        match opened.as_slice() {
+            [slot] => slot.kept,
+            _ => None,
+        }
+    }
+
     /// Takes the open pull requests of the human's `gh` listed of each
     /// repository of `project`, as `read` says, at `now`: the project
-    /// holds each that no project holds yet, with no chat that opened it,
-    /// to be read from now. One that is merged or closed is read so, as
-    /// any other, and listed no more.
+    /// holds each that no project holds yet, to be read from now, as
+    /// opened by the chat that is on its branch (see [`Self::on_branch`]),
+    /// or by none; one held with no chat that opened it is that chat's
+    /// from now, once there is one. One that is merged or closed is read
+    /// so, as any other, and listed no more.
     pub(super) fn listed(
         &mut self,
         project: ProjectId,
-        read: Vec<(String, Result<Vec<Pull>, Problem>)>,
+        read: Vec<(String, Result<Vec<Found>, Problem>)>,
         now: Instant,
     ) {
         self.listing.reading.remove(&project);
@@ -269,13 +412,40 @@ impl Daemon {
                     continue;
                 }
             };
-            for pull in pulls {
-                if self.watches.contains_key(&pull) {
+            for found in pulls {
+                let held = self.watches.get(&found.pull).map(|watch| watch.author);
+                if matches!(held, Some(Some(_))) {
+                    continue;
+                }
+                let author = self.on_branch(project, &found);
+                let pull = found.pull;
+                if let Some(author) = author {
+                    tracing::info!(
+                        pull = pull.url(),
+                        chat = %author,
+                        branch = found.head,
+                        "the pull request is the chat's on its branch"
+                    );
+                }
+                if let Some(watch) = self.watches.get_mut(&pull) {
+                    // Held before a chat was on its branch.
+                    if let Some(author) = author {
+                        watch.project = Some(project);
+                        watch.author = Some(author);
+                        if let Err(error) = self.store.keep_pull_author(
+                            Some(project),
+                            &pull.repo,
+                            pull.number,
+                            author,
+                        ) {
+                            tracing::error!("the pull request's chat is not kept: {error:#}");
+                        }
+                    }
                     continue;
                 }
                 if let Err(error) =
                     self.store
-                        .keep_pull(Some(project), &pull.repo, pull.number, None, added)
+                        .keep_pull(Some(project), &pull.repo, pull.number, author, added)
                 {
                     tracing::error!("the pull request is not kept: {error:#}");
                 }
@@ -283,6 +453,7 @@ impl Daemon {
                     pull,
                     Watch {
                         project: Some(project),
+                        author,
                         added,
                         next: Some(now),
                         ..Watch::default()
@@ -381,7 +552,9 @@ impl Daemon {
     /// the human, unless they look at it, and, while it is open, the
     /// agent that opened it, if a subagent's, or else its own agent. One
     /// marked done stays so: the agent that opened it, if its chat is
-    /// open, hears with its report again; no other.
+    /// open, hears with its report again; no other. Of one no chat
+    /// opened, as one the human opened by hand, no one is told, which
+    /// the log says.
     fn ci_ended(&mut self, pull: &Pull, title: &str, ended: CheckState) {
         let outcome = match ended {
             CheckState::Passed => "passed",
@@ -391,6 +564,11 @@ impl Daemon {
         let url = pull.url();
         tracing::info!(pull = url, outcome, "CI ended");
         let Some(key) = self.author(pull) else {
+            tracing::warn!(
+                pull = url,
+                outcome,
+                "no chat opened the pull request, so none is told its CI ended"
+            );
             return;
         };
         let failed: Vec<String> = self.watches[pull]

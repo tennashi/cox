@@ -7,7 +7,11 @@
 //! one stands is read with `gh pr view`, as the human is logged in to
 //! `gh` already: Cox asks for no token and keeps none (see [`fetch`]).
 //! The human's open pull requests of a repository, however they opened
-//! them, are listed with `gh pr list --author @me` (see [`mine`]).
+//! them, are listed with `gh pr list --author @me` (see [`mine`]), each
+//! with the branch it is of: a command that cut what `gh pr create`
+//! printed, as with `| tail`, leaves no address to read (see [`cut`]),
+//! and the pull request it opened is the chat's by its branch alone (see
+//! [`crate::daemon`]'s `pulls`).
 
 use std::time::Duration;
 
@@ -84,6 +88,56 @@ pub fn opened(entries: &[Entry]) -> Vec<Pull> {
         }
     }
     opened
+}
+
+/// The commands in `entries` that ran `gh pr create`, completed, and
+/// printed no pull request's address, as one whose output was cut with
+/// `| tail`, or sent to a file: of each, the branch it named with
+/// `--head`, if it named one. Such a command opened a pull request
+/// [`opened`] does not find.
+#[must_use]
+pub fn cut(entries: &[Entry]) -> Vec<Option<String>> {
+    entries
+        .iter()
+        .filter_map(|entry| {
+            let Entry::ToolCall {
+                title,
+                content,
+                result: Some(ToolCallResult::Completed),
+                ..
+            } = entry
+            else {
+                return None;
+            };
+            let printed = content.iter().any(|content| match content {
+                Content::Text(text) => text.lines().any(|line| Pull::of_line(line).is_some()),
+                Content::Diff { .. } => false,
+            });
+            (runs_pr_create(title) && !printed).then(|| head_named(title))
+        })
+        .collect()
+}
+
+/// The branch the command `command` names as the head of the pull
+/// request it opens, with `--head` or `-H` after `gh pr create`, without
+/// the owner before it, as in `owner:branch`.
+fn head_named(command: &str) -> Option<String> {
+    let (_, args) = command.split_once("gh pr create")?;
+    let mut words = args
+        .split_whitespace()
+        .take_while(|word| !matches!(*word, "|" | "||" | "&&" | ";"));
+    let named = loop {
+        let word = words.next()?;
+        if matches!(word, "--head" | "-H") {
+            break words.next()?;
+        }
+        if let Some(named) = word.strip_prefix("--head=") {
+            break named;
+        }
+    };
+    let named = named.trim_matches(|c| matches!(c, '\'' | '"'));
+    let branch = named.rsplit_once(':').map_or(named, |(_, branch)| branch);
+    (!branch.is_empty()).then(|| branch.to_owned())
 }
 
 /// Whether the command `command` runs `gh pr create`, rather than only
@@ -418,31 +472,60 @@ const LISTED: &str = "30";
 /// # Errors
 ///
 /// When `gh` is missing, is not logged in, or cannot list them.
-pub async fn mine(repo: &str) -> Result<Vec<Pull>, Problem> {
+pub async fn mine(repo: &str) -> Result<Vec<Listed>, Problem> {
     let json = gh(&[
-        "pr", "list", "--repo", repo, "--author", "@me", "--state", "open", "--limit", LISTED,
-        "--json", "number",
+        "pr",
+        "list",
+        "--repo",
+        repo,
+        "--author",
+        "@me",
+        "--state",
+        "open",
+        "--limit",
+        LISTED,
+        "--json",
+        LISTED_FIELDS,
     ])
     .await?;
     listed(repo, &json).map_err(Problem::Failed)
 }
 
-/// The pull requests of `repo` `gh pr list --json number` told as `json`.
+/// The fields of `gh pr list --json` that [`listed`] reads.
+const LISTED_FIELDS: &str = "number,headRefName";
+
+/// A pull request as `gh pr list` tells it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Listed {
+    pub pull: Pull,
+    /// The branch it is of, its head, by its short name; empty when `gh`
+    /// did not tell.
+    pub head: String,
+}
+
+/// The pull requests of `repo` `gh pr list --json` told as `json`, with
+/// [`LISTED_FIELDS`].
 ///
 /// # Errors
 ///
 /// When `json` is not what `gh` tells.
-pub fn listed(repo: &str, json: &str) -> Result<Vec<Pull>, String> {
+pub fn listed(repo: &str, json: &str) -> Result<Vec<Listed>, String> {
     #[derive(Deserialize)]
-    struct Listed {
+    #[serde(rename_all = "camelCase")]
+    struct Told {
         number: u64,
+        #[serde(default)]
+        head_ref_name: String,
     }
-    let listed: Vec<Listed> = serde_json::from_str(json).map_err(|error| error.to_string())?;
-    Ok(listed
+    let told: Vec<Told> = serde_json::from_str(json).map_err(|error| error.to_string())?;
+    Ok(told
         .into_iter()
-        .map(|listed| Pull {
-            repo: repo.to_owned(),
-            number: listed.number,
+        .map(|told| Listed {
+            pull: Pull {
+                repo: repo.to_owned(),
+                number: told.number,
+            },
+            head: told.head_ref_name,
         })
         .collect())
 }
@@ -467,23 +550,16 @@ pub fn repo_of_remote(url: &str) -> Option<String> {
     Pull::of_line(&link).map(|pull| pull.repo)
 }
 
-/// The repositories on GitHub of the Git repositories at `folders`, each
-/// once: of each, its remote `upstream`, which a fork's pull requests are
-/// opened on, or else `origin`.
+/// The repository on GitHub of the Git repository at `folder`, if it has
+/// one: its remote `upstream`, which a fork's pull requests are opened
+/// on, or else `origin`.
 #[must_use]
-pub fn repos(folders: &[std::path::PathBuf]) -> Vec<String> {
-    let mut repos = Vec::new();
-    for folder in folders {
-        let repo = ["upstream", "origin"].iter().find_map(|remote| {
-            cox_git::git::run(folder, &["remote", "get-url", remote])
-                .ok()
-                .and_then(|url| repo_of_remote(&url))
-        });
-        if let Some(repo) = repo.filter(|repo| !repos.contains(repo)) {
-            repos.push(repo);
-        }
-    }
-    repos
+pub fn repo_at(folder: &std::path::Path) -> Option<String> {
+    ["upstream", "origin"].iter().find_map(|remote| {
+        cox_git::git::run(folder, &["remote", "get-url", remote])
+            .ok()
+            .and_then(|url| repo_of_remote(&url))
+    })
 }
 
 /// What `gh`, run with `args`, printed.
@@ -559,6 +635,50 @@ mod tests {
             ),
         ];
         assert_eq!(opened(&entries), [pull(423), pull(424)]);
+        assert_eq!(cut(&entries), [], "each printed its address");
+    }
+
+    #[test]
+    fn a_gh_pr_create_whose_output_was_cut_opened_none_cox_reads_but_is_told_apart() {
+        // What `gh` says beside the address, which is all that was kept.
+        let hints = "```console\nWarning: 1 uncommitted change\n\n\
+                     Creating pull request for b into main in tennashi/cox\n```";
+        let entries = [
+            command(
+                "git push -u origin b && gh pr create --draft --fill 2>&1 | tail -3",
+                hints,
+                Some(ToolCallResult::Completed),
+            ),
+            command(
+                "gh pr create --fill --head tennashi:phone-activity > /tmp/out",
+                "",
+                Some(ToolCallResult::Completed),
+            ),
+            command(
+                "gh pr create -H 'side' --title 'Use --head main' | tail -1",
+                "",
+                Some(ToolCallResult::Completed),
+            ),
+            command(
+                "gh pr create --head=other | tail -1",
+                "",
+                Some(ToolCallResult::Failed),
+            ),
+            command(
+                "gh pr view --json url | tail -1",
+                "",
+                Some(ToolCallResult::Completed),
+            ),
+        ];
+        assert_eq!(opened(&entries), [], "no address on a line of its own");
+        assert_eq!(
+            cut(&entries),
+            [
+                None,
+                Some("phone-activity".to_owned()),
+                Some("side".to_owned())
+            ]
+        );
     }
 
     #[test]
@@ -748,9 +868,17 @@ mod tests {
 
     #[test]
     fn the_human_s_open_pull_requests_are_read_from_gh_pr_list() {
+        let of = |number, head: &str| Listed {
+            pull: pull(number),
+            head: head.to_owned(),
+        };
         assert_eq!(
-            listed("tennashi/cox", r#"[{"number":478},{"number":479}]"#).unwrap(),
-            [pull(478), pull(479)]
+            listed(
+                "tennashi/cox",
+                r#"[{"number":478,"headRefName":"phone-activity"},{"number":479}]"#
+            )
+            .unwrap(),
+            [of(478, "phone-activity"), of(479, "")]
         );
         assert_eq!(listed("tennashi/cox", "[]").unwrap(), []);
         assert!(listed("tennashi/cox", "no").is_err());
