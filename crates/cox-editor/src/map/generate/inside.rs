@@ -1,5 +1,8 @@
 //! The level inside a box that opens on its types: the types, placed,
-//! and the lines between them and to the boxes around.
+//! and the lines between them and to the boxes around. Between two types
+//! a line is drawn where a field of one names the other; where only a
+//! function of one names the other, as a handler names the action it is
+//! bound to, the line is drawn while one of them is chosen.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
@@ -64,6 +67,14 @@ impl<'c> Map<'c, '_> {
                     .then(a.line.cmp(&b.line))
             });
             let lines = self.type_lines(owner, &types, &around);
+            let named: BTreeSet<(String, String)> = self
+                .named_lines(&types)
+                .into_iter()
+                .filter(|(from, to)| {
+                    !lines.contains(&(from.clone(), to.clone()))
+                        && !lines.contains(&(to.clone(), from.clone()))
+                })
+                .collect();
             let cards: Vec<layout::Card> = types
                 .iter()
                 .map(|&index| layout::Card {
@@ -81,7 +92,7 @@ impl<'c> Map<'c, '_> {
                 .collect();
             let mut placing = lines.clone();
             placing.extend(self.reached_types(reaches, owner, &shown));
-            let (size, parts) = layout::types(&cards, &placing, &around, me);
+            let (size, parts) = layout::types(&cards, &placing, &named, &around, me);
             out.push((
                 owner,
                 Level {
@@ -93,18 +104,46 @@ impl<'c> Map<'c, '_> {
                     parts,
                     lines: lines
                         .into_iter()
-                        .map(|(from, to)| Line {
+                        .map(|line| (line, false))
+                        .chain(named.into_iter().map(|line| (line, true)))
+                        .map(|((from, to), weak)| Line {
                             from,
                             to,
                             both: false,
                             sides: None,
-                            weak: false,
+                            weak,
                         })
                         .collect(),
                 },
             ));
         }
         out
+    }
+
+    /// The lines between two of `types` where a function of one names the
+    /// other, as an action that its key bindings and handlers name and no
+    /// field holds: from the one that names it, once for both ways, and
+    /// not for a name in a test.
+    fn named_lines(&self, types: &[usize]) -> BTreeSet<(String, String)> {
+        let ids: BTreeSet<&str> = types
+            .iter()
+            .map(|&index| self.types[index].id.as_str())
+            .collect();
+        let mut lines = BTreeSet::new();
+        for &index in types {
+            let ty = &self.types[index];
+            for found in self.uses.get(ty.id.as_str()).into_iter().flatten() {
+                if let Some(node) = found
+                    .node
+                    .as_deref()
+                    .filter(|node| !found.test && ids.contains(node) && *node != ty.id)
+                    && !lines.contains(&(ty.id.clone(), node.to_owned()))
+                {
+                    lines.insert((node.to_owned(), ty.id.clone()));
+                }
+            }
+        }
+        lines
     }
 
     /// The lines inside the box `owner`: between two of its `types` where

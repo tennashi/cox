@@ -111,7 +111,8 @@ pub struct Line {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sides: Option<[Side; 2]>,
     /// Whether it is drawn only while one of its ends is chosen: a line
-    /// the code gives that is not among either end's two heaviest.
+    /// the code gives that is not among either end's two heaviest, or one
+    /// between two types that no field gives, only a name in a function.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub weak: bool,
 }
