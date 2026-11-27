@@ -527,7 +527,9 @@ fn describe_entry(entry: &Entry) -> String {
         Entry::Merge => "merge: the human asked the agent to merge what it made".to_owned(),
         Entry::Reply(text) => format!("reply: {}", text_of(text)),
         Entry::Thought(text) => format!("thought: {}", text_of(text)),
-        Entry::Note(text) | Entry::Compacted(text) => format!("note: {}", text_of(text)),
+        Entry::Note(text) | Entry::Compacted(text) | Entry::Aside(text) => {
+            format!("note: {}", text_of(text))
+        }
         Entry::Switched { from, to } => format!("switched: from {from} to {to}"),
         Entry::Login {
             options,

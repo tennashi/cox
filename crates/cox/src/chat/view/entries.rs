@@ -97,7 +97,7 @@ impl Speaker {
             Entry::Cox(_) | Entry::Keep { .. } | Entry::Checks(_) | Entry::Event { .. } => {
                 Some(Self::Cox)
             }
-            Entry::Note(_) | Entry::Compacted(_) | Entry::Switched { .. } => None,
+            Entry::Note(_) | Entry::Compacted(_) | Entry::Aside(_) | Entry::Switched { .. } => None,
             _ => Some(Self::Agent),
         }
     }
@@ -942,7 +942,7 @@ impl ChatView {
             Entry::Event { on, checks } => {
                 self.render_checks(index, event_label(on), checks, &mut writer, cx)
             }
-            Entry::Note(text) | Entry::Compacted(text) => div()
+            Entry::Note(text) | Entry::Compacted(text) | Entry::Aside(text) => div()
                 .text_size(px(12.))
                 .text_color(rgb(DIM))
                 .child(writer.noted(text, "\n\n"))

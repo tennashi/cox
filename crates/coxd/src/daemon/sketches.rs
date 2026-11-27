@@ -24,14 +24,15 @@ impl Daemon {
     /// chat's is, and told what the chat talked through so far, and what
     /// it tries; the chat goes on in the project, apart from it, and hears
     /// how it ends (see [`Self::finish_sketch`]). A sketch of the project
-    /// is of its directory `directory`, when one is named.
+    /// is of its directory `directory`, when one is named. Answers the
+    /// sketch's key, and how it goes by to the chat's agent.
     pub(super) fn start_sketch(
         &mut self,
         key: u64,
         started: Sketch,
         directory: Option<&str>,
         what: &str,
-    ) -> Result<OpenedChat, String> {
+    ) -> Result<(u64, OpenedChat), String> {
         let slot = self
             .chats
             .iter()
@@ -69,11 +70,11 @@ impl Daemon {
             ("from", started.what()),
             ("what", what),
         ]);
-        let opened = self.open_under(key, &line, setup, None, None)?;
+        let (sketch, opened) = self.open_under(key, &line, setup, None, None)?;
         // Named after what it tries, not after the line Cox sends it.
         let name: String = what.chars().take(NAME_LENGTH).collect();
         let store = Rc::clone(&self.store);
-        if let Some(slot) = self.slot_mut(opened.number) {
+        if let Some(slot) = self.slot_mut(sketch) {
             slot.name_as(&name, Named::FirstLine, &store);
         }
         if let Some(chat) = self.chat(key) {
@@ -83,7 +84,7 @@ impl Daemon {
                 folder.display()
             ));
         }
-        Ok(OpenedChat { name, ..opened })
+        Ok((sketch, OpenedChat { name, ..opened }))
     }
 
     /// The sketch the chat `key` is, what it started from and the folder
@@ -264,8 +265,12 @@ impl Daemon {
         if goes_on != key {
             // The human goes on there.
             self.reveals.push(goes_on);
+            // By the number it is kept by, as `read_chat` takes it.
+            let number = self
+                .number_of(key)
+                .map_or_default(|number| format!(" (chat {number})"));
             if let (Some(chat), Some(note)) = (self.chat(goes_on), note.as_ref()) {
-                chat.note(format!("The sketch \"{title}\" (chat {key}) ended: {note}"));
+                chat.note(format!("The sketch \"{title}\"{number} ended: {note}"));
             }
             // Its triggers run where the human goes on, in the project.
             if let Some(chat) = self.chat(goes_on) {

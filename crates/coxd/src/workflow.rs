@@ -171,7 +171,7 @@ const OWN: [&Text; 14] = [
 /// ended on any, and that Cox leaves it open, if it is a sketch (see
 /// [`left_open`]).
 #[must_use]
-pub fn subagent_report(number: u64, name: &str, stands: &Waited, settled: bool) -> String {
+pub fn subagent_report(number: i64, name: &str, stands: &Waited, settled: bool) -> String {
     let said = match stands.said.as_deref() {
         None => "(It said nothing.)".to_owned(),
         Some(said) => match said.char_indices().nth(REPORT_LENGTH) {

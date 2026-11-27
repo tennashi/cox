@@ -1085,7 +1085,7 @@ const WORK = new Set(["tool_call", "thought", "plan"]);
 function speakerOf(kind) {
   if (kind === "human" || kind === "attached" || kind === "on_step") return "you";
   if (kind === "cox" || kind === "keep" || kind === "checks" || kind === "event") return "cox";
-  if (kind === "note" || kind === "compacted" || kind === "switched" || kind === "merge") return null;
+  if (kind === "note" || kind === "compacted" || kind === "aside" || kind === "switched" || kind === "merge") return null;
   return "agent";
 }
 
@@ -1243,6 +1243,7 @@ function entryNode(at, kind, value, asks) {
       return checks(value.on.replace(".", " "), value.checks);
     case "note":
     case "compacted":
+    case "aside":
       return el("p", { class: "note" }, value);
     case "switched":
       return el("p", { class: "note" }, `Switched from ${value.from} to ${value.to}.`);

@@ -239,7 +239,8 @@ pub(super) fn agent_report_tool() -> Value {
                 },
                 "chat": {
                     "type": "integer",
-                    "description": "The number agent answered for the subagent's chat, in \
+                    "description": "The number agent answered for the subagent's chat, the one \
+                        read_chat takes and the chat list shows, in \
                         place of `title` when two of your subagents share a title.",
                 },
             },
@@ -272,7 +273,8 @@ pub(super) fn agent_continue_tool() -> Value {
                 },
                 "chat": {
                     "type": "integer",
-                    "description": "The number agent answered for the subagent's chat, in \
+                    "description": "The number agent answered for the subagent's chat, the one \
+                        read_chat takes and the chat list shows, in \
                         place of `title` when two of your subagents share a title.",
                 },
                 "prompt": {
@@ -312,7 +314,8 @@ pub(super) fn agent_stop_tool() -> Value {
                 },
                 "chat": {
                     "type": "integer",
-                    "description": "The number agent answered for the subagent's chat, in \
+                    "description": "The number agent answered for the subagent's chat, the one \
+                        read_chat takes and the chat list shows, in \
                         place of `title` when two of your subagents share a title.",
                 },
                 "reason": {
@@ -562,8 +565,8 @@ pub(super) async fn agent(
              by that title, as they see it in the list. Cox tells you its report once it \
              ends its turn and your turn is not running; to wait for it sooner, call \
              agent_report, giving that title; to stop it, agent_stop. Its number, {number}, \
-             is for those only, should another of your subagents share its title. \
-             {NOT_CLAUDES_OWN}"
+             names it to those as `chat`, should another of your subagents share its title, \
+             and to read_chat. {NOT_CLAUDES_OWN}"
         );
         if let Some(model) = &model {
             let _ = write!(
@@ -765,7 +768,7 @@ fn withheld(withheld: &Withheld) -> Option<String> {
 
 /// Waits for the chat that goes by `chat` to end its turn, or to come to
 /// wait for the human, and answers how it stands then.
-async fn wait(chat: u64, chats: &UnboundedSender<ChatRequest>) -> Result<Waited, String> {
+async fn wait(chat: i64, chats: &UnboundedSender<ChatRequest>) -> Result<Waited, String> {
     let (answer, waited) = oneshot::channel();
     chats
         .send(ChatRequest::WaitChat { chat, answer })
@@ -786,7 +789,7 @@ fn named(arguments: &Value) -> Result<Subagent, String> {
             Err("no subagent: give the title agent answered as `title`".to_owned())
         }
         Some(chat) => chat
-            .as_u64()
+            .as_i64()
             .map(Subagent::Number)
             .ok_or_else(|| "`chat` is not a number: give the title as `title`".to_owned()),
     }
@@ -796,7 +799,7 @@ fn named(arguments: &Value) -> Result<Subagent, String> {
 async fn find(
     subagent: Subagent,
     chats: &UnboundedSender<ChatRequest>,
-) -> Result<(u64, String), String> {
+) -> Result<(i64, String), String> {
     let (answer, found) = oneshot::channel();
     chats
         .send(ChatRequest::FindSubagent { subagent, answer })
@@ -958,7 +961,7 @@ mod tests {
         })
     }
 
-    fn opened(number: u64) -> OpenedChat {
+    fn opened(number: i64) -> OpenedChat {
         OpenedChat {
             number,
             name: "Review the parser".to_owned(),
@@ -1152,8 +1155,9 @@ mod tests {
             "The subagent works in the chat \"Review the parser\", under this one: tell the \
              human of it by that title, as they see it in the list. Cox tells you its report \
              once it ends its turn and your turn is not running; to wait for it sooner, call \
-             agent_report, giving that title; to stop it, agent_stop. Its number, 4, is for \
-             those only, should another of your subagents share its title. Cox subagents are \
+             agent_report, giving that title; to stop it, agent_stop. Its number, 4, names \
+             it to those as `chat`, should another of your subagents share its title, and to \
+             read_chat. Cox subagents are \
              not Claude Code tasks or sessions: TaskStop, SendMessage and ListAgents do not \
              reach them, so never use those, or message other sessions, about one. It runs with the model `haiku` when \
              its agent offers it, and agent_report says when it does not."
@@ -1277,8 +1281,9 @@ mod tests {
             "The subagent works in the chat \"Review the parser\", under this one: tell the \
              human of it by that title, as they see it in the list. Cox tells you its report \
              once it ends its turn and your turn is not running; to wait for it sooner, call \
-             agent_report, giving that title; to stop it, agent_stop. Its number, 4, is for \
-             those only, should another of your subagents share its title. Cox subagents are \
+             agent_report, giving that title; to stop it, agent_stop. Its number, 4, names \
+             it to those as `chat`, should another of your subagents share its title, and to \
+             read_chat. Cox subagents are \
              not Claude Code tasks or sessions: TaskStop, SendMessage and ListAgents do not \
              reach them, so never use those, or message other sessions, about one. This chat talks with the human and \
              hands the work off, so its subagents run in the background: go on with the human, \
@@ -1709,7 +1714,7 @@ mod tests {
         );
         drop(chats);
         let heard = window.await.unwrap();
-        let waited: Vec<u64> = heard
+        let waited: Vec<i64> = heard
             .iter()
             .filter_map(|request| match request {
                 ChatRequest::WaitChat { chat, .. } => Some(*chat),
