@@ -1,6 +1,6 @@
 //! The page coxd serves the human's phone, for them to follow and answer
-//! the chats away from the Mac: the projects and chats, and a chat's
-//! conversation, as they change.
+//! the chats away from the Mac: what goes on in them, which is its top,
+//! the projects and chats, and a chat's conversation, as they change.
 //!
 //! An installed coxd serves it unless `settings.json` turns it off, as
 //! `{"phone": false}`; any other, as a test's or `cargo xtask run`'s,
@@ -33,6 +33,20 @@
 //! agent asks, it posts to `/act?kept=<number>`, a [`ToDaemon`] as JSON,
 //! as the window says it, which coxd does as the window's (see
 //! [`done_on_the_page`] for which).
+//!
+//! The top of the page is what goes on in every project, as the window's
+//! Activity page of the home tells it, beside the list of chats: the page
+//! reads it on `/activity`, as JSON, which coxd puts together from the
+//! chats as it lists them itself, with the code the window's page is told
+//! by (see [`crate::activity`]), so that it is there while no window is
+//! open; and a chat's story, what it did when, on
+//! `/activity/timeline?kept=<number>`, as the human opens it. It posts to
+//! `/activity/resume?kept=<number>` to have a chat whose turn was cut off
+//! go on, and to `/activity/fix?kept=<number>`, with the pull request, as
+//! `{"repo": ..., "number": ...}`, to have the chat that opened it fix its
+//! CI, each a line coxd sends the chat as the human's, as the window's
+//! page has it sent, and refused where that page's is (see
+//! [`crate::activity::resume`] and [`crate::activity::fix`]).
 //!
 //! The page names a chat by the number it is kept by, `kept`, never by
 //! its key: its address, and the notices pushed to it, outlast coxd,
@@ -89,6 +103,7 @@ pub(crate) mod tailnet;
 use super::push::{self, Notice, Pushed, Pushes, Subscription};
 use super::wire::{FromDaemon, ToDaemon};
 use super::{Internal, Sketching};
+use crate::activity;
 use crate::chat::conversation::{Content, Entry};
 use crate::storage::{self, Kept};
 use crate::theme;
@@ -617,6 +632,8 @@ pub async fn serve(
                         page.diagram(&request).await
                     } else if map_asked(request.uri().path()).is_some() {
                         page.map(&request).await
+                    } else if matches!(request.uri().path(), "/activity" | "/activity/timeline") {
+                        page.activity(&request).await
                     } else if request.uri().path() == "/events" {
                         page.events(&request).await
                     } else {
@@ -1020,9 +1037,115 @@ impl Page {
         answer(StatusCode::OK, "application/json", told)
     }
 
+    /// How the chats stand, as coxd lists them, and what the agent of
+    /// each at work, or asking, does now and asks, by its key, or nothing
+    /// while coxd stops.
+    async fn standing(&self) -> Option<(activity::Told, Vec<(u64, crate::commands::Now)>)> {
+        let (asked, standing) = tokio::sync::oneshot::channel();
+        self.internal
+            .send(Internal::Activity { answer: asked })
+            .ok()?;
+        standing.await.ok()
+    }
+
+    /// What goes on in every project, as JSON, as the window's Activity
+    /// page of the home is told it (see [`activity::told`]), from the
+    /// chats as coxd lists them, whether a window is open or not; or, at
+    /// `/activity/timeline`, the story of the chat `request` names,
+    /// `?kept=<number>` (see [`activity::timeline`]), null when coxd
+    /// keeps nothing of it.
+    async fn activity(&self, request: &Request<Incoming>) -> Response<Body> {
+        if !self.paired(request) {
+            return answer(StatusCode::UNAUTHORIZED, TEXT, "Not paired");
+        }
+        let of = if request.uri().path() == "/activity/timeline" {
+            match self.chat_named(request).await {
+                Ok(key) => Some(key),
+                Err((status, why)) => return answer(status, TEXT, why),
+            }
+        } else {
+            None
+        };
+        let Some((told, now)) = self.standing().await else {
+            return answer(StatusCode::SERVICE_UNAVAILABLE, TEXT, "coxd is stopping");
+        };
+        let read = move || match of {
+            None => activity::told(&told, &told.home, &|key| {
+                now.iter()
+                    .find(|(chat, _)| *chat == key)
+                    .map(|(_, now)| now.clone())
+            }),
+            Some(key) => told
+                .chats
+                .iter()
+                .find(|chat| chat.key == key)
+                .and_then(|chat| chat.kept)
+                .map_or(serde_json::Value::Null, |chat| {
+                    activity::timeline(&told, &activity::Of { chat })
+                }),
+        };
+        match blocking(read).await {
+            Ok(told) => answer(StatusCode::OK, "application/json", told.to_string()),
+            Err(error) => answer(StatusCode::INTERNAL_SERVER_ERROR, TEXT, error.to_string()),
+        }
+    }
+
+    /// Has the chat kept as `kept` go on from where its turn was cut off,
+    /// or, with a pull request in `body`, as `{"repo": ..., "number":
+    /// ...}`, fix the CI of that pull request, which its agent opened: by
+    /// the line the window's Activity page would have it sent, as the
+    /// human's, unless that page would send none (see
+    /// [`activity::resume`] and [`activity::fix`]).
+    async fn say(&self, kept: Option<i64>, body: Option<&[u8]>) -> Response<Body> {
+        #[derive(serde::Deserialize)]
+        struct Pull {
+            repo: String,
+            number: u64,
+        }
+        let pull = match body.map(serde_json::from_slice::<Pull>) {
+            None => None,
+            Some(Ok(pull)) => Some(pull),
+            Some(Err(_)) => return answer(StatusCode::BAD_REQUEST, TEXT, "Not understood"),
+        };
+        let Some(kept) = kept else {
+            return answer(StatusCode::BAD_REQUEST, TEXT, "No chat");
+        };
+        let Some(key) = self.key_of(kept).await else {
+            return answer(StatusCode::NOT_FOUND, TEXT, "No such chat");
+        };
+        let Some((told, _)) = self.standing().await else {
+            return answer(StatusCode::SERVICE_UNAVAILABLE, TEXT, "coxd is stopping");
+        };
+        let (say, refused) = match pull {
+            Some(Pull { repo, number }) => (
+                activity::fix(&told, &activity::Fix { key, repo, number }),
+                "Its CI did not fail, or another chat opened it",
+            ),
+            None => (
+                activity::resume(&told, &activity::Resume { key }),
+                "Its turn was not cut off, or it is at work, or asks you something",
+            ),
+        };
+        let Some(say) = say else {
+            return answer(StatusCode::CONFLICT, TEXT, refused);
+        };
+        let message = ToDaemon::Submit {
+            key: say.key,
+            text: say.text,
+            attached: Vec::new(),
+            step: say.step,
+        };
+        if self.internal.send(Internal::Act { message }).is_err() {
+            return answer(StatusCode::SERVICE_UNAVAILABLE, TEXT, "coxd is stopping");
+        }
+        answer(StatusCode::NO_CONTENT, TEXT, "")
+    }
+
     /// Does what the page posted, as `request` says it, from the page
     /// itself: at `/act`, what the human did on it, in the chat the query
-    /// names, if it is done in one; at `/push`, where to
+    /// names, if it is done in one; at `/activity/resume` and
+    /// `/activity/fix`, what its Activity has a chat do (see
+    /// [`Self::say`]); at `/push`, where to
     /// push to the phone; and at `/push/end`, where to push no more.
     async fn posted(&self, request: Request<Incoming>) -> Response<Body> {
         if !self.paired(&request) {
@@ -1040,6 +1163,8 @@ impl Page {
         let body = body.to_bytes();
         match path.as_str() {
             "/act" => self.act(kept, &body).await,
+            "/activity/resume" => self.say(kept, None).await,
+            "/activity/fix" => self.say(kept, Some(&body)).await,
             "/push" => self.subscribe(&body),
             "/push/end" => self.unsubscribe(&body),
             _ => answer(StatusCode::NOT_FOUND, TEXT, "Not found"),
@@ -1223,6 +1348,25 @@ impl Page {
         headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
         response
     }
+}
+
+/// Runs `read`, which reads what coxd keeps, on a thread that may wait
+/// for it, keeping what lasts where this thread was told to, if it was
+/// (see [`storage::keep_on_this_thread`]).
+async fn blocking<T: Send + 'static>(
+    read: impl FnOnce() -> T + Send + 'static,
+) -> Result<T, tokio::task::JoinError> {
+    let data = storage::kept_on_this_thread();
+    tokio::task::spawn_blocking(move || {
+        if data.is_none() {
+            return read();
+        }
+        storage::keep_on_this_thread(data);
+        let read = read();
+        storage::keep_on_this_thread(None);
+        read
+    })
+    .await
 }
 
 /// The most lines of what changed the phone is told, in all: the files
@@ -2419,6 +2563,384 @@ mod tests {
         tokio::time::timeout(Duration::from_secs(30), test)
             .await
             .expect("the page answers in time");
+    }
+
+    /// A chat as coxd's Activity is told of it, kept as `kept`, in the
+    /// project of `project`, standing by with nothing to say.
+    fn standing_by(key: u64, kept: ChatId, project: &Path) -> activity::Chat {
+        activity::Chat {
+            key,
+            name: format!("chat {key}"),
+            cwd: project.to_owned(),
+            project: project.to_owned(),
+            asking: false,
+            unread: false,
+            goal: None,
+            working: false,
+            background: Vec::new(),
+            parent: None,
+            kept: Some(kept),
+            pulls: Vec::new(),
+            spent: None,
+            resolved: false,
+            reported: false,
+            archived: false,
+            steers: false,
+            on_steps: Vec::new(),
+            active: 0,
+            cut_off: None,
+        }
+    }
+
+    /// Answers the page as coxd would, with no window: the key of each
+    /// chat of `told`, by the number it is kept by, and how the chats
+    /// stand, with what each does `now`; and keeps what the page has it
+    /// do in `done`.
+    async fn play_coxd(
+        mut heard: UnboundedReceiver<Internal>,
+        told: activity::Told,
+        now: Vec<(u64, crate::commands::Now)>,
+        done: Rc<RefCell<Vec<ToDaemon>>>,
+    ) {
+        while let Some(asked) = heard.recv().await {
+            match asked {
+                Internal::Key { number, answer } => {
+                    let key = told
+                        .chats
+                        .iter()
+                        .find(|chat| chat.kept.is_some_and(|kept| kept.number() == number))
+                        .map(|chat| chat.key);
+                    answer.send(key).ok();
+                }
+                Internal::Activity { answer } => {
+                    answer.send((told.clone(), now.clone())).ok();
+                }
+                Internal::Act { message } => done.borrow_mut().push(message),
+                _ => {}
+            }
+        }
+    }
+
+    /// What `answer`, of the page, holds after its head, as JSON.
+    fn json_of(answer: &str) -> serde_json::Value {
+        let (_, body) = answer
+            .split_once("\r\n\r\n")
+            .expect("an answer with a head");
+        serde_json::from_str(body).unwrap_or_else(|error| panic!("{error}: {answer}"))
+    }
+
+    /// A chat that asks the human something, and one at work on a plan
+    /// coxd keeps, half done, in a project of `folder`, as coxd tells its
+    /// Activity of them, with what each does now, and the chats.
+    fn asking_and_at_work(
+        folder: &Path,
+    ) -> (
+        activity::Told,
+        Vec<(u64, crate::commands::Now)>,
+        [ChatId; 2],
+    ) {
+        use cox_core::entry::{Step, StepState};
+        let kept = cox_core::store::Store::open(&storage::path(Kept::Chats).unwrap()).unwrap();
+        let asking = kept.add_chat(None, "asks").unwrap();
+        let working = kept.add_chat(None, "works").unwrap();
+        let step = |text: &str, state| Step {
+            text: text.to_owned(),
+            state,
+            since: None,
+            started: None,
+            id: None,
+        };
+        kept.keep_entry(working, 0, &Entry::Human("fix it".to_owned()))
+            .unwrap();
+        let plan = vec![
+            step("Read", StepState::Completed),
+            step("Fix", StepState::InProgress),
+        ];
+        kept.keep_entry(working, 1, &Entry::Plan(plan)).unwrap();
+        let (home, work) = (folder.join("home"), folder.join("work"));
+        let told = activity::Told {
+            chats: vec![
+                activity::Chat {
+                    asking: true,
+                    ..standing_by(1, asking, &work)
+                },
+                activity::Chat {
+                    working: true,
+                    ..standing_by(2, working, &work)
+                },
+            ],
+            projects: vec![(home.clone(), "Cox".to_owned()), (work, "work".to_owned())],
+            home,
+            ..activity::Told::default()
+        };
+        let now = vec![
+            (
+                1,
+                crate::commands::Now {
+                    asks: Some("Which way?".to_owned()),
+                    ..Default::default()
+                },
+            ),
+            (
+                2,
+                crate::commands::Now {
+                    said: Some("Fixing it.".to_owned()),
+                    running: Some(("Runs the tests".to_owned(), "cargo test".to_owned())),
+                    asks: None,
+                },
+            ),
+        ];
+        (told, now, [asking, working])
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn tells_a_paired_phone_what_goes_on_with_no_window_open() {
+        let folder = TempDir::new();
+        storage::keep_on_this_thread(Some(folder.join("data")));
+        let (told, now, [asking, working]) = asking_and_at_work(&folder);
+        let local = tokio::task::LocalSet::new();
+        let test = local.run_until(async {
+            let listener = listen(0).await.unwrap();
+            let port = listener.local_addr().unwrap().port();
+            // No window: only the page, and coxd behind it.
+            let (internal, heard) = unbounded_channel();
+            tokio::task::spawn_local(serve(
+                listener,
+                Rc::new(Phones::new("secret".to_owned(), None)),
+                None,
+                internal,
+            ));
+            tokio::task::spawn_local(play_coxd(heard, told, now, Rc::default()));
+            let get = |path: &str, cookie: &str| {
+                format!("GET {path} HTTP/1.1\r\nHost: x\r\n{cookie}Connection: close\r\n\r\n")
+            };
+            let cookie = "Cookie: cox_phone=secret\r\n";
+            let timeline = format!("/activity/timeline?kept={}", working.number());
+
+            for path in ["/activity", timeline.as_str()] {
+                let unpaired = ask(port, &get(path, ""), "").await;
+                assert!(unpaired.starts_with("HTTP/1.1 401"), "{path}: {unpaired}");
+                assert!(!unpaired.contains("Which way?"), "{unpaired}");
+            }
+
+            let answered = ask(port, &get("/activity", cookie), "").await;
+            assert!(answered.starts_with("HTTP/1.1 200"), "{answered}");
+            assert!(answered.contains("application/json"), "{answered}");
+            let told = json_of(&answered);
+            // Of every project, as the home's page, no window showing a chat.
+            assert_eq!(told["home"], true, "{told}");
+            assert_eq!(told["shown"], serde_json::Value::Null, "{told}");
+            assert_eq!(told["busy"], 1, "{told}");
+            let waiting = &told["waiting"][0];
+            assert_eq!(waiting["chat"], asking.number(), "{told}");
+            assert_eq!(waiting["why"], "asks you", "{told}");
+            assert_eq!(waiting["asks"], "Which way?", "{told}");
+            assert_eq!(waiting["where"], "work", "{told}");
+            // The plan is read from what coxd keeps, and what the chat
+            // does now from its conversation.
+            let planned = &told["plans"][0];
+            assert_eq!(planned["chat"], working.number(), "{told}");
+            assert_eq!(planned["working"], true, "{told}");
+            assert_eq!(planned["said"], "Fixing it.", "{told}");
+            assert_eq!(planned["running"]["called"], "Runs the tests", "{told}");
+            assert_eq!(planned["plan"][1]["text"], "Fix", "{told}");
+            assert_eq!(
+                planned["progress"],
+                serde_json::json!({ "done": 1, "of": 2 }),
+                "{told}"
+            );
+            assert_eq!(
+                told["summaries"].as_array().map(Vec::len),
+                Some(3),
+                "{told}"
+            );
+
+            let answered = ask(port, &get(&timeline, cookie), "").await;
+            assert!(answered.starts_with("HTTP/1.1 200"), "{answered}");
+            let did = json_of(&answered);
+            assert_eq!(did["chat"], working.number(), "{did}");
+            let events = did["events"].as_array().expect("what it did when");
+            assert!(
+                events
+                    .iter()
+                    .any(|event| event["kind"] == "start" && event["text"] == "fix it"),
+                "{did}"
+            );
+
+            let unnamed = ask(port, &get("/activity/timeline", cookie), "").await;
+            assert!(unnamed.starts_with("HTTP/1.1 400"), "{unnamed}");
+            let none = ask(port, &get("/activity/timeline?kept=999", cookie), "").await;
+            assert!(none.starts_with("HTTP/1.1 404"), "{none}");
+        });
+        tokio::time::timeout(Duration::from_secs(30), test)
+            .await
+            .expect("the page answers in time");
+        storage::keep_on_this_thread(None);
+    }
+
+    /// The chats kept as 11, cut off, 12, which opened the pull request
+    /// #8, whose CI failed, and 13, cut off, but at work again, as coxd
+    /// tells its Activity of them.
+    fn cut_off_and_failed() -> activity::Told {
+        use crate::github::{Check, CheckState, Mergeable, Pull, PullState, Status, Times};
+        use cox_core::store::{Ended, TurnEnd};
+        let kept =
+            |number: i64| serde_json::from_value::<ChatId>(serde_json::json!(number)).unwrap();
+        let work = Path::new("/work");
+        let cut_off = Some(TurnEnd {
+            at: 5,
+            how: Ended::Limited,
+            why: Some("resets 3pm".to_owned()),
+        });
+        activity::Told {
+            chats: vec![
+                activity::Chat {
+                    cut_off: cut_off.clone(),
+                    ..standing_by(1, kept(11), work)
+                },
+                standing_by(2, kept(12), work),
+                activity::Chat {
+                    cut_off,
+                    working: true,
+                    ..standing_by(3, kept(13), work)
+                },
+            ],
+            projects: vec![(work.to_owned(), "work".to_owned())],
+            home: "/home".into(),
+            pulls: vec![activity::Pull {
+                project: work.to_owned(),
+                pull: Pull {
+                    repo: "tennashi/cox".to_owned(),
+                    number: 8,
+                },
+                status: Some(Status {
+                    title: "pull 8".to_owned(),
+                    state: PullState::Open,
+                    head: "a".to_owned(),
+                    checks: vec![Check {
+                        name: "ci".to_owned(),
+                        state: CheckState::Failed,
+                        link: None,
+                        ended: None,
+                    }],
+                    times: Times::default(),
+                    review: None,
+                    mergeable: Mergeable::Unknown,
+                    size: None,
+                }),
+                author: Some(2),
+            }],
+            ..activity::Told::default()
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn has_a_chat_go_on_or_fix_its_ci_only_where_the_windows_activity_would() {
+        let told = cut_off_and_failed();
+        let done = Rc::new(RefCell::new(Vec::new()));
+        let local = tokio::task::LocalSet::new();
+        let test = local.run_until(async {
+            let listener = listen(0).await.unwrap();
+            let port = listener.local_addr().unwrap().port();
+            let (internal, heard) = unbounded_channel();
+            tokio::task::spawn_local(serve(
+                listener,
+                Rc::new(Phones::new("secret".to_owned(), None)),
+                None,
+                internal,
+            ));
+            tokio::task::spawn_local(play_coxd(heard, told, Vec::new(), Rc::clone(&done)));
+            let posted = |path: &str, head: &str, body: &str| {
+                format!(
+                    "POST {path} HTTP/1.1\r\nHost: x\r\n{head}Content-Type: application/json\r\n\
+                     Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                )
+            };
+            let ours = "Cookie: cox_phone=secret\r\nX-Cox: phone\r\n";
+
+            let unpaired = ask(
+                port,
+                &posted("/activity/resume?kept=11", "X-Cox: phone\r\n", "{}"),
+                "",
+            )
+            .await;
+            assert!(unpaired.starts_with("HTTP/1.1 401"), "{unpaired}");
+            let elsewhere = ask(
+                port,
+                &posted(
+                    "/activity/resume?kept=11",
+                    "Cookie: cox_phone=secret\r\n",
+                    "{}",
+                ),
+                "",
+            )
+            .await;
+            assert!(elsewhere.starts_with("HTTP/1.1 403"), "{elsewhere}");
+            assert!(done.borrow().is_empty(), "nothing is sent for them");
+
+            // A chat cut off goes on, by the line the human would send.
+            let resumed = ask(port, &posted("/activity/resume?kept=11", ours, "{}"), "").await;
+            assert!(resumed.starts_with("HTTP/1.1 204"), "{resumed}");
+            // Not one that was not cut off, nor one at work again, nor
+            // one there is none of.
+            for (path, status) in [
+                ("/activity/resume?kept=12", "409"),
+                ("/activity/resume?kept=13", "409"),
+                ("/activity/resume?kept=99", "404"),
+                ("/activity/resume", "400"),
+            ] {
+                let refused = ask(port, &posted(path, ours, "{}"), "").await;
+                assert!(
+                    refused.starts_with(&format!("HTTP/1.1 {status}")),
+                    "{path}: {refused}"
+                );
+            }
+
+            // The chat that opened a pull request whose CI failed is
+            // asked to fix it; not another chat, nor for another pull
+            // request.
+            let pull = r#"{"repo":"tennashi/cox","number":8}"#;
+            let fixed = ask(port, &posted("/activity/fix?kept=12", ours, pull), "").await;
+            assert!(fixed.starts_with("HTTP/1.1 204"), "{fixed}");
+            for (path, body, status) in [
+                ("/activity/fix?kept=11", pull, "409"),
+                (
+                    "/activity/fix?kept=12",
+                    r#"{"repo":"tennashi/cox","number":9}"#,
+                    "409",
+                ),
+                ("/activity/fix?kept=12", "{}", "400"),
+            ] {
+                let refused = ask(port, &posted(path, ours, body), "").await;
+                assert!(
+                    refused.starts_with(&format!("HTTP/1.1 {status}")),
+                    "{path} {body}: {refused}"
+                );
+            }
+        });
+        tokio::time::timeout(Duration::from_secs(30), test)
+            .await
+            .expect("the page answers in time");
+
+        assert_eq!(
+            *done.borrow(),
+            [
+                ToDaemon::Submit {
+                    key: 1,
+                    text: activity::RESUME.to_owned(),
+                    attached: Vec::new(),
+                    step: None,
+                },
+                ToDaemon::Submit {
+                    key: 2,
+                    text: "CI failed on #8 (https://github.com/tennashi/cox/pull/8): ci. Fix it."
+                        .to_owned(),
+                    attached: Vec::new(),
+                    step: None,
+                },
+            ]
+        );
     }
 
     #[tokio::test(flavor = "current_thread")]

@@ -23,17 +23,17 @@
 
 use std::path::{Path, PathBuf};
 
+use crate::daemon::wire::PullRow;
+use crate::github::CheckState;
 use cox_core::entry::{self, Check, Entry, QuestionAnswer, Revision, ToolCallResult};
 use cox_core::store::{
     ChatId, KeptCommand, KeptRun, KeptStep, Resolved, ResolvedBy, Said, Store, TurnEnd,
 };
-use coxd::daemon::wire::PullRow;
-use coxd::github::CheckState;
 use jiff::tz::TimeZone;
 use serde_json::{Value, json};
 
 use super::{Told, cut_off_says};
-use crate::stage::commands;
+use crate::commands;
 
 /// How long a command runs, in milliseconds, before the story tells it.
 const LONG: i64 = 10_000;
@@ -41,15 +41,15 @@ const LONG: i64 = 10_000;
 /// The chat whose story the page asks for, as coxd keeps it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Deserialize)]
 pub struct Of {
-    chat: ChatId,
+    pub chat: ChatId,
 }
 
 /// A command a chat's agent ran, as the page asks to read it laid out:
 /// its chat, as coxd keeps it, and the number of its entry.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Deserialize)]
 pub struct OfCommand {
-    chat: ChatId,
-    number: usize,
+    pub chat: ChatId,
+    pub number: usize,
 }
 
 /// What coxd keeps of a chat that its story is told from.
@@ -85,20 +85,15 @@ pub struct Sub {
     pub resolved: Option<Resolved>,
 }
 
-/// The story of the chat `of` names, as JSON, or null when coxd keeps no
-/// such chat.
+/// The story of the chat `of` names, as JSON, its pull requests as the
+/// chat stands in `told`, or null when coxd keeps no such chat.
 #[must_use]
-pub fn timeline(of: &Of) -> Value {
-    let read = coxd::storage::path(coxd::storage::Kept::Chats)
+pub fn timeline(told: &Told, of: &Of) -> Value {
+    let read = crate::storage::path(crate::storage::Kept::Chats)
         .ok_or_else(|| anyhow::anyhow!("no place keeps the chats"))
         .and_then(|path| kept(&Store::read(&path)?, of.chat));
     match read {
-        Ok(Some(kept)) => story(
-            &kept,
-            &super::now(),
-            &TimeZone::system(),
-            cox_core::store::now(),
-        ),
+        Ok(Some(kept)) => story(&kept, told, &TimeZone::system(), cox_core::store::now()),
         Ok(None) => Value::Null,
         Err(error) => {
             tracing::warn!("the story of a chat is not read: {error:#}");
@@ -157,17 +152,18 @@ fn kept(store: &Store, chat: ChatId) -> anyhow::Result<Option<Kept>> {
 }
 
 /// The command `of` names, as JSON, laid out to read, with the last lines
-/// of what it printed, or null when coxd keeps no such command.
+/// of what it printed, or null when coxd keeps no such command: one of a
+/// chat of Cox's own as run in the home of `told`.
 #[must_use]
-pub fn command(of: &OfCommand) -> Value {
-    let read = coxd::storage::path(coxd::storage::Kept::Chats)
+pub fn command(told: &Told, of: &OfCommand) -> Value {
+    let read = crate::storage::path(crate::storage::Kept::Chats)
         .ok_or_else(|| anyhow::anyhow!("no place keeps the chats"))
         .and_then(|path| {
             let store = Store::read(&path)?;
             let Some(entry) = store.entry(of.chat, of.number)? else {
                 return Ok(None);
             };
-            Ok(Some((entry, folder(&store, of.chat)?)))
+            Ok(Some((entry, folder(&store, of.chat, &told.home)?)))
         });
     match read {
         Ok(Some((entry, folder))) => command_of(&entry, &folder),
@@ -180,8 +176,9 @@ pub fn command(of: &OfCommand) -> Value {
 }
 
 /// The folder `chat` works in, as `store` keeps it, which the paths of
-/// its commands read from, or the root, when it keeps no such chat.
-fn folder(store: &Store, chat: ChatId) -> anyhow::Result<PathBuf> {
+/// its commands read from: `home`, for a chat of Cox's own, or the root,
+/// when it keeps no such chat, or no home is told.
+fn folder(store: &Store, chat: ChatId, home: &Path) -> anyhow::Result<PathBuf> {
     let Some(kept) = store.chats()?.into_iter().find(|kept| kept.id == chat) else {
         return Ok(PathBuf::from("/"));
     };
@@ -194,7 +191,13 @@ fn folder(store: &Store, chat: ChatId) -> anyhow::Result<PathBuf> {
         .find(|project| Some(project.id) == kept.project);
     // A chat of Cox's own works in the home.
     Ok(project.map_or_else(
-        || super::home().unwrap_or_else(|| PathBuf::from("/")),
+        || {
+            if home.as_os_str().is_empty() {
+                PathBuf::from("/")
+            } else {
+                home.to_owned()
+            }
+        },
         |project| project.folder,
     ))
 }
@@ -647,11 +650,11 @@ fn time(at: i64, zone: &TimeZone, now: i64) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::github::{Check, Pull, PullState, Status, Times};
     use cox_core::entry::{Committed, Picked, Question, QuestionOption};
     use cox_core::store::{Ended, Sayer};
-    use coxd::github::{Check, Pull, PullState, Status, Times};
 
-    use crate::stage::activity::Chat;
+    use crate::activity::Chat;
 
     const MIN: i64 = 60_000;
 
@@ -828,7 +831,7 @@ mod tests {
                     closed: Some(at(14, 31)),
                 },
                 review: None,
-                mergeable: coxd::github::Mergeable::Unknown,
+                mergeable: crate::github::Mergeable::Unknown,
                 size: None,
             }),
             unseen: None,

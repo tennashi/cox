@@ -17,6 +17,11 @@ anyhow.workspace = true
 cox-acp.workspace = true
 cox-core.workspace = true
 cox-editor.workspace = true
+# Laying out the commands the agents run, in a chat's story on the
+# Activity page, with the grammar cox-editor colors shell code with: see
+# `src/commands/layout.rs`.
+tree-sitter = "0.27.1"
+tree-sitter-bash = "0.25.1"
 cox-git.workspace = true
 cox-mac.workspace = true
 # Which files changed, of those a trigger's `changed` names: see

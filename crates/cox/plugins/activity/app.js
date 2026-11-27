@@ -33,7 +33,7 @@
 // failed show under what it said before them, those it ran one after
 // another together; a click on one opens it laid out to read, read from
 // `cox://api/activity/command/<command>` (see
-// `stage::commands::layout`), with a button that copies it as the agent
+// `coxd::commands::layout`), with a button that copies it as the agent
 // gave it, and the last lines of what it printed. A thread tells
 // what the human wrote on the step and what the agent replied, with a
 // line to write another, which goes to the chat as the human's next

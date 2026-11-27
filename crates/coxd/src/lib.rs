@@ -8,6 +8,9 @@
 //! - [`daemon`] is coxd itself: it runs the chats, answers the windows
 //!   and the phones, and starts each chat's agent; its `main` is what
 //!   `cox --daemon` runs, and its `client` the window's side of the wire.
+//! - [`activity`] is what goes on in the chats, as the Activity page of
+//!   the window's stage and of the phone tells it, and [`commands`] what
+//!   their agents run, as it reads there.
 //! - [`trigger`] is what runs, unasked, when something happens in a
 //!   folder.
 //! - [`chat`] is one chat, apart from how the window draws it.
@@ -49,9 +52,11 @@
 //! - [`logs`] is what Cox says of itself as it runs.
 //! - [`home`] is the human's home directory.
 
+pub mod activity;
 pub mod agent;
 pub mod agents;
 pub mod chat;
+pub mod commands;
 pub mod daemon;
 pub mod diagram;
 pub mod github;

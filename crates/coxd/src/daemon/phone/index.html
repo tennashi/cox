@@ -18,7 +18,7 @@
 <header id="head">
   <div class="card">
     <div class="bar">
-      <a id="back" class="icon-button" href="#" aria-label="Back to the chats" hidden>
+      <a id="back" class="icon-button" href="#" aria-label="Back" hidden>
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 6l-6 6 6 6"></path></svg>
       </a>
       <a id="switcher" href="#">
@@ -27,6 +27,10 @@
         <span id="title">Cox</span>
         <span id="waiting" class="badge" hidden></span>
       </a>
+      <div id="seg" class="seg" role="tablist" aria-label="What the top shows" hidden>
+        <button type="button" role="tab" data-side="activity" aria-selected="true">Activity</button>
+        <button type="button" role="tab" data-side="chats" aria-selected="false">Chats</button>
+      </div>
       <button id="goal-button" class="icon-button" type="button" aria-label="Set the chat's goal" hidden>
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8z"></path></svg>
       </button>

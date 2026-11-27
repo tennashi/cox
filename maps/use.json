@@ -532,7 +532,9 @@
    "claims": [
     "cox/stage/activity",
     "cox/stage/commands",
-    "cox/stage/flow"
+    "cox/stage/flow",
+    "coxd/activity",
+    "coxd/commands"
    ]
   },
   "macwin": {

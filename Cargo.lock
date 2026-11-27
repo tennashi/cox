@@ -1563,8 +1563,6 @@ dependencies = [
  "serde_json",
  "tokio",
  "tracing",
- "tree-sitter",
- "tree-sitter-bash",
  "unicode-segmentation",
  "url",
 ]
@@ -1742,6 +1740,8 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "tree-sitter",
+ "tree-sitter-bash",
  "ureq",
  "url",
  "zip",
