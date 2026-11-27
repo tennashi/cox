@@ -4,8 +4,14 @@
 //! runs, and how the human gets what it needs when that is missing. Each
 //! writes a SCIP index (see [`cox_editor::scip`]). Another language is
 //! another row of [`known`].
+//!
+//! A repository of several packages, each in a folder of its own, may
+//! have those files in the packages' folders only, and at its top what
+//! names the folders: its members, as a `go.work` names Go's modules (see
+//! [`Members`]). The indexer then reads the members, in one run at the
+//! top, so that the paths in its index are from the top all the same.
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, PoisonError};
 use std::time::Instant;
@@ -26,15 +32,20 @@ pub struct Indexer {
     /// The files at a repository's top, any of which says the language is
     /// there.
     pub markers: Vec<String>,
-    /// The files at a repository's top, any of which says another
-    /// indexer reads it instead, as `tsconfig.json` says of the code of
-    /// `package.json`.
+    /// The files at a repository's top, or in a member's folder, any of
+    /// which says another indexer reads it instead, as `tsconfig.json`
+    /// says of the code of `package.json`.
     pub unless: Vec<String>,
+    /// What at a repository's top names its members, whose folders the
+    /// indexer reads when the top has none of the markers and theirs do.
+    pub members: Option<Members>,
     pub program: Program,
-    /// Its arguments, after the program's own, run in a copy of the
-    /// commit: `{out}` stands for the file it writes the index to,
-    /// `{config}` for the file of [`Indexer::config`], and `{name}` for
-    /// the project's name (see [`project_name`]).
+    /// Its arguments, after the program's own, run at the top of a copy
+    /// of the commit: `{out}` stands for the file it writes the index
+    /// to, `{config}` for the file of [`Indexer::config`], and `{name}`
+    /// for the project's name (see [`project_name`]). One with `{member}`
+    /// in it is given once for each member read, by its folder from the
+    /// top, as `apps/web`, and left out when the top itself is read.
     pub args: Vec<String>,
     /// What `{config}` holds, if it is used, where `{built}` stands for a
     /// folder of the indexer's own, kept from one index to the next, for
@@ -43,11 +54,33 @@ pub struct Indexer {
     /// The programs it runs besides its own, which have to be on `PATH`,
     /// each with how to get it.
     pub needs: Vec<(String, String)>,
-    /// What the checkout has that the commit does not, which the indexer
-    /// reads in the copy when the checkout has it, as the packages
-    /// `npm install` put in `node_modules`, with what the index may lack
-    /// when it does not.
+    /// What the checkout has that the commit does not, at its top and in
+    /// its members' folders, which the indexer reads in the copy when
+    /// the checkout has it, as the packages `npm install` put in
+    /// `node_modules`, with what the index may lack when it does not.
     pub borrows: Option<(String, String)>,
+}
+
+/// What at a repository's top names its members: the folders that hold
+/// the code of a repository of several packages.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Members {
+    /// The modules a `go.work` uses.
+    GoWork,
+    /// The packages of a workspace of npm, Yarn or Bun, which the
+    /// `workspaces` of `package.json` name, or of pnpm, which the
+    /// `packages` of `pnpm-workspace.yaml` do: each by a pattern, as
+    /// `apps/*`, or left out by one after `!`.
+    Packages,
+}
+
+/// What an indexer reads of a repository.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Reads<'a> {
+    pub indexer: &'a Indexer,
+    /// The members it reads, by their folders from the repository's top,
+    /// as `apps/web`, or none when it reads the top itself.
+    pub members: Vec<String>,
 }
 
 /// Where an indexer's program comes from.
@@ -107,17 +140,28 @@ pub fn known() -> Vec<Indexer> {
         "npx".to_owned(),
         "install Node.js, which has npx: https://nodejs.org".to_owned(),
     );
-    // Not needed for the code's own types, whose map is the same without
-    // them, but for what the code calls on its packages' types.
-    let modules = Some((
-        "node_modules".to_owned(),
-        "node_modules is not installed, so what the code calls through its packages' types may \
-         be left out: install them, as with `npm install`, for Cox to index the code again"
-            .to_owned(),
-    ));
-    let typescript = Program::Npx {
-        package: "@sourcegraph/scip-typescript".to_owned(),
-        version: "0.6.2".to_owned(),
+    let typescript = Indexer {
+        name: "scip-typescript".to_owned(),
+        language: "TypeScript".to_owned(),
+        markers: strings(&["tsconfig.json"]),
+        unless: Vec::new(),
+        members: Some(Members::Packages),
+        program: Program::Npx {
+            package: "@sourcegraph/scip-typescript".to_owned(),
+            version: "0.6.2".to_owned(),
+        },
+        args: strings(&["index", "--output", "{out}", "./{member}"]),
+        config: None,
+        needs: vec![node.clone()],
+        // Not needed for the code's own types, whose map is the same
+        // without them, but for what the code calls on its packages'
+        // types.
+        borrows: Some((
+            "node_modules".to_owned(),
+            "node_modules is not installed, so what the code calls through its packages' types \
+             may be left out: install them, as with `npm install`, for Cox to index the code again"
+                .to_owned(),
+        )),
     };
     vec![
         Indexer {
@@ -125,6 +169,8 @@ pub fn known() -> Vec<Indexer> {
             language: "Rust".to_owned(),
             markers: strings(&["Cargo.toml"]),
             unless: Vec::new(),
+            // A workspace of Cargo has a `Cargo.toml` at its top.
+            members: None,
             program: Program::Server("rust-analyzer".to_owned()),
             args: strings(&[
                 "scip",
@@ -145,33 +191,21 @@ pub fn known() -> Vec<Indexer> {
             )],
             borrows: None,
         },
-        Indexer {
-            name: "scip-typescript".to_owned(),
-            language: "TypeScript".to_owned(),
-            markers: strings(&["tsconfig.json"]),
-            unless: Vec::new(),
-            program: typescript.clone(),
-            args: strings(&["index", "--output", "{out}"]),
-            config: None,
-            needs: vec![node.clone()],
-            borrows: modules.clone(),
-        },
+        typescript.clone(),
         Indexer {
             name: "scip-typescript-js".to_owned(),
             language: "JavaScript".to_owned(),
             markers: strings(&["package.json", "jsconfig.json"]),
             unless: strings(&["tsconfig.json"]),
-            program: typescript,
             args: strings(&["index", "--infer-tsconfig", "--output", "{out}"]),
-            config: None,
-            needs: vec![node.clone()],
-            borrows: modules,
+            ..typescript
         },
         Indexer {
             name: "scip-python".to_owned(),
             language: "Python".to_owned(),
             markers: strings(&["pyproject.toml", "setup.py", "setup.cfg"]),
             unless: Vec::new(),
+            members: None,
             program: Program::Npx {
                 package: "@sourcegraph/scip-python".to_owned(),
                 version: "0.6.8".to_owned(),
@@ -195,12 +229,15 @@ pub fn known() -> Vec<Indexer> {
             language: "Go".to_owned(),
             markers: strings(&["go.mod"]),
             unless: Vec::new(),
+            members: Some(Members::GoWork),
             program: Program::Go {
                 package: "github.com/scip-code/scip-go/cmd/scip-go".to_owned(),
                 version: "v0.2.10".to_owned(),
                 program: "scip-go".to_owned(),
             },
-            args: strings(&["--output={out}"]),
+            // With no `go.mod` at the top, it reads the packages its
+            // patterns name, each by its own module.
+            args: strings(&["--output={out}", "./{member}/..."]),
             config: None,
             needs: vec![(
                 "go".to_owned(),
@@ -211,14 +248,176 @@ pub fn known() -> Vec<Indexer> {
     ]
 }
 
-/// The indexers of `indexers` that read a repository whose top holds
-/// the files `top`, by their names.
+/// What each of `indexers` that reads a repository reads of it: of the
+/// commit whose files are `files`, by their paths from its top, and
+/// whose files have the text `text` gives.
 #[must_use]
-pub fn of<'a>(indexers: &'a [Indexer], top: &[String]) -> Vec<&'a Indexer> {
-    let has = |names: &[String]| names.iter().any(|name| top.contains(name));
+pub fn of<'a>(
+    indexers: &'a [Indexer],
+    files: &[String],
+    text: &dyn Fn(&str) -> Option<String>,
+) -> Vec<Reads<'a>> {
+    let at_top = |names: &[String]| names.iter().any(|name| files.contains(name));
+    let named: Vec<(Members, Named)> = [Members::GoWork, Members::Packages]
+        .into_iter()
+        .filter(|members| {
+            indexers
+                .iter()
+                .any(|indexer| indexer.members == Some(*members))
+        })
+        .filter_map(|members| Some((members, members.named(files, text)?)))
+        .collect();
     indexers
         .iter()
-        .filter(|indexer| has(&indexer.markers) && !has(&indexer.unless))
+        .filter_map(|indexer| {
+            let named = named
+                .iter()
+                .find(|(members, _)| indexer.members == Some(*members))
+                .map(|(_, named)| named);
+            let among = |names: &[String]| named.map_or_default(|named| named.with(files, names));
+            if at_top(&indexer.unless) || !among(&indexer.unless).is_empty() {
+                return None;
+            }
+            let members = if at_top(&indexer.markers) {
+                Vec::new()
+            } else {
+                Some(among(&indexer.markers)).filter(|members| !members.is_empty())?
+            };
+            Some(Reads { indexer, members })
+        })
+        .collect()
+}
+
+/// The folders a repository's top names as its members: those the
+/// patterns `named` match, but for those `left_out` do.
+struct Named {
+    named: globset::GlobSet,
+    left_out: globset::GlobSet,
+}
+
+impl Members {
+    /// The folders the top of a commit names as its members, if it names
+    /// any: of the commit whose files are `files`, with the text `text`
+    /// gives.
+    fn named(self, files: &[String], text: &dyn Fn(&str) -> Option<String>) -> Option<Named> {
+        let read = |file: &str| files.iter().any(|at| at == file).then(|| text(file))?;
+        let patterns = match self {
+            Self::GoWork => used(&read("go.work")?)
+                .iter()
+                .map(|folder| globset::escape(folder))
+                .collect(),
+            Self::Packages => read("package.json")
+                .map(|text| workspaces(&text))
+                .filter(|patterns| !patterns.is_empty())
+                .or_else(|| Some(packages(&read("pnpm-workspace.yaml")?)))?,
+        };
+        let set = |left_out: bool| {
+            let mut set = globset::GlobSetBuilder::new();
+            for pattern in &patterns {
+                let (pattern, not) = match pattern.strip_prefix('!') {
+                    Some(pattern) => (pattern, true),
+                    None => (pattern.as_str(), false),
+                };
+                let pattern = pattern.strip_prefix("./").unwrap_or(pattern);
+                let glob = globset::GlobBuilder::new(pattern.trim_end_matches('/'))
+                    .literal_separator(true)
+                    .build();
+                if let Ok(glob) = glob
+                    && not == left_out
+                {
+                    set.add(glob);
+                }
+            }
+            set.build().unwrap_or_else(|_| globset::GlobSet::empty())
+        };
+        Some(Named {
+            named: set(false),
+            left_out: set(true),
+        })
+    }
+}
+
+impl Named {
+    /// The members among `files` whose folders hold a file named one of
+    /// `names`, by their folders, in order: none of them the top, nor in
+    /// `node_modules`.
+    fn with(&self, files: &[String], names: &[String]) -> Vec<String> {
+        let members: BTreeSet<&str> = files
+            .iter()
+            .filter_map(|file| file.rsplit_once('/'))
+            .filter(|(_, name)| names.iter().any(|of| of == name))
+            .map(|(folder, _)| folder)
+            .filter(|folder| !folder.split('/').any(|part| part == "node_modules"))
+            .filter(|folder| self.named.is_match(folder) && !self.left_out.is_match(folder))
+            .collect();
+        members.into_iter().map(str::to_owned).collect()
+    }
+}
+
+/// The folders the text of a `go.work` uses, from its own, but for its
+/// own and those outside it.
+fn used(text: &str) -> Vec<String> {
+    let mut used = Vec::new();
+    let mut listing = false;
+    for line in text.lines() {
+        let line = line.split("//").next().unwrap_or_default().trim();
+        let folder = if listing {
+            listing = line != ")";
+            line
+        } else {
+            let Some(rest) = line.strip_prefix("use").map(str::trim) else {
+                continue;
+            };
+            listing = rest == "(";
+            // Another directive that starts so, as `used`, is none.
+            if !line.starts_with("use ") && !line.starts_with("use\t") {
+                continue;
+            }
+            rest
+        };
+        let folder = folder.trim_matches(|c| c == '"' || c == '`');
+        let folder = folder.strip_prefix("./").unwrap_or(folder);
+        let folder = folder.trim_end_matches('/');
+        let inside = !folder.starts_with('/') && !folder.split('/').any(|part| part == "..");
+        if inside && !["", ".", "(", ")"].contains(&folder) {
+            used.push(folder.to_owned());
+        }
+    }
+    used
+}
+
+/// The patterns the `workspaces` of the text of a `package.json` name
+/// its packages by: a list, or the `packages` of a table.
+fn workspaces(text: &str) -> Vec<String> {
+    let Ok(package) = serde_json::from_str::<serde_json::Value>(text) else {
+        return Vec::new();
+    };
+    let workspaces = &package["workspaces"];
+    let patterns = workspaces
+        .as_array()
+        .or_else(|| workspaces["packages"].as_array());
+    patterns
+        .into_iter()
+        .flatten()
+        .filter_map(|pattern| pattern.as_str().map(str::to_owned))
+        .collect()
+}
+
+/// The patterns the `packages` of the text of a `pnpm-workspace.yaml`
+/// name its packages by: a list, an item to a line.
+fn packages(text: &str) -> Vec<String> {
+    text.lines()
+        .skip_while(|line| line.trim_end() != "packages:")
+        .skip(1)
+        .map(|line| line.split(" #").next().unwrap_or_default().trim())
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .map_while(|line| line.strip_prefix('-'))
+        .map(|pattern| {
+            pattern
+                .trim()
+                .trim_matches(|c| c == '"' || c == '\'')
+                .to_owned()
+        })
         .collect()
 }
 
@@ -426,13 +625,33 @@ fn named_in(text: &str) -> Option<String> {
 mod tests {
     use super::*;
 
-    fn names(top: &[&str]) -> Vec<String> {
+    /// What the indexers Cox knows read of a commit of the files
+    /// `files`, each with its text: each by its name, with its members.
+    fn reads(files: &[(&str, &str)]) -> Vec<(String, Vec<String>)> {
         let indexers = known();
-        let top: Vec<String> = top.iter().map(|&name| name.to_owned()).collect();
-        of(&indexers, &top)
+        let names: Vec<String> = files.iter().map(|(file, _)| (*file).to_owned()).collect();
+        let text = |file: &str| {
+            let (_, text) = files.iter().find(|(at, _)| *at == file)?;
+            Some((*text).to_owned())
+        };
+        of(&indexers, &names, &text)
             .into_iter()
-            .map(|indexer| indexer.name.clone())
+            .map(|reads| (reads.indexer.name.clone(), reads.members))
             .collect()
+    }
+
+    /// The names of the indexers that read the top of a commit of the
+    /// files `top`.
+    fn names(top: &[&str]) -> Vec<String> {
+        let files: Vec<(&str, &str)> = top.iter().map(|file| (*file, "")).collect();
+        let reads = reads(&files);
+        assert!(reads.iter().all(|(_, members)| members.is_empty()));
+        reads.into_iter().map(|(name, _)| name).collect()
+    }
+
+    fn read(name: &str, members: &[&str]) -> (String, Vec<String>) {
+        let members = members.iter().map(|member| (*member).to_owned());
+        (name.to_owned(), members.collect())
     }
 
     #[test]
@@ -450,6 +669,105 @@ mod tests {
             ["rust-analyzer", "scip-go"]
         );
         assert_eq!(names(&["pom.xml"]), Vec::<String>::new());
+        // A file further down says nothing, with nothing at the top that
+        // names its folder.
+        assert_eq!(names(&["web/tsconfig.json", "tool/go.mod"]).len(), 0);
+    }
+
+    #[test]
+    fn the_modules_a_go_work_uses_are_read_from_the_top() {
+        let work = "go 1.26.0\n\nuse (\n\t./packages/protocol // shared\n\t./apps/oesd\n\t./gone\n\t../other\n)\nuse ./tools/kit/\n";
+        let files = [
+            ("go.work", work),
+            ("apps/oesd/go.mod", ""),
+            ("apps/oesd/main.go", ""),
+            ("packages/protocol/go.mod", ""),
+            ("tools/kit/go.mod", ""),
+            // Not one the workspace uses.
+            ("vendor/thing/go.mod", ""),
+        ];
+        assert_eq!(
+            reads(&files),
+            [read(
+                "scip-go",
+                &["apps/oesd", "packages/protocol", "tools/kit"]
+            )]
+        );
+
+        // A module at the top is read as ever, with all under it.
+        let mut at_top = files.to_vec();
+        at_top.push(("go.mod", ""));
+        assert_eq!(reads(&at_top), [read("scip-go", &[])]);
+    }
+
+    #[test]
+    fn the_packages_of_a_workspace_are_read_by_their_own_tsconfigs() {
+        let package = r#"{ "workspaces": ["apps/*", "packages/*", "tools", "!apps/old"] }"#;
+        let files = [
+            ("package.json", package),
+            ("tsconfig.base.json", ""),
+            ("apps/fleet/package.json", ""),
+            ("apps/fleet/tsconfig.json", ""),
+            ("apps/fleet/src/main.ts", ""),
+            // A package with no TypeScript of its own.
+            ("apps/oesd/package.json", ""),
+            ("apps/old/tsconfig.json", ""),
+            ("apps/fleet/node_modules/dep/tsconfig.json", ""),
+            ("apps/fleet/fixtures/tsconfig.json", ""),
+            ("packages/wire/tsconfig.json", ""),
+            ("tools/tsconfig.json", ""),
+            ("elsewhere/tsconfig.json", ""),
+        ];
+        let members = ["apps/fleet", "packages/wire", "tools"];
+        assert_eq!(reads(&files), [read("scip-typescript", &members)]);
+
+        // Bun's and Yarn's table, and pnpm's file, name them too.
+        let table = r#"{ "workspaces": { "packages": ["apps/*", "packages/*", "tools"] } }"#;
+        let mut bun = files.to_vec();
+        bun[0] = ("package.json", table);
+        bun.retain(|(file, _)| *file != "apps/old/tsconfig.json");
+        assert_eq!(reads(&bun), [read("scip-typescript", &members)]);
+        let mut pnpm = bun.clone();
+        pnpm[0] = ("package.json", "{}");
+        pnpm.push((
+            "pnpm-workspace.yaml",
+            "packages:\n  # all of them\n  - 'apps/*'\n  - \"packages/**\"\n  - tools\ncatalog:\n  - no\n",
+        ));
+        assert_eq!(reads(&pnpm), [read("scip-typescript", &members)]);
+
+        // A `tsconfig.json` at the top reads all of it, as ever.
+        let mut at_top = files.to_vec();
+        at_top.push(("tsconfig.json", ""));
+        assert_eq!(reads(&at_top), [read("scip-typescript", &[])]);
+    }
+
+    #[test]
+    fn a_workspace_of_javascript_alone_is_read_from_its_top() {
+        let files = [
+            ("package.json", r#"{ "workspaces": ["packages/*"] }"#),
+            ("packages/a/package.json", ""),
+            ("packages/a/index.js", ""),
+        ];
+        assert_eq!(reads(&files), [read("scip-typescript-js", &[])]);
+    }
+
+    #[test]
+    fn a_repository_of_go_and_typescript_packages_is_read_by_both() {
+        let files = [
+            ("package.json", r#"{ "workspaces": ["apps/*"] }"#),
+            ("go.work", "use ./apps/oesd\n"),
+            ("apps/oesd/go.mod", ""),
+            ("apps/oesd/package.json", ""),
+            ("apps/fleet/package.json", ""),
+            ("apps/fleet/tsconfig.json", ""),
+        ];
+        assert_eq!(
+            reads(&files),
+            [
+                read("scip-typescript", &["apps/fleet"]),
+                read("scip-go", &["apps/oesd"])
+            ]
+        );
     }
 
     #[test]

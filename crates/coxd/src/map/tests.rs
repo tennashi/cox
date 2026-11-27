@@ -67,7 +67,7 @@ impl Fake {
             format!(
                 "#!/bin/sh\n\
                  if [ \"$1\" = --version ]; then echo 'fake 1.0'; exit 0; fi\n\
-                 echo \"$(pwd)|$(head -c 40 src/lib.rs | tr '\\n' ' ')|$(ls -d deps 2>/dev/null)|$$\" >> '{runs}'\n\
+                 echo \"$(pwd)|$(head -c 40 src/lib.rs | tr '\\n' ' ')|$(ls -d deps */*/deps 2>/dev/null | tr '\\n' ' ')|$$|$*\" >> '{runs}'\n\
                  while [ -f '{gate}' ]; do sleep 0.02; done\n\
                  if [ -f '{fail}' ]; then echo 'warming up' >&2; echo 'the shop is closed' >&2; exit 3; fi\n\
                  cp '{FIXTURE}' \"$1\"\n",
@@ -85,6 +85,7 @@ impl Fake {
             language: "Rust".to_owned(),
             markers: vec!["Cargo.toml".to_owned()],
             unless: Vec::new(),
+            members: None,
             program: Program::Path(script.display().to_string()),
             args: vec!["{out}".to_owned()],
             config: None,
@@ -116,8 +117,14 @@ impl Fake {
                 Run {
                     folder: parts[0].to_owned(),
                     lib: parts[1].to_owned(),
-                    deps: parts[2] == "deps",
+                    deps: parts[2].split_whitespace().any(|deps| deps == "deps"),
+                    member_deps: parts[2]
+                        .split_whitespace()
+                        .filter(|deps| *deps != "deps")
+                        .map(str::to_owned)
+                        .collect(),
                     pid: parts[3].parse().unwrap(),
+                    args: parts[4].split_whitespace().map(str::to_owned).collect(),
                 }
             })
             .collect()
@@ -165,13 +172,16 @@ impl Fake {
 }
 
 /// A run of the fake indexer: the folder it ran in, what `src/lib.rs`
-/// began with there, whether `deps` was there, and its process.
+/// began with there, whether `deps` was there, and in which of the
+/// folders there, its process, and its arguments.
 #[derive(Debug, PartialEq, Eq)]
 struct Run {
     folder: String,
     lib: String,
     deps: bool,
+    member_deps: Vec<String>,
     pid: libc::pid_t,
+    args: Vec<String>,
 }
 
 /// Whether the process `pid` runs.
@@ -416,6 +426,53 @@ fn what_the_checkout_has_that_the_commit_does_not_is_read_once_there() {
     assert_eq!(runs.len(), 2);
     assert!(!runs[0].deps, "{runs:?}");
     assert!(runs[1].deps, "{runs:?}");
+}
+
+#[test]
+fn the_members_of_a_repository_are_indexed_in_one_run_at_its_top() {
+    let fake = Fake::with(|indexer| Indexer {
+        members: Some(indexers::Members::GoWork),
+        args: vec!["{out}".to_owned(), "./{member}/...".to_owned()],
+        borrows: Some(("deps".to_owned(), "deps is not installed".to_owned())),
+        ..indexer
+    });
+    let root = TempDir::new();
+    // The crate's code, and its map, at the top, for the fake index's
+    // paths to be those of files; what says a crate is there, in the
+    // members only.
+    repository(&root);
+    std::fs::remove_file(root.join("Cargo.toml")).unwrap();
+    for member in ["apps/till", "apps/empty", "packages/cart"] {
+        std::fs::create_dir_all(root.join(member)).unwrap();
+        std::fs::write(root.join(member).join("notes.md"), member).unwrap();
+    }
+    for member in ["apps/till", "packages/cart"] {
+        std::fs::write(root.join(member).join("Cargo.toml"), "[package]\n").unwrap();
+    }
+    std::fs::write(
+        root.join("go.work"),
+        "use (\n\t./apps/till\n\t./apps/empty\n\t./packages/cart\n)\n",
+    )
+    .unwrap();
+    commit(&root, "members");
+    // Installed in one member, not committed.
+    std::fs::create_dir_all(root.join("deps")).unwrap();
+    std::fs::create_dir_all(root.join("packages/cart/deps")).unwrap();
+
+    let told = fake.settled(&root);
+    assert_eq!(told.state, State::Ready, "{:?}", told.indexes);
+    assert_eq!(told.indexes.len(), 1);
+    assert!(told.map.unwrap().types.contains_key("shop/Cart"));
+    let runs = fake.runs();
+    assert_eq!(runs.len(), 1, "{runs:?}");
+    assert!(runs[0].folder.ends_with("/code"), "{runs:?}");
+    assert_eq!(
+        runs[0].args[1..],
+        ["./apps/till/...", "./packages/cart/..."],
+        "the members that hold a crate, from the top"
+    );
+    assert!(runs[0].deps);
+    assert_eq!(runs[0].member_deps, ["packages/cart/deps"]);
 }
 
 #[test]
