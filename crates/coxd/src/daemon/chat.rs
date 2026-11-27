@@ -3127,6 +3127,51 @@ mod tests {
     }
 
     #[test]
+    fn what_cox_notes_beside_a_turn_is_no_part_of_what_the_chat_last_said() {
+        on_daemon(async {
+            let mut talk = Talk::new(None);
+            assert!(talk.chat.submit("look", Vec::new(), None), "the line goes");
+            talk.hear(AgentEvent::ReplyText("Found it.".to_owned()));
+            talk.hear(AgentEvent::TurnEnded(StopReason::EndTurn));
+
+            // Cox tidies up once the chat is done.
+            let note = "Took away the worktree at /shop/worktrees/app/look.";
+            talk.chat.note(note.to_owned());
+
+            assert_eq!(
+                talk.chat.conversation().entries().last(),
+                Some(&Entry::Aside(note.to_owned())),
+                "the conversation shows it"
+            );
+            let stands = talk.chat.stands();
+            assert_eq!(stands.said.as_deref(), Some("Found it."));
+            assert_eq!(stands.reply.as_deref(), Some("Found it."));
+            assert_eq!(talk.chat.conversation().last_said(), Some("Found it."));
+            assert_eq!(talk.chat.conversation().turn_told(), Some("Found it."));
+        });
+    }
+
+    #[test]
+    fn a_stopped_chat_last_said_that_it_stopped_whatever_cox_notes_after() {
+        on_daemon(async {
+            let mut talk = Talk::new(None);
+            assert!(talk.chat.submit("look", Vec::new(), None), "the line goes");
+            talk.hear(AgentEvent::ReplyText("Half of it.".to_owned()));
+            talk.chat
+                .note("The agent of \"Opener\" stopped this chat.".to_owned());
+            talk.hear(AgentEvent::TurnEnded(StopReason::Cancelled));
+            // What the agent side notes of a line the stopped turn left.
+            talk.hear(AgentEvent::Note(
+                "The agent did not get this line, as the turn stopped: more".to_owned(),
+            ));
+
+            let stands = talk.chat.stands();
+            assert_eq!(stands.said.as_deref(), Some("Stopped."));
+            assert_eq!(stands.reply.as_deref(), Some("Half of it."));
+        });
+    }
+
+    #[test]
     fn the_agent_goes_on_by_itself_until_it_is_quiet_or_its_turn_ends() {
         on_daemon(async {
             let mut talk = Talk::new(None);

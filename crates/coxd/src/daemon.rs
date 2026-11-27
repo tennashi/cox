@@ -5019,7 +5019,7 @@ mod tests {
                 .entries()
                 .iter()
                 .filter_map(|entry| match entry {
-                    Entry::Note(note) => Some(note.clone()),
+                    Entry::Note(note) | Entry::Aside(note) => Some(note.clone()),
                     _ => None,
                 })
                 .collect();
@@ -5029,6 +5029,35 @@ mod tests {
                     .any(|note| note.starts_with("Took away the worktree at ")
                         && note.ends_with("held nothing that is not elsewhere.")),
                 "{notes:?}"
+            );
+        });
+    }
+
+    #[test]
+    fn a_subagent_s_report_stays_its_reply_once_cox_took_its_worktree_away() {
+        on_daemon(async {
+            let home = TempDir::new();
+            let agents = Rc::new(PlayedAgents::default());
+            let (mut daemon, mut heard, key) = shop_with_app(&home, &agents).await;
+            let (look, _) =
+                looked_in_a_worktree_taken_away(&mut daemon, &mut heard, &agents, &home, key).await;
+            let notes = notes_of(&mut daemon, look);
+            assert!(
+                notes
+                    .last()
+                    .is_some_and(|note| note.starts_with("Took away the worktree at ")),
+                "Cox's note of it comes last in the chat: {notes:?}"
+            );
+
+            let (answer, mut waited) = oneshot::channel();
+            let chat = daemon.number_of(look).unwrap();
+            daemon.asked(key, ChatRequest::WaitChat { chat, answer });
+
+            let waited = waited.try_recv().unwrap().unwrap();
+            assert_eq!(
+                waited.said.as_deref(),
+                Some("Found it."),
+                "agent_report answers what its agent said, not Cox's note"
             );
         });
     }
@@ -5103,7 +5132,7 @@ mod tests {
             .entries()
             .iter()
             .filter_map(|entry| match entry {
-                Entry::Note(note) => Some(note.clone()),
+                Entry::Note(note) | Entry::Aside(note) => Some(note.clone()),
                 _ => None,
             })
             .collect()
@@ -5597,7 +5626,7 @@ mod tests {
                 .entries()
                 .iter()
                 .filter_map(|entry| match entry {
-                    cox_core::entry::Entry::Note(note) if note.contains("stopped this chat") => {
+                    cox_core::entry::Entry::Aside(note) if note.contains("stopped this chat") => {
                         Some(note.clone())
                     }
                     _ => None,

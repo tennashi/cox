@@ -1411,30 +1411,35 @@ fn map_shown(map: Option<&str>, at: &[String]) -> String {
     }
 }
 
+/// Whether `entry` is none of what was said in a chat: Cox's notes, and
+/// what the agent thought, planned or was asked on the way.
+fn unsaid(entry: &Entry) -> bool {
+    matches!(
+        entry,
+        Entry::Note(_)
+            | Entry::Compacted(_)
+            | Entry::Aside(_)
+            | Entry::OnStep(_)
+            | Entry::Thought(_)
+            | Entry::Plan(_)
+            | Entry::PlanChanged { .. }
+            | Entry::PlanRevised(_)
+            | Entry::Switched { .. }
+            | Entry::Login { .. }
+            | Entry::Keep { .. }
+            | Entry::Commits(_)
+            | Entry::Checks(_)
+            | Entry::Event { .. }
+    )
+}
+
 /// What was said in `entries`, whole, as [`told_so_far`] tells it, and
 /// whether the human switched the chat from one agent to another.
 fn said(entries: &[Entry]) -> Option<(String, bool)> {
     let switched = entries
         .iter()
         .any(|entry| matches!(entry, Entry::Switched { .. }));
-    let said = entries.iter().any(|entry| {
-        !matches!(
-            entry,
-            Entry::Note(_)
-                | Entry::Compacted(_)
-                | Entry::OnStep(_)
-                | Entry::Thought(_)
-                | Entry::Plan(_)
-                | Entry::PlanChanged { .. }
-                | Entry::PlanRevised(_)
-                | Entry::Switched { .. }
-                | Entry::Login { .. }
-                | Entry::Keep { .. }
-                | Entry::Commits(_)
-                | Entry::Checks(_)
-                | Entry::Event { .. }
-        )
-    });
+    let said = entries.iter().any(|entry| !unsaid(entry));
     if !said {
         return None;
     }
@@ -1510,6 +1515,7 @@ fn said(entries: &[Entry]) -> Option<(String, bool)> {
             | Entry::PlanRevised(_)
             | Entry::Note(_)
             | Entry::Compacted(_)
+            | Entry::Aside(_)
             | Entry::Login { .. }
             | Entry::Keep { .. }
             | Entry::Checks(_)

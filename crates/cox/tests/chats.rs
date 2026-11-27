@@ -4274,7 +4274,7 @@ async fn a_chat_an_agent_opens_shows_its_context_and_opener_then_the_line_sent_f
         entries(cx, &view)[..3],
         [
             Entry::Note("Context: Change nothing.".to_owned()),
-            Entry::Note("Opened by: hello".to_owned()),
+            Entry::Aside("Opened by: hello".to_owned()),
             Entry::Cox("permission".to_owned()),
         ]
     );
@@ -4708,7 +4708,7 @@ async fn a_chat_opens_a_sketch_beside_it(cx: &mut TestAppContext) {
     let first = shown_view.unwrap();
     let entries = entries(cx, &first);
     assert!(
-        entries.iter().any(|entry| matches!(entry, Entry::Note(note)
+        entries.iter().any(|entry| matches!(entry, Entry::Aside(note)
             if note.starts_with(&format!("Sketch: chat {} opens beside this chat", opened.number)))),
         "{entries:?}"
     );
@@ -4840,7 +4840,7 @@ async fn an_ended_sketch_goes_on_in_the_project(cx: &mut TestAppContext) {
         view.conversation().entries().last().cloned()
     });
     assert!(
-        matches!(&last, Some(Entry::Note(note)) if note.contains("once this turn ends")),
+        matches!(&last, Some(Entry::Aside(note)) if note.contains("once this turn ends")),
         "{last:?}"
     );
     assert!(folder.exists());
@@ -5036,7 +5036,9 @@ async fn an_ending_of_the_human_s_own_shows_the_chat_beside_with_the_ending_s_go
     assert_eq!(first, view_at(cx, &ended.workspace, 0));
     let entries = entries(cx, &first);
     assert!(
-        entries.iter().any(|entry| matches!(entry, Entry::Note(note)
+        entries
+            .iter()
+            .any(|entry| matches!(entry, Entry::Aside(note)
             if note.contains("ended: The sketch is discarded"))),
         "{entries:?}"
     );

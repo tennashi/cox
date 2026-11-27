@@ -735,7 +735,7 @@ async fn a_chat_with_no_terminal_says_it_cannot_log_in_there(cx: &mut TestAppCon
 
     assert_eq!(agent.logged_in(), Vec::<String>::new());
     view.read_with(cx, |view, _| {
-        assert!(view.conversation().entries().contains(&Entry::Note(
+        assert!(view.conversation().entries().contains(&Entry::Aside(
             "Cox cannot run the agent's command here to log in.".to_owned()
         )));
     });

@@ -710,9 +710,11 @@ impl Conversation {
         self.entries.push(entry);
     }
 
-    /// Adds `note`, a note from Cox.
+    /// Adds `note`, a note from Cox beside the turns: what it did around
+    /// the chat, which is no part of what a turn told, whenever it comes
+    /// (see [`Entry::Aside`]).
     pub fn note(&mut self, note: String) {
-        self.push(Entry::Note(note));
+        self.push(Entry::Aside(note));
     }
 
     /// Shows `commits`, which the agent made in the turn that ends, if it
@@ -739,7 +741,7 @@ impl Conversation {
 
     /// Closes the conversation, as `note` says why: its agent is gone.
     pub fn close(&mut self, note: String) {
-        self.note(note);
+        self.push(Entry::Note(note));
         self.state = State::Closed;
         self.checks = None;
     }
@@ -1812,7 +1814,9 @@ impl Conversation {
     /// What came last in the last turn, whole: the agent's reply or Cox's
     /// note of how the turn ended, if anything did.
     /// That the agent compacted its context since
-    /// ([`Entry::Compacted`]) is no part of it, so that it stays what the
+    /// ([`Entry::Compacted`]), and what Cox noted beside the turn
+    /// ([`Entry::Aside`]), as that it took away the chat's worktree once
+    /// the chat was done, are no part of it, so that it stays what the
     /// agent that ran the chat is told as its report.
     #[must_use]
     pub fn last_told(&self) -> Option<&str> {
@@ -2056,7 +2060,7 @@ impl Conversation {
                 });
                 self.wait_on_human();
             }
-            AgentEvent::Note(note) => self.push(Entry::Note(note)),
+            AgentEvent::Note(note) => self.push(Entry::Aside(note)),
             AgentEvent::TurnFailed(error) => self.turn_failed(TurnOver::Failed, &error),
             AgentEvent::TurnLimited(error) => self.turn_failed(TurnOver::Limited, &error),
             AgentEvent::Closed(error) => self.agent_closed(error.as_deref()),

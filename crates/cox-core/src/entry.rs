@@ -152,13 +152,19 @@ pub enum Entry {
     /// `on`, as a trigger's `on` names it, as `goal.met`, each with how
     /// it went.
     Event { on: String, checks: Vec<Check> },
-    /// A note from Cox: the instructions the agent gets, how a turn ended,
-    /// an error, or the connection closing.
+    /// A note from Cox of the chat's turns: the instructions the agent
+    /// gets, how a turn ended, or the connection closing.
     Note(String),
     /// That the agent compacted its context, as Cox notes it: shown as a
     /// note is, but no part of what a turn told, since it comes when the
     /// agent does it, as after the turn ended, while the chat is idle.
     Compacted(String),
+    /// A note from Cox beside the chat's turns: what Cox did around the
+    /// chat or could not do for it, as that it took away the worktree made
+    /// for it, whenever that came. Shown as a note is, but no part of what
+    /// a turn told, so that one that comes once the turn ended does not
+    /// stand in for the agent's reply.
+    Aside(String),
     /// The human switched the chat from the agent named `from` to the one
     /// named `to`, which goes on from the conversation so far.
     Switched { from: String, to: String },
