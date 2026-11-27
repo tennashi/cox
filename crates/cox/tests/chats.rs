@@ -1300,7 +1300,7 @@ async fn a_compaction_while_idle_shows_as_one_note_and_no_work(cx: &mut TestAppC
     agent.go_on();
     let note = "Context compacted while idle: 207k → 12k tokens.";
     wait_until(cx, &view, |conversation| {
-        conversation.entries().last() == Some(&Entry::Note(note.to_owned()))
+        conversation.entries().last() == Some(&Entry::Compacted(note.to_owned()))
     })
     .await;
 
@@ -1309,7 +1309,7 @@ async fn a_compaction_while_idle_shows_as_one_note_and_no_work(cx: &mut TestAppC
         [
             Entry::Human("compacts".to_owned()),
             Entry::Reply("echo: compacts".to_owned()),
-            Entry::Note(note.to_owned()),
+            Entry::Compacted(note.to_owned()),
         ]
     );
     assert!(agent.did(&Event::Compacted));

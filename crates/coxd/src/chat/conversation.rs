@@ -1811,6 +1811,9 @@ impl Conversation {
 
     /// What came last in the last turn, whole: the agent's reply or Cox's
     /// note of how the turn ended, if anything did.
+    /// That the agent compacted its context since
+    /// ([`Entry::Compacted`]) is no part of it, so that it stays what the
+    /// agent that ran the chat is told as its report.
     #[must_use]
     pub fn last_told(&self) -> Option<&str> {
         self.entries
@@ -1990,7 +1993,7 @@ impl Conversation {
             AgentEvent::Steered => self.steering = self.steering.saturating_sub(1),
             AgentEvent::WentOn => self.push(Entry::Note(WENT_ON.to_owned())),
             AgentEvent::Compacted(compaction) => {
-                self.push(Entry::Note(compaction_note(&compaction)));
+                self.push(Entry::Compacted(compaction_note(&compaction)));
             }
             // The chat keeps which tasks run, for coxd's updates, and
             // shows what the agent spent apart from the conversation,
@@ -3298,7 +3301,7 @@ mod tests {
 
         assert_eq!(
             conversation.entries(),
-            [Entry::Note(
+            [Entry::Compacted(
                 "Context compacted while idle: 207k → 12k tokens.".to_owned()
             )]
         );
