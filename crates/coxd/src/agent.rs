@@ -1421,6 +1421,7 @@ fn said(entries: &[Entry]) -> Option<(String, bool)> {
         !matches!(
             entry,
             Entry::Note(_)
+                | Entry::Compacted(_)
                 | Entry::OnStep(_)
                 | Entry::Thought(_)
                 | Entry::Plan(_)
@@ -1508,6 +1509,7 @@ fn said(entries: &[Entry]) -> Option<(String, bool)> {
             | Entry::PlanChanged { .. }
             | Entry::PlanRevised(_)
             | Entry::Note(_)
+            | Entry::Compacted(_)
             | Entry::Login { .. }
             | Entry::Keep { .. }
             | Entry::Checks(_)

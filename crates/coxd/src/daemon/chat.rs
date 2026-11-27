@@ -3087,6 +3087,42 @@ mod tests {
     }
 
     #[test]
+    fn a_compaction_after_the_turn_ended_leaves_what_the_agent_said_as_the_report() {
+        on_daemon(async {
+            let mut talk = Talk::new(None);
+            assert!(talk.chat.submit("look", Vec::new(), None), "the line goes");
+            talk.hear(AgentEvent::ReplyText(
+                "Found it.\n\nIt is in main.".to_owned(),
+            ));
+            talk.hear(AgentEvent::TurnEnded(StopReason::EndTurn));
+
+            // The agent compacts its context while the chat is idle.
+            talk.hear(AgentEvent::Compacted(cox_acp::Compaction {
+                trigger: Some(cox_acp::CompactionTrigger::Idle),
+                before: Some(208_000),
+                after: Some(15_000),
+                took: None,
+                failed: None,
+            }));
+
+            let note = "Context compacted while idle: 208k → 15k tokens.";
+            assert_eq!(
+                talk.chat.conversation().entries().last(),
+                Some(&Entry::Compacted(note.to_owned())),
+                "the conversation shows it"
+            );
+            let stands = talk.chat.stands();
+            assert_eq!(stands.said.as_deref(), Some("Found it.\n\nIt is in main."));
+            assert_eq!(stands.reply.as_deref(), Some("Found it.\n\nIt is in main."));
+            assert_eq!(talk.chat.conversation().last_said(), Some("Found it."));
+            assert_eq!(
+                talk.chat.conversation().turn_told(),
+                Some("Found it.\n\nIt is in main.")
+            );
+        });
+    }
+
+    #[test]
     fn the_agent_goes_on_by_itself_until_it_is_quiet_or_its_turn_ends() {
         on_daemon(async {
             let mut talk = Talk::new(None);

@@ -155,6 +155,10 @@ pub enum Entry {
     /// A note from Cox: the instructions the agent gets, how a turn ended,
     /// an error, or the connection closing.
     Note(String),
+    /// That the agent compacted its context, as Cox notes it: shown as a
+    /// note is, but no part of what a turn told, since it comes when the
+    /// agent does it, as after the turn ended, while the chat is idle.
+    Compacted(String),
     /// The human switched the chat from the agent named `from` to the one
     /// named `to`, which goes on from the conversation so far.
     Switched { from: String, to: String },
