@@ -280,18 +280,19 @@ pub enum ChatRequest {
         show: bool,
         answer: oneshot::Sender<Result<OpenedChat, String>>,
     },
-    /// Wait for the chat that goes by `chat` to end its turn, or to come
-    /// to wait for the human, and answer how it stands then; or at once,
-    /// when it is not at work; or why there is no such chat.
+    /// Wait for the chat of the chat's project kept as `chat` to end its
+    /// turn, or to come to wait for the human, and answer how it stands
+    /// then; or at once, when it is not at work; or why there is no such
+    /// chat.
     WaitChat {
-        chat: u64,
+        chat: i64,
         answer: oneshot::Sender<Result<Waited, String>>,
     },
     /// Answer the number and the title of the chat `subagent` names, or
     /// why it names none, or which it could mean.
     FindSubagent {
         subagent: Subagent,
-        answer: oneshot::Sender<Result<(u64, String), String>>,
+        answer: oneshot::Sender<Result<(i64, String), String>>,
     },
     /// Send `text`, in the chat's place, to the chat `subagent` names,
     /// one the chat opened, as its next line, starting its agent again on
@@ -302,7 +303,7 @@ pub enum ChatRequest {
     ContinueChat {
         subagent: Subagent,
         text: String,
-        answer: oneshot::Sender<Result<(u64, String), String>>,
+        answer: oneshot::Sender<Result<(i64, String), String>>,
     },
     /// Stop the chat `subagent` names, one the chat opened, as the human
     /// stops a chat: its turn, or, once that ended, what its agent runs in
@@ -313,7 +314,7 @@ pub enum ChatRequest {
     StopChat {
         subagent: Subagent,
         reason: Option<String>,
-        answer: oneshot::Sender<Result<(u64, String, Stopped), String>>,
+        answer: oneshot::Sender<Result<(i64, String, Stopped), String>>,
     },
     /// Answer where the chat is, for a page of the wiki its agent writes
     /// to say where it was used.
@@ -378,12 +379,12 @@ pub enum Stopped {
 /// A chat an agent names to `agent_report`, `agent_continue` or
 /// `agent_stop`: by its
 /// title, as the human sees it in the list, among the chats the agent's
-/// own chat opened, or by the number `agent` answered, among the chats of
-/// its project.
+/// own chat opened, or by the number `agent` answered, the one its chat is
+/// kept by, among the chats of its project.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Subagent {
     Title(String),
-    Number(u64),
+    Number(i64),
 }
 
 /// How a chat stands, as the agent that waited for it is told.
@@ -444,8 +445,9 @@ impl Waited {
 /// A chat opened from a chat, as its agent is told of it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct OpenedChat {
-    /// What the chat goes by to the agent's tools, for this run of Cox.
-    pub number: u64,
+    /// The number the chat is kept by, which it goes by to the agent's
+    /// tools: the one `read_chat` takes, the same when Cox starts again.
+    pub number: i64,
     /// What the human sees it as, in the list.
     pub name: String,
     /// The folder it works in, when it is a sketch.

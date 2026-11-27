@@ -4165,6 +4165,16 @@ fn keys(
     })
 }
 
+/// The number the chat at `index` of Cox's own is kept by, as an agent's
+/// tools name it.
+fn number(cx: &mut VisualTestContext, workspace: &Entity<Workspace>, index: usize) -> i64 {
+    settled(cx, workspace);
+    workspace.read_with(cx, |workspace, _| {
+        let chat = workspace.chats(0).nth(index).unwrap();
+        chat.kept().unwrap().number()
+    })
+}
+
 /// Two chats of Cox's own, "hello" and "second", the second shown, where
 /// the first one's agent opened a chat on "permission", a line that asks
 /// to edit a file, set up to keep to a context and to edit nothing.
@@ -4239,11 +4249,12 @@ async fn a_chat_an_agent_opens_goes_under_its_chat_which_stays_shown(cx: &mut Te
         listed(&[("Cox", &["hello", "permission", "second"])]),
         "named by its first line, as any chat is"
     );
-    let (key, opened_by) = keys(cx, &child.workspace, 1);
+    let (_, opened_by) = keys(cx, &child.workspace, 1);
     assert_eq!(opened_by, Some(child.parent));
     assert_eq!(
         (child.opened.number, child.opened.name.as_str()),
-        (key, "Chat 3")
+        (number(cx, &child.workspace, 1), "Chat 3"),
+        "it goes by the number it is kept by"
     );
     assert_eq!(
         shown_entries(cx, &child.workspace)[0],
@@ -4350,9 +4361,13 @@ async fn opened_on(
             answer,
         })
         .unwrap();
-    let key = opened.await.unwrap().unwrap().number;
+    let number = opened.await.unwrap().unwrap().number;
     settle_on(cx, workspace).await;
-    key
+    workspace.read_with(cx, |workspace, _| {
+        let mut chats = workspace.chats(0);
+        let opened = chats.find(|chat| chat.kept().is_some_and(|kept| kept.number() == number));
+        opened.unwrap().key()
+    })
 }
 
 /// Whether the chat `key` of Cox's own is marked unread.
@@ -5323,7 +5338,7 @@ async fn an_agent_waits_for_the_chat_it_opened(cx: &mut TestAppContext) {
 
     // Waiting for a chat at work answers once its turn ends.
     open_child(cx, &workspace, &asks, "slow hello", 2).await;
-    let (slow, _) = keys(cx, &workspace, 1);
+    let slow = number(cx, &workspace, 1);
     let agent = Arc::clone(&agents.borrow()[1]);
     settle_until(cx, |_| agent.did(&Event::Held)).await;
     let (answer, mut waited) = tokio::sync::oneshot::channel();
@@ -5346,7 +5361,7 @@ async fn an_agent_waits_for_the_chat_it_opened(cx: &mut TestAppContext) {
     // Waiting for a chat that comes to wait for the human answers then,
     // with what it asks.
     open_child(cx, &workspace, &asks, "permission", 3).await;
-    let (asking, _) = keys(cx, &workspace, 2);
+    let asking = number(cx, &workspace, 2);
     let view = view_of(cx, 2);
     let (answer, waited) = tokio::sync::oneshot::channel();
     ask(ChatRequest::WaitChat {
@@ -5388,7 +5403,10 @@ async fn an_agent_waits_for_the_chat_it_opened(cx: &mut TestAppContext) {
     let (answer, waited) = tokio::sync::oneshot::channel();
     ask(ChatRequest::WaitChat { chat: 99, answer });
     cx.run_until_parked();
-    assert_eq!(waited.await.unwrap(), Err("no chat 99".to_owned()));
+    assert_eq!(
+        waited.await.unwrap(),
+        Err("This project has no chat 99.".to_owned())
+    );
 }
 
 #[gpui::test]
@@ -5416,7 +5434,7 @@ async fn a_subagent_goes_by_its_title_and_runs_with_the_model_asked_as_offered(
             .unwrap();
         opened
     };
-    let wait = |chat: u64| {
+    let wait = |chat: i64| {
         let (answer, waited) = tokio::sync::oneshot::channel();
         asks.borrow()[0]
             .send(ChatRequest::WaitChat { chat, answer })
@@ -5588,7 +5606,7 @@ async fn an_agent_waits_for_no_chat_of_another_project(cx: &mut TestAppContext) 
     );
     cx.simulate_keystrokes("secondary-n");
     say(cx, &workspace, "hello").await;
-    let (other, _) = keys(cx, &workspace, 0);
+    let other = number(cx, &workspace, 0);
     workspace.update_in(cx, |workspace, window, cx| {
         workspace.open(Some(app.clone()), window, cx);
     });
@@ -5602,7 +5620,10 @@ async fn an_agent_waits_for_no_chat_of_another_project(cx: &mut TestAppContext) 
         })
         .unwrap();
     cx.run_until_parked();
-    assert_eq!(waited.await.unwrap(), Err(format!("no chat {other}")));
+    assert_eq!(
+        waited.await.unwrap(),
+        Err(format!("This project has no chat {other}."))
+    );
 }
 
 /// The stage names the chats of its tabs from inside the window's own

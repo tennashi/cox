@@ -1905,7 +1905,7 @@ impl Daemon {
             }
             ToDaemon::StartSketch { key, sketch, what } => {
                 match self.start_sketch(key, sketch, None, &what) {
-                    Ok(opened) => self.reveals.push(opened.number),
+                    Ok((sketch, _)) => self.reveals.push(sketch),
                     Err(why) => {
                         if let Some(chat) = self.chat(key) {
                             chat.note(format!("The sketch cannot start: {why}"));
@@ -2764,10 +2764,10 @@ impl Daemon {
                 answer,
             } => {
                 let opened = self.start_sketch(key, sketch, directory.as_deref(), &what);
-                if show && let Ok(opened) = &opened {
-                    self.reveals.push(opened.number);
+                if show && let Ok((sketch, _)) = &opened {
+                    self.reveals.push(*sketch);
                 }
-                answer.send(opened).ok();
+                answer.send(opened.map(|(_, opened)| opened)).ok();
             }
             ChatRequest::ShowMedia {
                 shown,
@@ -2836,23 +2836,30 @@ impl Daemon {
             }
             ChatRequest::WaitChat { chat, answer } => self.wait_chat(key, chat, answer),
             ChatRequest::FindSubagent { subagent, answer } => {
-                answer.send(self.find_subagent(key, &subagent)).ok();
+                let found = self
+                    .find_subagent(key, &subagent)
+                    .and_then(|(child, name)| Ok((self.number_of(child)?, name)));
+                answer.send(found).ok();
             }
             ChatRequest::ContinueChat {
                 subagent,
                 text,
                 answer,
             } => {
-                answer.send(self.continue_chat(key, &subagent, &text)).ok();
+                let went_on = self
+                    .continue_chat(key, &subagent, &text)
+                    .and_then(|(child, name)| Ok((self.number_of(child)?, name)));
+                answer.send(went_on).ok();
             }
             ChatRequest::StopChat {
                 subagent,
                 reason,
                 answer,
             } => {
-                answer
-                    .send(self.stop_subagent(key, &subagent, reason.as_deref()))
-                    .ok();
+                let stopped = self
+                    .stop_subagent(key, &subagent, reason.as_deref())
+                    .and_then(|(child, name, stopped)| Ok((self.number_of(child)?, name, stopped)));
+                answer.send(stopped).ok();
             }
             ChatRequest::SaveToWiki { chat } => self.save_to_wiki_of(key, chat),
             ChatRequest::WikiWritten { page } => {
@@ -2971,23 +2978,20 @@ impl Daemon {
         }
     }
 
-    /// Answers `answer` with how the chat that goes by `key`, of the
+    /// Answers `answer` with how the chat kept as `number`, of the
     /// project of the chat `asking`, stands once it is not at work, or at
     /// once when it is not. Asking sends the chat nothing, so one marked
     /// done stays done, as its agent heard its report already.
     fn wait_chat(
         &mut self,
         asking: u64,
-        key: u64,
+        number: i64,
         answer: oneshot::Sender<Result<Waited, String>>,
     ) {
-        let seen = self
-            .seen_by(asking)
-            .is_some_and(|mut chats| chats.any(|slot| slot.key == key));
-        if !seen {
-            answer.send(Err(format!("no chat {key}"))).ok();
+        let Some(key) = self.numbered(asking, number) else {
+            answer.send(Err(no_chat(number))).ok();
             return;
-        }
+        };
         let Some(chat) = self.chat(key) else {
             answer.send(Ok(Waited::default())).ok();
             return;
@@ -3131,18 +3135,38 @@ impl Daemon {
         Ok((child, name, stopped))
     }
 
-    /// The number and the title of the chat the agent of the chat
-    /// `asking` names as `subagent`: by its number, among the chats it may
-    /// see, or by its title, among those it opened; or why there is none,
-    /// or, when several have the title, which they are.
+    /// The key of the chat kept as `number`, among those the agent of the
+    /// chat `asking` may ask about: the number `agent` answered, the one
+    /// `read_chat` and `resolve_chat` take, which stays the chat's when
+    /// Cox starts again, as its key does not.
+    fn numbered(&self, asking: u64, number: i64) -> Option<u64> {
+        self.seen_by(asking)?
+            .find(|slot| slot.kept.is_some_and(|kept| kept.number() == number))
+            .map(|slot| slot.key)
+    }
+
+    /// The number the chat `key` is kept by, which its agent's tools name
+    /// it by, or why it has none.
+    fn number_of(&self, key: u64) -> Result<i64, String> {
+        self.slot(key)
+            .and_then(|slot| slot.kept)
+            .map(ChatId::number)
+            .ok_or_else(|| "the chat is not kept, so it has no number".to_owned())
+    }
+
+    /// The key and the title of the chat the agent of the chat `asking`
+    /// names as `subagent`: by the number it is kept by, among the chats
+    /// it may see, or by its title, among those it opened; or why there
+    /// is none, or, when several have the title, which they are, by
+    /// their numbers.
     fn find_subagent(&self, asking: u64, subagent: &Subagent) -> Result<(u64, String), String> {
         let title = match subagent {
             Subagent::Number(number) => {
                 return self
-                    .seen_by(asking)
-                    .and_then(|mut chats| chats.find(|slot| slot.key == *number))
+                    .numbered(asking, *number)
+                    .and_then(|key| self.slot(key))
                     .map(|slot| (slot.key, slot.name.clone()))
-                    .ok_or_else(|| format!("no chat {number}"));
+                    .ok_or_else(|| no_chat(*number));
             }
             Subagent::Title(title) => title,
         };
@@ -3177,7 +3201,7 @@ impl Daemon {
                  give agent_report the number of the one you mean as `chat`.",
                 titled
                     .iter()
-                    .map(|slot| slot.key.to_string())
+                    .filter_map(|slot| Some(slot.kept?.number().to_string()))
                     .collect::<Vec<_>>()
                     .join(" and ")
             )),
@@ -3276,8 +3300,9 @@ impl Daemon {
                         .filter_map(|&child| {
                             let slot = self.slot(child)?;
                             let (name, ended) = (slot.name.clone(), slot.behind == Behind::Ended);
+                            let number = slot.kept?.number();
                             let stands = self.stands(child)?;
-                            Some(workflow::subagent_report(child, &name, &stands, ended))
+                            Some(workflow::subagent_report(number, &name, &stands, ended))
                         })
                         .collect();
                     let line =
@@ -3418,19 +3443,18 @@ impl Daemon {
             }
             (None, None) => folder,
         };
-        let mut opened = self.open_under(key, text, setup, model, goal)?;
-        if let Some(slot) = self.slot_mut(opened.number) {
+        let (child, mut opened) = self.open_under(key, text, setup, model, goal)?;
+        if let Some(slot) = self.slot_mut(child) {
             slot.whose = Whose::ran(key, slot.setup.as_ref());
         }
         if let Some(made) = &worktree
-            && let Some(kept) = self.slot(opened.number).and_then(|slot| slot.kept)
-            && let Err(error) = worktrees::claim(made, kept.number())
+            && let Err(error) = worktrees::claim(made, opened.number)
         {
             tracing::error!("the worktree is not marked as the chat's: {error}");
         }
         let store = Rc::clone(&self.store);
         if let Some(title) = title
-            && let Some(slot) = self.slot_mut(opened.number)
+            && let Some(slot) = self.slot_mut(child)
         {
             let title: String = title.chars().take(NAME_LENGTH).collect();
             slot.name_as(&title, Named::FirstLine, &store);
@@ -3441,7 +3465,9 @@ impl Daemon {
 
     /// Opens a chat under the chat `key`, set up as `setup` says, on
     /// `text`, toward `goal`, its agent running with `model` if given,
-    /// and answers how it goes by.
+    /// and answers its key and how it goes by to the agent that opened
+    /// it: by the number it is kept by, so a chat that could not be kept
+    /// is not started.
     fn open_under(
         &mut self,
         key: u64,
@@ -3449,14 +3475,18 @@ impl Daemon {
         setup: Setup,
         model: Option<&str>,
         goal: Option<Goal>,
-    ) -> Result<OpenedChat, String> {
+    ) -> Result<(u64, OpenedChat), String> {
         let slot = self.slot(key).ok_or("the chat is gone")?;
         let (project, kept, opened_by) = (slot.project, slot.kept, slot.name.clone());
         let sketch = setup.sketch;
         let opened = self.open_in(project, Some((key, kept)), Some(setup));
         let slot = self.slot(opened).ok_or("the chat did not open")?;
+        let number = slot
+            .kept
+            .ok_or("the chat it opened could not be kept, so it has no number to go by")?
+            .number();
         let told = OpenedChat {
-            number: opened,
+            number,
             name: slot.name.clone(),
             folder: sketch
                 .and(slot.setup.as_ref())
@@ -3469,7 +3499,7 @@ impl Daemon {
             }
             chat.tell(&opened_by, text, goal);
         }
-        Ok(told)
+        Ok((opened, told))
     }
 
     /// Switches the chat `key` to the agent kept as `id`, unless the chat
@@ -3775,6 +3805,12 @@ impl Daemon {
         }
         went_on
     }
+}
+
+/// What an agent is told when it names by `number` a chat its project
+/// does not keep, as `read_chat` tells it.
+fn no_chat(number: i64) -> String {
+    format!("This project has no chat {number}.")
 }
 
 /// The folder an agent that starts as `start` says works in, when its
@@ -4109,6 +4145,18 @@ mod tests {
         let (window, told) = unbounded_channel();
         daemon.window = Some(window);
         (daemon, told)
+    }
+
+    /// The key of the chat kept as `number`, the number an agent's tools
+    /// name it by.
+    fn keyed(daemon: &Daemon, number: i64) -> u64 {
+        daemon
+            .chats
+            .iter()
+            .chain(&daemon.archived)
+            .find(|slot| slot.kept.is_some_and(|kept| kept.number() == number))
+            .unwrap()
+            .key
     }
 
     /// The key the daemon lists the chat kept as `kept` by.
@@ -4777,7 +4825,7 @@ mod tests {
                         answer,
                     },
                 );
-                subagents.push(opened.try_recv().unwrap().unwrap().number);
+                subagents.push(keyed(&daemon, opened.try_recv().unwrap().unwrap().number));
             }
             let mut opener = Self {
                 daemon,
@@ -4828,9 +4876,15 @@ mod tests {
         /// Asks how the subagent `index` stands, as `agent_report` does.
         fn wait(&mut self, index: usize) -> oneshot::Receiver<Result<Waited, String>> {
             let (answer, waited) = oneshot::channel();
-            self.daemon
-                .wait_chat(self.key, self.subagents[index], answer);
+            let number = self.number(self.subagents[index]);
+            self.daemon.wait_chat(self.key, number, answer);
             waited
+        }
+
+        /// The number the chat `key` is kept by, as the agent's tools
+        /// name it.
+        fn number(&self, key: u64) -> i64 {
+            self.daemon.number_of(key).unwrap()
         }
     }
 
@@ -4890,7 +4944,7 @@ mod tests {
                     answer,
                 },
             );
-            let number = opened.try_recv().unwrap().unwrap().number;
+            let number = keyed(&daemon, opened.try_recv().unwrap().unwrap().number);
 
             let shop = home.join("shop");
             let made = shop.join(worktrees::WORKTREES).join("app").join("fix");
@@ -4933,7 +4987,7 @@ mod tests {
                     answer,
                 },
             );
-            let number = opened.try_recv().unwrap().unwrap().number;
+            let number = keyed(&daemon, opened.try_recv().unwrap().unwrap().number);
             let made = home
                 .join("shop")
                 .join(worktrees::WORKTREES)
@@ -5011,7 +5065,7 @@ mod tests {
                 answer,
             },
         );
-        let number = opened.try_recv().unwrap().unwrap().number;
+        let number = keyed(daemon, opened.try_recv().unwrap().unwrap().number);
         pump(daemon, heard).await;
         let made = home
             .join("shop")
@@ -5057,7 +5111,7 @@ mod tests {
 
     /// Has the agent of the chat `key` continue its subagent "Look" with
     /// `text`, as `agent_continue` does.
-    fn continue_look(daemon: &mut Daemon, key: u64, text: &str) -> Result<(u64, String), String> {
+    fn continue_look(daemon: &mut Daemon, key: u64, text: &str) -> Result<(i64, String), String> {
         let (answer, mut went_on) = oneshot::channel();
         daemon.asked(
             key,
@@ -5082,7 +5136,7 @@ mod tests {
 
             assert_eq!(
                 continue_look(&mut daemon, key, "Go on."),
-                Ok((number, "Look".to_owned()))
+                Ok((kept, "Look".to_owned()))
             );
 
             assert!(made.exists(), "the worktree is made again");
@@ -5197,7 +5251,7 @@ mod tests {
 
             let opened = daemon.start_sketch(key, Sketch::Project, None, "try");
 
-            let folder = opened.unwrap().folder.unwrap();
+            let folder = opened.unwrap().1.folder.unwrap();
             assert!(
                 crate::testing::run_git(&folder, &["rev-parse", "HEAD"]).is_ok(),
                 "{}",
@@ -5250,12 +5304,12 @@ mod tests {
                 },
             );
             let opened = opened.try_recv().unwrap().unwrap();
-            let (sketch, folder) = (opened.number, opened.folder.unwrap());
+            let (sketch, folder) = (keyed(&daemon, opened.number), opened.folder.unwrap());
             pump(&mut daemon, &mut heard).await;
             prompts_of(&agents, 0);
             let stands = |daemon: &mut Daemon| {
                 let (answer, mut waited) = oneshot::channel();
-                daemon.wait_chat(key, sketch, answer);
+                daemon.wait_chat(key, opened.number, answer);
                 waited.try_recv().ok().map(|waited| waited.unwrap().sketch)
             };
             assert_eq!(stands(&mut daemon), None, "at work, it waits");
@@ -5327,7 +5381,7 @@ mod tests {
             let sketch = daemon
                 .start_sketch(key, Sketch::Empty, None, "try")
                 .unwrap()
-                .number;
+                .0;
             pump(&mut daemon, &mut heard).await;
             prompts_of(&agents, 0);
 
@@ -5358,15 +5412,17 @@ mod tests {
                 Ok((look, "Look".to_owned()))
             );
             assert_eq!(
-                find(opener.key, Subagent::Number(fix)),
+                find(opener.key, Subagent::Number(opener.number(fix))),
                 Ok((fix, "Fix".to_owned())),
                 "the number still names it"
             );
             assert_eq!(
                 find(opener.key, title("Fix")),
                 Err(format!(
-                    "Several subagents of this chat are titled \"Fix\", with the numbers {fix} \
-                     and {other_fix}: give agent_report the number of the one you mean as `chat`."
+                    "Several subagents of this chat are titled \"Fix\", with the numbers {} \
+                     and {}: give agent_report the number of the one you mean as `chat`.",
+                    opener.number(fix),
+                    opener.number(other_fix)
                 ))
             );
             assert_eq!(
@@ -5489,7 +5545,7 @@ mod tests {
     impl Opener {
         /// Has the chat's agent continue its subagent `subagent` with
         /// `text`, as `agent_continue` does.
-        fn continues(&mut self, subagent: Subagent, text: &str) -> Result<(u64, String), String> {
+        fn continues(&mut self, subagent: Subagent, text: &str) -> Result<(i64, String), String> {
             let (answer, mut went_on) = oneshot::channel();
             self.daemon.asked(
                 self.key,
@@ -5508,7 +5564,7 @@ mod tests {
             &mut self,
             subagent: Subagent,
             reason: Option<&str>,
-        ) -> Result<(u64, String, Stopped), String> {
+        ) -> Result<(i64, String, Stopped), String> {
             let (answer, mut stopped) = oneshot::channel();
             self.daemon.asked(
                 self.key,
@@ -5591,7 +5647,7 @@ mod tests {
 
             assert_eq!(
                 opener.continues(Subagent::Title("Look".to_owned()), "Go on."),
-                Ok((look, "Look".to_owned()))
+                Ok((opener.number(look), "Look".to_owned()))
             );
             opener.pump().await;
 
@@ -5627,7 +5683,7 @@ mod tests {
             let look = opener.subagents[0];
 
             assert_eq!(
-                opener.continues(Subagent::Number(look), "Go on."),
+                opener.continues(Subagent::Number(opener.number(look)), "Go on."),
                 Err(
                     "The subagent \"Look\" is at work still, so nothing is sent to it. Wait \
                      for its report, as Cox tells it, or with agent_report, giving its title, \
@@ -5641,7 +5697,7 @@ mod tests {
             opener.daemon.asked(
                 look,
                 ChatRequest::ContinueChat {
-                    subagent: Subagent::Number(opener.key),
+                    subagent: Subagent::Number(opener.number(opener.key)),
                     text: "Go on.".to_owned(),
                     answer,
                 },
@@ -5675,7 +5731,7 @@ mod tests {
 
             assert_eq!(
                 opener.stops(Subagent::Title("Look".to_owned()), Some("Wrong folder.")),
-                Ok((look, "Look".to_owned(), Stopped::Turn))
+                Ok((opener.number(look), "Look".to_owned(), Stopped::Turn))
             );
             assert!(opener.cancelled(1), "its turn is cancelled");
             let opener_name = opener.daemon.slot(opener.key).unwrap().name.clone();
@@ -5704,7 +5760,7 @@ mod tests {
             assert!(opener.daemon.slot(look).is_some(), "its chat stays");
             assert_eq!(
                 opener.continues(Subagent::Title("Look".to_owned()), "Go on."),
-                Ok((look, "Look".to_owned()))
+                Ok((opener.number(look), "Look".to_owned()))
             );
             opener.pump().await;
             // Its report heard, it was done, its agent closed: it starts
@@ -5733,8 +5789,8 @@ mod tests {
             assert_eq!(opener.daemon.slot(look).unwrap().state, State::Asking);
 
             assert_eq!(
-                opener.stops(Subagent::Number(look), None),
-                Ok((look, "Look".to_owned(), Stopped::Turn))
+                opener.stops(Subagent::Number(opener.number(look)), None),
+                Ok((opener.number(look), "Look".to_owned(), Stopped::Turn))
             );
             assert!(opener.cancelled(1), "which answers its question too");
             let opener_name = opener.daemon.slot(opener.key).unwrap().name.clone();
@@ -5743,8 +5799,8 @@ mod tests {
                 [format!("The agent of \"{opener_name}\" stopped this chat.")]
             );
             assert_eq!(
-                opener.stops(Subagent::Number(look), None),
-                Ok((look, "Look".to_owned(), Stopped::Turn)),
+                opener.stops(Subagent::Number(opener.number(look)), None),
+                Ok((opener.number(look), "Look".to_owned(), Stopped::Turn)),
                 "stopping, it is the turn that stops still"
             );
         });
@@ -5760,7 +5816,7 @@ mod tests {
             opener.daemon.asked(
                 look,
                 ChatRequest::StopChat {
-                    subagent: Subagent::Number(opener.key),
+                    subagent: Subagent::Number(opener.number(opener.key)),
                     reason: None,
                     answer,
                 },
@@ -5794,7 +5850,7 @@ mod tests {
             opener.daemon.slot_mut(look).unwrap().whose = Whose::opened(Some(opener.key), None);
             assert_eq!(
                 opener.stops(Subagent::Title("Look".to_owned()), Some("Enough.")),
-                Ok((look, "Look".to_owned(), Stopped::Nothing))
+                Ok((opener.number(look), "Look".to_owned(), Stopped::Nothing))
             );
             assert!(!opener.cancelled(1));
             assert_eq!(opener.notes(look), Vec::<String>::new(), "nothing to show");
@@ -5823,7 +5879,7 @@ mod tests {
 
             assert_eq!(
                 opener.stops(Subagent::Title("Look".to_owned()), None),
-                Ok((look, "Look".to_owned(), Stopped::Background))
+                Ok((opener.number(look), "Look".to_owned(), Stopped::Background))
             );
             assert!(!runs(&mut opener.daemon, look), "its agent is ended");
             opener.pump().await;
@@ -5833,7 +5889,7 @@ mod tests {
 
             assert_eq!(
                 opener.continues(Subagent::Title("Look".to_owned()), "Go on."),
-                Ok((look, "Look".to_owned()))
+                Ok((opener.number(look), "Look".to_owned()))
             );
             opener.pump().await;
             assert_eq!(opener.agents.0.borrow().len(), 3, "started again");
@@ -5859,7 +5915,7 @@ mod tests {
 
             assert_eq!(
                 opener.continues(Subagent::Title("Look".to_owned()), "Look again."),
-                Ok((look, "Look".to_owned()))
+                Ok((opener.number(look), "Look".to_owned()))
             );
 
             assert!(opener.daemon.chats.iter().any(|slot| slot.key == look));
@@ -6162,7 +6218,7 @@ mod tests {
                 answer,
             },
         );
-        let ship = number.try_recv().unwrap().unwrap().number;
+        let ship = keyed(&daemon, number.try_recv().unwrap().unwrap().number);
         let app = worktrees::directory_of(&home.join("shop"), "app");
         let origin = "https://github.com/tennashi/cox.git";
         crate::testing::run_git(&app, &["remote", "add", "origin", origin]).unwrap();
@@ -7055,6 +7111,94 @@ mod tests {
     fn named(daemon: &Daemon, name: &str) -> u64 {
         let slot = daemon.chats.iter().chain(&daemon.archived);
         slot.clone().find(|slot| slot.name == name).unwrap().key
+    }
+
+    #[test]
+    fn the_number_agent_answered_names_the_same_chat_to_each_tool_once_coxd_starts_again() {
+        on_daemon(async {
+            let opener = Opener::new(&[]).await;
+            let asking = opener.number(opener.key);
+            // A chat kept and gone since leaves a number no chat has, so
+            // that the chats kept after it are listed by other keys.
+            let store = Rc::clone(&opener.daemon.store);
+            let elsewhere = store
+                .project(&opener.home.join("elsewhere"), "Elsewhere")
+                .unwrap();
+            store.add_chat(Some(elsewhere), "Gone").unwrap();
+            let project =
+                opener.daemon.projects[opener.daemon.slot(opener.key).unwrap().project].id;
+            store.add_chat(project, "Later").unwrap();
+            store.delete_project(elsewhere).unwrap();
+            let (mut daemon, mut heard) = started_again(&opener.daemon, &opener.agents);
+            pump(&mut daemon, &mut heard).await;
+            let key = keyed(&daemon, asking);
+
+            let mut numbers = Vec::new();
+            for (title, said) in [("Look", "Found it."), ("Fix", "Fixed it.")] {
+                let (answer, mut ran) = oneshot::channel();
+                daemon.asked(
+                    key,
+                    ChatRequest::OpenChat {
+                        text: "look".to_owned(),
+                        title: Some(title.to_owned()),
+                        setup: Setup::default(),
+                        model: None,
+                        goal: None,
+                        sketch: None,
+                        within: Box::default(),
+                        answer,
+                    },
+                );
+                let ran = ran.try_recv().unwrap().unwrap();
+                assert_ne!(
+                    named(&daemon, title).cast_signed(),
+                    ran.number,
+                    "agent answers the number the chat is kept by, not its key"
+                );
+                numbers.push(ran.number);
+                pump(&mut daemon, &mut heard).await;
+                let subagent = opener.agents.0.borrow().len() - 1;
+                turn_ends(&opener.agents, subagent, Some(said));
+                pump(&mut daemon, &mut heard).await;
+            }
+
+            let (mut again, mut heard) = started_again(&daemon, &opener.agents);
+            pump(&mut again, &mut heard).await;
+            pump(&mut again, &mut heard).await;
+            let key = keyed(&again, asking);
+            for (number, title, said) in [
+                (numbers[0], "Look", "Found it."),
+                (numbers[1], "Fix", "Fixed it."),
+            ] {
+                for subagent in [Subagent::Title(title.to_owned()), Subagent::Number(number)] {
+                    let (answer, mut found) = oneshot::channel();
+                    again.asked(key, ChatRequest::FindSubagent { subagent, answer });
+                    assert_eq!(found.try_recv().unwrap(), Ok((number, title.to_owned())));
+                }
+                let (answer, mut waited) = oneshot::channel();
+                again.asked(
+                    key,
+                    ChatRequest::WaitChat {
+                        chat: number,
+                        answer,
+                    },
+                );
+                assert_eq!(
+                    waited.try_recv().unwrap().unwrap().said.as_deref(),
+                    Some(said),
+                    "agent_report answers the chat of that number"
+                );
+                let read = again.read_chat(key, number).unwrap();
+                assert!(read.contains(said), "read_chat reads the same chat: {read}");
+            }
+
+            let (answer, mut waited) = oneshot::channel();
+            again.asked(key, ChatRequest::WaitChat { chat: 9999, answer });
+            assert_eq!(
+                waited.try_recv().unwrap(),
+                Err("This project has no chat 9999.".to_owned())
+            );
+        });
     }
 
     #[test]
