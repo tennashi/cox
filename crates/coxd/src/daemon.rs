@@ -418,6 +418,29 @@ impl Whose {
         }
     }
 
+    /// Whose a chat the chat `parent` opened, if one did, set up as
+    /// `setup`, is, as kept: the agent's that ran it, which heard of it as
+    /// `report` says, or, with none kept, the human's alone.
+    fn kept(parent: Option<u64>, setup: Option<&Setup>, report: Option<Report>) -> Self {
+        let (Some(parent), Some(report)) = (parent, report) else {
+            return Self::Human;
+        };
+        let mut whose = Self::ran(parent, setup);
+        if let Some((_, kept)) = whose.reports() {
+            *kept = report;
+        }
+        whose
+    }
+
+    /// Whether the agent that opened the chat heard what it came to last,
+    /// unless the chat is the human's alone.
+    fn report(self) -> Option<Report> {
+        match self {
+            Self::Agent { report, .. } | Self::Sketch { report, .. } => Some(report),
+            Self::Human => None,
+        }
+    }
+
     /// Whether a turn that ends waits for the human: the chat is theirs,
     /// or a sketch, which they end.
     fn waits(self) -> bool {
@@ -451,6 +474,24 @@ enum Report {
 }
 
 impl Report {
+    /// How it is kept.
+    const fn word(self) -> &'static str {
+        match self {
+            Self::Working => "working",
+            Self::Pending => "pending",
+            Self::Heard => "heard",
+        }
+    }
+
+    /// What `word` keeps; one Cox does not know has come to nothing yet.
+    fn from_word(word: &str) -> Self {
+        match word {
+            "pending" => Self::Pending,
+            "heard" => Self::Heard,
+            _ => Self::Working,
+        }
+    }
+
     /// The report of a chat that stood as `was` and stands as `now`: one
     /// that goes back to work has none, and one that stops working has
     /// one pending.
@@ -539,6 +580,10 @@ struct Slot {
     parent: Option<u64>,
     /// Whose it is; a line the human sends it makes it theirs.
     whose: Whose,
+    /// What is kept of whose it is, for a coxd that starts to go on from:
+    /// the report the agent that opened it is owed (see
+    /// [`Daemon::keep_reports`]).
+    kept_report: Option<Report>,
     setup: Option<Setup>,
     /// The folder it works in, when it is not its project's, as one that
     /// opened before another folder of the project became the project's.
@@ -738,6 +783,10 @@ pub struct Daemon {
     shown: Option<u64>,
     /// The agents that wait for a chat, by its key.
     waiting: Vec<(u64, oneshot::Sender<Result<Waited, String>>)>,
+    /// The chats whose closed agent did not start again to hear its
+    /// subagents' reports, which stay pending: Cox tries again once the
+    /// chat is open, or as it next starts (see [`Self::tell_reports`]).
+    deaf: HashSet<u64>,
     store: Rc<Store>,
     spawns: Rc<dyn Spawns>,
     internal: UnboundedSender<Internal>,
@@ -920,6 +969,7 @@ impl Daemon {
             home_given,
             shown: None,
             waiting: Vec::new(),
+            deaf: HashSet::new(),
             store,
             spawns,
             internal,
@@ -1006,6 +1056,7 @@ impl Daemon {
                     })
                     .ok()
             });
+            let report = chat.report.as_deref().map(Report::from_word);
             let slot = Slot {
                 key,
                 project: index,
@@ -1020,7 +1071,8 @@ impl Daemon {
                 behind: Behind::Untold,
                 goal: chat.goal,
                 parent,
-                whose: Whose::opened(parent, setup.as_ref()),
+                whose: Whose::kept(parent, setup.as_ref(), report),
+                kept_report: report,
                 setup,
                 folder: chat.folder,
                 ending: None,
@@ -1118,7 +1170,8 @@ impl Daemon {
         mut stop: oneshot::Receiver<()>,
     ) {
         self.window = window;
-        self.tell_listing();
+        // The reports left pending as the last coxd went are told first.
+        self.settle();
         loop {
             tokio::select! {
                 message = from_window.recv() => match message {
@@ -1630,6 +1683,7 @@ impl Daemon {
             goal: None,
             parent: from.map(|(parent, _)| parent),
             whose: Whose::opened(from.map(|(parent, _)| parent), setup.as_ref()),
+            kept_report: None,
             setup: setup.clone(),
             folder,
             ending: None,
@@ -2144,13 +2198,13 @@ impl Daemon {
     }
 
     /// Sends `text` to the agent of the chat `key` in the human's place,
-    /// starting it again first if it is closed and can be.
-    fn go_on(&mut self, key: u64, text: &str) {
+    /// starting it again first if it is closed and can be. Answers whether
+    /// the line went: not when its agent does not wait for one, as one
+    /// that did not start again.
+    fn go_on(&mut self, key: u64, text: &str) -> bool {
         self.reopen(key);
         let _ = self.start_again(key);
-        if let Some(chat) = self.chat(key) {
-            chat.told(text);
-        }
+        self.chat(key).is_some_and(|chat| chat.told(text))
     }
 
     /// Starts the agent of the chat `key` again, if it is closed and can
@@ -3184,7 +3238,10 @@ impl Daemon {
     /// Tells the agent of each chat that opened subagents, in the human's
     /// place, the reports it has not heard, in one line once its turn is
     /// not running, and gives the human the subagents of a chat whose
-    /// agent never hears them. Answers whether it told any agent.
+    /// agent never hears them. A report is heard once its line went: while
+    /// a closed agent does not start again to take it, it stays pending,
+    /// for when the chat is open again or Cox next starts. Answers whether
+    /// it told any agent.
     fn tell_reports(&mut self) -> bool {
         let mut pending: Vec<(u64, Vec<u64>)> = Vec::new();
         for slot in self.chats.iter().chain(&self.archived) {
@@ -3207,6 +3264,16 @@ impl Daemon {
         for (parent, children) in pending {
             match self.hears(parent) {
                 Hears::Now => {
+                    // A closed agent that did not start again is not tried
+                    // on each look, which would tell its chat why each time.
+                    let closed = self
+                        .chat(parent)
+                        .is_some_and(|chat| chat.conversation().state() == State::Closed);
+                    if !closed {
+                        self.deaf.remove(&parent);
+                    } else if self.deaf.contains(&parent) {
+                        continue;
+                    }
                     let reports: Vec<String> = children
                         .iter()
                         .filter_map(|&child| {
@@ -3218,11 +3285,19 @@ impl Daemon {
                         .collect();
                     let line =
                         workflow::SUBAGENT_REPORTS.say(&[("reports", &reports.join("\n\n"))]);
-                    self.go_on(parent, &line);
-                    for child in children {
-                        self.heard(child);
+                    if self.go_on(parent, &line) {
+                        for child in children {
+                            self.heard(child);
+                        }
+                        told = true;
+                    } else {
+                        tracing::warn!(
+                            chat = parent,
+                            "the chat's agent did not take its subagents' reports, which stay \
+                             pending"
+                        );
+                        self.deaf.insert(parent);
                     }
-                    told = true;
                 }
                 Hears::Later => {}
                 Hears::Never => self.orphan(parent),
@@ -3472,8 +3547,26 @@ impl Daemon {
         }
     }
 
+    /// Keeps whose each chat an agent opened is, where it changed: the
+    /// report that agent is owed, pending or heard, or that the chat is
+    /// the human's alone, so that a coxd that starts goes on from there
+    /// and tells the reports left pending.
+    fn keep_reports(&mut self) {
+        let store = Rc::clone(&self.store);
+        for slot in self.chats.iter_mut().chain(&mut self.archived) {
+            let report = slot.whose.report();
+            let Some(kept) = slot.kept.filter(|_| report != slot.kept_report) else {
+                continue;
+            };
+            match store.keep_report(kept, report.map(Report::word)) {
+                Ok(()) => slot.kept_report = report,
+                Err(error) => tracing::error!("whose the chat is is not kept: {error:#}"),
+            }
+        }
+    }
+
     /// Keeps and tells what changed: each chat's conversation, how each
-    /// chat stands, and the list.
+    /// chat stands, the reports the chats' openers are owed, and the list.
     fn settle(&mut self) {
         // A line written on a step while a turn ran goes once it ended.
         for slot in self.chats.iter_mut().chain(&mut self.archived) {
@@ -3488,6 +3581,7 @@ impl Daemon {
                 break;
             }
         }
+        self.keep_reports();
         let keys: Vec<u64> = self
             .chats
             .iter()
@@ -6682,6 +6776,164 @@ mod tests {
             pump(&mut again, &mut heard).await;
             pump(&mut again, &mut heard).await;
             assert_eq!(last_prompts(&chat.agents), [FAILED_ON_423]);
+        });
+    }
+
+    /// Another coxd of the store of `daemon`, as one that starts once that
+    /// one went, with no window yet, and what its chats' tasks tell it.
+    fn started_again(
+        daemon: &Daemon,
+        agents: &Rc<PlayedAgents>,
+    ) -> (Daemon, UnboundedReceiver<Internal>) {
+        let (internal, heard) = unbounded_channel();
+        let again = Daemon::new(
+            daemon.projects[0].folder.clone(),
+            false,
+            Rc::clone(&daemon.store),
+            agents.clone(),
+            internal,
+        );
+        (again, heard)
+    }
+
+    /// The key of the chat named `name`.
+    fn named(daemon: &Daemon, name: &str) -> u64 {
+        let slot = daemon.chats.iter().chain(&daemon.archived);
+        slot.clone().find(|slot| slot.name == name).unwrap().key
+    }
+
+    #[test]
+    fn a_subagent_s_report_left_pending_as_coxd_went_is_told_once_coxd_starts_again() {
+        on_daemon(async {
+            let mut opener = Opener::new(&["Look"]).await;
+            // Its opener at work, the report waits for its turn to end.
+            submit(&mut opener.daemon, opener.key);
+            opener.ends(0, "Found it.");
+            opener.pump().await;
+            assert_eq!(opener.prompts(), ["work"], "not told yet");
+
+            let (mut again, mut heard) = started_again(&opener.daemon, &opener.agents);
+            let started = opener.agents.0.borrow().len();
+            pump(&mut again, &mut heard).await;
+            pump(&mut again, &mut heard).await;
+
+            // The opener's agent starts again on the report.
+            assert_eq!(opener.agents.0.borrow().len(), started + 1);
+            let told = last_prompts(&opener.agents);
+            assert_eq!(told.len(), 1, "{told:?}");
+            assert!(told[0].starts_with(FOUND_IT), "{told:?}");
+            let look = named(&again, "Look");
+            assert_eq!(
+                resolved(&again, look),
+                Some(ResolvedBy::Agent),
+                "its report heard, it is done"
+            );
+
+            // Heard, it is not told again by a coxd that starts after.
+            let (mut after, mut heard) = started_again(&again, &opener.agents);
+            pump(&mut after, &mut heard).await;
+            pump(&mut after, &mut heard).await;
+            assert_eq!(
+                opener.agents.0.borrow().len(),
+                started + 1,
+                "no agent starts to hear it again"
+            );
+        });
+    }
+
+    #[test]
+    fn a_sketch_s_report_left_pending_as_coxd_went_is_told_and_the_sketch_stays_the_human_s() {
+        on_daemon(async {
+            let home = TempDir::new();
+            let agents = Rc::new(PlayedAgents::default());
+            let (mut daemon, mut heard, key) = shop_with_app(&home, &agents).await;
+            let (answer, mut opened) = oneshot::channel();
+            daemon.asked(
+                key,
+                ChatRequest::OpenChat {
+                    text: "try".to_owned(),
+                    title: Some("Try".to_owned()),
+                    setup: Setup::default(),
+                    model: None,
+                    goal: None,
+                    sketch: Some(Sketch::Empty),
+                    within: Box::default(),
+                    answer,
+                },
+            );
+            opened.try_recv().unwrap().unwrap();
+            pump(&mut daemon, &mut heard).await;
+            // Its opener at work, the report waits for its turn to end.
+            submit(&mut daemon, key);
+            turn_ends(&agents, 1, Some("Tried it."));
+            pump(&mut daemon, &mut heard).await;
+
+            let (mut again, mut heard) = started_again(&daemon, &agents);
+            pump(&mut again, &mut heard).await;
+            pump(&mut again, &mut heard).await;
+
+            let sketch = named(&again, "Try");
+            let number = again.slot(sketch).unwrap().kept.unwrap().number();
+            let told = last_prompts(&agents);
+            assert_eq!(told.len(), 1, "{told:?}");
+            assert!(
+                told[0].starts_with(
+                    "The subagent \"Try\" ended its turn. It last said:\n\nTried it.\n\n"
+                ),
+                "{told:?}"
+            );
+            assert!(
+                told[0].contains(&format!("mark it done with resolve_chat, giving {number},")),
+                "{told:?}"
+            );
+            assert_eq!(resolved(&again, sketch), None, "the human ends it");
+        });
+    }
+
+    #[test]
+    fn a_report_the_opener_s_agent_did_not_start_again_to_take_stays_pending() {
+        on_daemon(async {
+            let mut opener = Opener::new(&["Look"]).await;
+            submit(&mut opener.daemon, opener.key);
+            opener.ends(0, "Found it.");
+            opener.pump().await;
+
+            // A coxd in which the opener works in a worktree that is gone
+            // and cannot be made again, so that its agent does not start.
+            let (mut again, mut heard) = started_again(&opener.daemon, &opener.agents);
+            let key = again.chats[0].key;
+            let gone = opener
+                .home
+                .join("shop")
+                .join(worktrees::WORKTREES)
+                .join("app")
+                .join("gone");
+            again.slot_mut(key).unwrap().setup = Some(Setup {
+                folder: Some(gone),
+                ..Setup::default()
+            });
+            let started = opener.agents.0.borrow().len();
+            pump(&mut again, &mut heard).await;
+            pump(&mut again, &mut heard).await;
+
+            assert_eq!(opener.agents.0.borrow().len(), started, "no agent started");
+            let look = named(&again, "Look");
+            assert_eq!(resolved(&again, look), None, "its report is not heard");
+            let notes = notes_of(&mut again, key);
+            let why = notes
+                .iter()
+                .filter(|note| note.contains("so its agent does not start"));
+            assert_eq!(why.count(), 1, "said once, not on each look: {notes:?}");
+
+            // Left pending, it is told by a coxd whose opener's agent
+            // starts.
+            let (mut after, mut heard) = started_again(&again, &opener.agents);
+            pump(&mut after, &mut heard).await;
+            pump(&mut after, &mut heard).await;
+            assert_eq!(opener.agents.0.borrow().len(), started + 1);
+            let told = last_prompts(&opener.agents);
+            assert_eq!(told.len(), 1, "{told:?}");
+            assert!(told[0].starts_with(FOUND_IT), "{told:?}");
         });
     }
 
