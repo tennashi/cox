@@ -617,6 +617,19 @@ out, not what is not committed, by the files at the repository's top:
 | Python | `pyproject.toml`, `setup.py` or `setup.cfg` | `scip-python`, run with `npx` |
 | Go | `go.mod` | `scip-go`, which Cox installs with `go install` |
 
+A repository of several packages may have these files in the packages'
+folders only. Cox then indexes the folders its top names, all in one
+index, with their paths from the top:
+
+| Language | When the top has | Cox indexes |
+| --- | --- | --- |
+| Go | `go.work`, and no `go.mod` | the modules it uses, each a folder with a `go.mod` |
+| TypeScript | `package.json` with `workspaces`, or `pnpm-workspace.yaml`, and no `tsconfig.json` | the packages they name, as `apps/*`, that have a `tsconfig.json`, each by its own |
+
+A workspace none of whose packages has a `tsconfig.json` is indexed from
+its top, as JavaScript. Code in a folder the top does not name so is not
+indexed.
+
 An index takes from seconds to minutes, as rust-analyzer does on a large
 project; meanwhile the Map draws from the last commit's index, if there
 is one, and says what it waits for, or what an indexer needs that is not

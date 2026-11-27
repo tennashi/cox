@@ -60,14 +60,25 @@ impl Code {
         }
     }
 
-    /// The names of the files and folders at the top of the code.
+    /// The files of the code, by their paths from its top.
     ///
     /// # Errors
     ///
     /// When Git cannot list them.
-    pub fn top(&self) -> Result<Vec<String>, String> {
-        let listed = cox_git::git::run(&self.checkout, &["ls-tree", "--name-only", &self.tree()])?;
-        Ok(listed.lines().map(str::to_owned).collect())
+    pub fn files(&self) -> Result<Vec<String>, String> {
+        let listed = cox_git::git::raw(
+            &self.checkout,
+            &["ls-tree", "-r", "-z", "--name-only", &self.tree()],
+        )?;
+        Ok(listed.split_terminator('\0').map(str::to_owned).collect())
+    }
+
+    /// The text of the file of the code at `path`, from its top, if it
+    /// has one.
+    #[must_use]
+    pub fn text(&self, path: &str) -> Option<String> {
+        let file = format!("{}:{}{path}", self.commit, self.within);
+        cox_git::git::raw(&self.checkout, &["show", &file]).ok()
     }
 
     /// The commits before this one, the last first, as many as `most`.
@@ -87,11 +98,11 @@ impl Code {
     }
 }
 
-/// The index of `code` that `indexer` writes, running `command`, with
-/// each file's text in it: with what it borrows from the checkout, unless
-/// `without`. It is made in `work`, a folder of its own, which no other
-/// index is made in meanwhile, and goes once it is made; and stopped as
-/// `stop` says.
+/// The index of `code` that `indexer` writes, running `command`, of its
+/// `members`, or of its top when there are none, with each file's text in
+/// it: with what it borrows from the checkout, unless `without`. It is
+/// made in `work`, a folder of its own, which no other index is made in
+/// meanwhile, and goes once it is made; and stopped as `stop` says.
 ///
 /// # Errors
 ///
@@ -100,6 +111,7 @@ impl Code {
 pub fn make(
     code: &Code,
     indexer: &Indexer,
+    members: &[String],
     without: bool,
     command: &[String],
     work: &Path,
@@ -109,9 +121,9 @@ pub fn make(
     std::fs::create_dir_all(&copy).map_err(|error| format!("{}: {error}", copy.display()))?;
     let made = copied(code, &copy).and_then(|()| {
         if !without {
-            borrow(code, indexer, &copy);
+            borrow(code, indexer, members, &copy);
         }
-        indexed(code, indexer, command, (work, &copy), stop)
+        indexed(code, (indexer, members), command, (work, &copy), stop)
     });
     let _ = std::fs::remove_dir_all(work);
     made
@@ -143,22 +155,31 @@ fn copied(code: &Code, copy: &Path) -> Result<(), String> {
     unpacked.map_err(|error| format!("the code of {} does not unpack: {error}", code.tree()))
 }
 
-/// Links into `copy` what `indexer` borrows from the checkout.
-fn borrow(code: &Code, indexer: &Indexer, copy: &Path) {
-    if let Some((borrows, _)) = &indexer.borrows {
-        let linked = std::os::unix::fs::symlink(code.checkout.join(borrows), copy.join(borrows));
+/// Links into `copy` what `indexer` borrows from the checkout: at its
+/// top, and in the folders of `members`, where the checkout has it.
+fn borrow(code: &Code, indexer: &Indexer, members: &[String], copy: &Path) {
+    let Some((borrows, _)) = &indexer.borrows else {
+        return;
+    };
+    let top = [String::new()];
+    for folder in top.iter().chain(members) {
+        let from = code.checkout.join(folder).join(borrows);
+        if !from.is_dir() {
+            continue;
+        }
+        let linked = std::os::unix::fs::symlink(from, copy.join(folder).join(borrows));
         if let Err(error) = linked {
             tracing::warn!("{borrows} is not linked for {}: {error}", indexer.name);
         }
     }
 }
 
-/// Runs `indexer` with `command` in `copy`, writing in `work`, until
-/// `stop` stops it, and answers the index it wrote, with each file's text
-/// from `copy`.
+/// Runs `indexer` with `command` in `copy`, on `members`, or on all of
+/// it when there are none, writing in `work`, until `stop` stops it, and
+/// answers the index it wrote, with each file's text from `copy`.
 fn indexed(
     code: &Code,
-    indexer: &Indexer,
+    (indexer, members): (&Indexer, &[String]),
     command: &[String],
     (work, copy): (&Path, &Path),
     stop: &Stop,
@@ -180,10 +201,18 @@ fn indexed(
     } else {
         String::new()
     };
-    let args = indexer.args.iter().map(|arg| {
+    let filled = |arg: &str| {
         arg.replace("{out}", &out.to_string_lossy())
             .replace("{config}", &config.to_string_lossy())
             .replace("{name}", &name)
+    };
+    let args = indexer.args.iter().flat_map(|arg| {
+        if arg.contains("{member}") {
+            let of = |member: &String| filled(&arg.replace("{member}", member));
+            members.iter().map(of).collect()
+        } else {
+            vec![filled(arg)]
+        }
     });
     let mut run = Command::new(program);
     run.args(before).args(args).current_dir(copy);

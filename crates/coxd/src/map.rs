@@ -48,7 +48,7 @@ use sha2::{Digest as _, Sha256};
 
 use self::cache::{Cache, Key};
 use self::index::Code;
-use self::indexers::{Found, Indexer};
+use self::indexers::{Found, Indexer, Reads};
 use self::jobs::{Jobs, Slot, Standing};
 use crate::process::Stop;
 
@@ -64,6 +64,15 @@ const EARLIER: usize = 50;
 /// How many maps, as drawn last, are kept to tell again: drawing Cox's
 /// reads 30 MB of indexes, and takes a second or two.
 const DRAWN: usize = 4;
+
+/// Of how many commits what the indexers read of each is kept, those
+/// asked for last: the commits checked out in the projects whose maps
+/// are open.
+const READ: usize = 16;
+
+/// What the indexers read of a commit's code, or of a folder of it (see
+/// [`Code`]): each by its place among the indexers, with its members.
+type Read = ((String, String), Vec<(usize, Vec<String>)>);
 
 /// The Map page's files, by their paths within it, built into Cox: the
 /// Map plugin, which the window's stage serves at `cox://map/` and the
@@ -219,6 +228,10 @@ struct Inner {
     /// Where Cox keeps what lasts, for the threads that make the indexes
     /// (see [`crate::storage::keep_on_this_thread`]).
     data: Option<PathBuf>,
+    /// What the indexers read of the code asked for last, the last
+    /// first, so that a commit's files are listed once, however often
+    /// its map is asked for.
+    read: Mutex<Vec<Read>>,
     /// The indexes being made, and those that failed.
     jobs: Mutex<Jobs>,
     /// The maps drawn last, the last first.
@@ -261,6 +274,7 @@ impl Maps {
             scratch,
             indexers,
             data: crate::storage::kept_on_this_thread(),
+            read: Mutex::default(),
             jobs: Mutex::default(),
             drawn: Mutex::default(),
         }))
@@ -438,8 +452,8 @@ impl Maps {
             commit: Some(code.commit.clone()),
             ..blank
         };
-        let top = match code.top() {
-            Ok(top) => top,
+        let reads = match self.reads(&code) {
+            Ok(reads) => reads,
             Err(reason) => {
                 indexes.push(Indexed {
                     state: IndexState::Failed { reason },
@@ -448,8 +462,7 @@ impl Maps {
                 return;
             }
         };
-        let found = indexers::of(&self.0.indexers, &top);
-        if found.is_empty() {
+        if reads.is_empty() {
             let mut known: Vec<String> = self
                 .0
                 .indexers
@@ -463,13 +476,13 @@ impl Maps {
             });
             return;
         }
-        for indexer in found {
+        for reads in &reads {
             let blank = Indexed {
-                language: Some(indexer.language.clone()),
-                indexer: Some(indexer.name.clone()),
+                language: Some(reads.indexer.language.clone()),
+                indexer: Some(reads.indexer.name.clone()),
                 ..blank.clone()
             };
-            let (told, kept) = self.index(root, &code, indexer, again, blank);
+            let (told, kept) = self.index(root, &code, reads, again, blank);
             indexes.push(told);
             if let Some(kept) = kept {
                 drawn.push((prefix.clone(), kept));
@@ -477,7 +490,44 @@ impl Maps {
         }
     }
 
-    /// How the index of `code` that `indexer` writes stands, for the
+    /// What each indexer that reads `code` reads of it, as it was found
+    /// last for the same code: a commit's stays as it is.
+    ///
+    /// # Errors
+    ///
+    /// When Git cannot list the code's files.
+    fn reads(&self, code: &Code) -> Result<Vec<Reads<'_>>, String> {
+        let of = (code.commit.clone(), code.within.clone());
+        let found = |read: &[Read]| {
+            let (_, reads) = read.iter().find(|(read, _)| *read == of)?;
+            let reads = reads.iter().filter_map(|(indexer, members)| {
+                Some(Reads {
+                    indexer: self.0.indexers.get(*indexer)?,
+                    members: members.clone(),
+                })
+            });
+            Some(reads.collect())
+        };
+        if let Some(reads) = found(&self.0.read.lock().unwrap_or_else(PoisonError::into_inner)) {
+            return Ok(reads);
+        }
+        let files = code.files()?;
+        let reads = indexers::of(&self.0.indexers, &files, &|file| code.text(file));
+        let kept = reads.iter().filter_map(|reads| {
+            let indexer = self
+                .0
+                .indexers
+                .iter()
+                .position(|indexer| std::ptr::eq(indexer, reads.indexer))?;
+            Some((indexer, reads.members.clone()))
+        });
+        let mut read = self.0.read.lock().unwrap_or_else(PoisonError::into_inner);
+        read.insert(0, (of, kept.collect()));
+        read.truncate(READ);
+        Ok(reads)
+    }
+
+    /// How the index of what `reads` says of `code` stands, for the
     /// project in `root`, told over `blank`, with what the index the map
     /// is drawn from is kept by, if there is one: starting to make it
     /// when it is not made yet.
@@ -485,10 +535,11 @@ impl Maps {
         &self,
         root: &Path,
         code: &Code,
-        indexer: &Indexer,
+        reads: &Reads<'_>,
         again: bool,
         blank: Indexed,
     ) -> (Indexed, Option<Key>) {
+        let indexer = reads.indexer;
         let found = match indexers::find(indexer, root, std::env::var_os("PATH").as_deref()) {
             Ok(found) => found,
             Err(how) => {
@@ -509,7 +560,7 @@ impl Maps {
                 .as_ref()
                 .is_some_and(|(borrows, _)| !code.checkout.join(borrows).is_dir()),
         };
-        let state = self.made(&key, code, indexer, &found, again);
+        let state = self.made(&key, code, reads, &found, again);
         let kept = if state == IndexState::Ready {
             Some(key)
         } else {
@@ -532,18 +583,19 @@ impl Maps {
         (told, kept)
     }
 
-    /// How the index of `key` stands: starting to make it, with
-    /// `indexer` as `found`, unless it is kept, or being made, or failed
-    /// and is not asked `again`, and stopping the one made of the same
-    /// code meanwhile, of an older commit.
+    /// How the index of `key` stands: starting to make it, of what
+    /// `reads` says, with its indexer as `found`, unless it is kept, or
+    /// being made, or failed and is not asked `again`, and stopping the
+    /// one made of the same code meanwhile, of an older commit.
     fn made(
         &self,
         key: &Key,
         code: &Code,
-        indexer: &Indexer,
+        reads: &Reads<'_>,
         found: &Found,
         again: bool,
     ) -> IndexState {
+        let indexer = reads.indexer;
         if self.0.cache.has(key) {
             return IndexState::Ready;
         }
@@ -582,12 +634,17 @@ impl Maps {
             ended: None,
         };
         let (code, indexer, found) = (code.clone(), indexer.clone(), found.clone());
+        let members = reads.members.clone();
         let started = std::thread::Builder::new()
             .name(format!("index {}", indexer.name))
             .spawn(move || {
+                let reads = Reads {
+                    indexer: &indexer,
+                    members,
+                };
                 let made = ending
                     .maps
-                    .make(&ending.key, &code, &indexer, &found, job, &stop);
+                    .make(&ending.key, &code, &reads, &found, job, &stop);
                 ending.end(made);
             });
         match started {
@@ -599,8 +656,9 @@ impl Maps {
         }
     }
 
-    /// Makes the index of `key`, of `code`, with `indexer` as `found`, as
-    /// the job `job`, until `stop` stops it, and keeps it.
+    /// Makes the index of `key`, of what `reads` says of `code`, with its
+    /// indexer as `found`, as the job `job`, until `stop` stops it, and
+    /// keeps it.
     ///
     /// # Errors
     ///
@@ -609,11 +667,12 @@ impl Maps {
         &self,
         key: &Key,
         code: &Code,
-        indexer: &Indexer,
+        reads: &Reads<'_>,
         found: &Found,
         job: u64,
         stop: &Stop,
     ) -> Result<(), String> {
+        let indexer = reads.indexer;
         crate::storage::keep_on_this_thread(self.0.data.clone());
         let command = found
             .got()
@@ -624,7 +683,15 @@ impl Maps {
                 .map_err(|error| format!("no folder to index in: {error}"))?,
         };
         let work = scratch.join(format!("index-{job}"));
-        let index = index::make(code, indexer, key.without, &command, &work, stop)?;
+        let index = index::make(
+            code,
+            indexer,
+            &reads.members,
+            key.without,
+            &command,
+            &work,
+            stop,
+        )?;
         if stop.stopped() {
             return Err(format!("{} was stopped", indexer.name));
         }
