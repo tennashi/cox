@@ -326,10 +326,7 @@ pub enum Internal {
     /// `project`, as `read` says (see [`pulls`]).
     Listed {
         project: ProjectId,
-        read: Vec<(
-            String,
-            Result<Vec<crate::github::Pull>, crate::github::Problem>,
-        )>,
+        read: Vec<(String, Result<Vec<pulls::Found>, crate::github::Problem>)>,
     },
     /// Cox took away the worktrees `removed`, of chats that were done
     /// (see [`tidy`]).
@@ -6023,6 +6020,264 @@ mod tests {
         });
     }
 
+    /// What an agent tells as it opens a pull request with `gh pr create`
+    /// in a command that cut what `gh` printed, its address too.
+    fn opens_cut() -> AgentEvent {
+        AgentEvent::ToolCall {
+            id: "create".to_owned(),
+            title: Some(
+                "git push -u origin ship && gh pr create --draft --fill 2>&1 | tail -3".to_owned(),
+            ),
+            command: true,
+            content: Some(vec![cox_core::entry::Content::Text(
+                "Warning: 1 uncommitted change\n\n\
+                 Creating pull request for ship into main in tennashi/cox\n"
+                    .to_owned(),
+            )]),
+            result: Some(ToolCallResult::Completed),
+        }
+    }
+
+    /// A chat of the project in `home/shop` (see [`shop_with_app`]), whose
+    /// repository `app` is `tennashi/cox` on GitHub, whose agent ran the
+    /// subagent "Ship" in the background, in a worktree of `app` on the
+    /// branch `ship` if `worktree`, or else in the project's folder; and
+    /// the project.
+    async fn shop_that_ships(worktree: bool) -> (Opener, ProjectId) {
+        let home = TempDir::new();
+        let agents = Rc::new(PlayedAgents::default());
+        let (mut daemon, heard, key) = shop_with_app(&home, &agents).await;
+        let (answer, mut number) = oneshot::channel();
+        daemon.asked(
+            key,
+            ChatRequest::OpenChat {
+                text: "ship it".to_owned(),
+                title: Some("Ship".to_owned()),
+                setup: Setup::default(),
+                model: None,
+                goal: None,
+                sketch: None,
+                within: Box::new(Within {
+                    directory: None,
+                    worktree: worktree.then(|| worktrees::Asked {
+                        directory: "app".to_owned(),
+                        branch: Some("ship".to_owned()),
+                        from: None,
+                    }),
+                }),
+                answer,
+            },
+        );
+        let ship = number.try_recv().unwrap().unwrap().number;
+        let app = worktrees::directory_of(&home.join("shop"), "app");
+        let origin = "https://github.com/tennashi/cox.git";
+        crate::testing::run_git(&app, &["remote", "add", "origin", origin]).unwrap();
+        let project = daemon.projects[daemon.slot(key).unwrap().project]
+            .id
+            .unwrap();
+        let mut opener = Opener {
+            daemon,
+            heard,
+            agents,
+            key,
+            subagents: vec![ship],
+            home,
+        };
+        opener.pump().await;
+        (opener, project)
+    }
+
+    /// The pull requests the projects hold, each by its number with the
+    /// chat that opened it, by its key.
+    fn authors(daemon: &Daemon) -> Vec<(u64, Option<u64>)> {
+        daemon
+            .project_pulls()
+            .into_iter()
+            .map(|held| (held.pull.number, held.author))
+            .collect()
+    }
+
+    /// The pull requests kept, each by its number with whether a chat is
+    /// kept as the one that opened it.
+    fn kept_authors(daemon: &Daemon) -> Vec<(u64, bool)> {
+        daemon
+            .store
+            .pulls::<crate::github::Status>(0)
+            .unwrap()
+            .into_iter()
+            .map(|kept| (kept.number, kept.author.is_some()))
+            .collect()
+    }
+
+    #[test]
+    fn a_subagent_s_pull_request_found_on_github_alone_is_its_by_its_branch_and_its_ci_is_told() {
+        use crate::github::{CheckState, Pull};
+        on_daemon(async {
+            let (mut opener, project) = shop_that_ships(true).await;
+            let (window, mut told) = unbounded_channel();
+            opener.daemon.window = Some(window);
+            submit(&mut opener.daemon, opener.key);
+            opener.pump().await;
+            tells(&opener.agent(Some(0)), [opens_cut()]);
+            opener.ends(0, "Opened the pull request.");
+            tells(
+                &opener.agent(None),
+                [AgentEvent::TurnEnded(cox_acp::StopReason::EndTurn)],
+            );
+            opener.pump().await;
+            assert_eq!(opener.prompts().len(), 2, "the line, then the report");
+            tells(
+                &opener.agent(None),
+                [AgentEvent::TurnEnded(cox_acp::StopReason::EndTurn)],
+            );
+            opener.pump().await;
+
+            // Its command printed no address: the chat is not seen to open
+            // it.
+            let now = Instant::now();
+            assert_eq!(opener.daemon.due_pulls(now), []);
+
+            // `gh` lists it, with one the human opened by hand, on a
+            // branch no chat is on.
+            let (pull, status) = pull_423();
+            let by_hand = Pull {
+                repo: pull.repo.clone(),
+                number: 500,
+            };
+            let ship = opener.subagents[0];
+            let kept = opener.daemon.slot(ship).unwrap().kept.unwrap().number();
+            let listings = opener.daemon.due_listings(now);
+            let [(listed, folders)] = &listings[..] else {
+                panic!("{listings:?}");
+            };
+            assert_eq!(*listed, project);
+            let (folder, chats) = opener.daemon.works_in(project);
+            let on = pulls::chats_on(&folder, folders, &chats);
+            assert_eq!(
+                on,
+                [(
+                    pull.repo.clone(),
+                    HashMap::from([("ship".to_owned(), vec![kept])])
+                )]
+            );
+            let found = |pull: &Pull, head: &str| pulls::Found {
+                pull: pull.clone(),
+                head: head.to_owned(),
+                on: on[0].1.get(head).cloned().unwrap_or_default(),
+            };
+            let read = vec![(
+                pull.repo.clone(),
+                Ok(vec![found(&pull, "ship"), found(&by_hand, "by-hand")]),
+            )];
+            opener.daemon.listed(project, read, now);
+            assert_eq!(authors(&opener.daemon), [(423, Some(ship)), (500, None)]);
+            assert_eq!(kept_authors(&opener.daemon), [(423, true), (500, false)]);
+
+            // CI ends on both: of the subagent's, the human and the
+            // opener hear once; of the other, no one.
+            assert_eq!(
+                opener.daemon.due_pulls(now),
+                [pull.clone(), by_hand.clone()]
+            );
+            for state in [CheckState::Pending, CheckState::Passed, CheckState::Passed] {
+                for pull in [&pull, &by_hand] {
+                    opener.daemon.pulled(pull, Ok(status(state)), now);
+                }
+                opener.pump().await;
+            }
+            let mut ci = Vec::new();
+            while let Ok(message) = told.try_recv() {
+                if let FromDaemon::News { key, body, .. } = message
+                    && body.starts_with("CI")
+                {
+                    ci.push((key, body));
+                }
+            }
+            assert_eq!(ci, [(ship, "CI passed on #423 Ship it".to_owned())]);
+            let prompts = opener.prompts();
+            assert_eq!(prompts.len(), 1, "{prompts:?}");
+            assert!(
+                prompts[0].contains(
+                    "CI passed on the pull request it opened, \
+                     https://github.com/tennashi/cox/pull/423 (\"Ship it\")."
+                ),
+                "{}",
+                prompts[0]
+            );
+            assert!(!prompts[0].contains("pull/500"), "{}", prompts[0]);
+        });
+    }
+
+    #[test]
+    fn a_pull_request_on_a_branch_two_chats_are_on_is_neither_s_until_one_is_seen_to_open_it() {
+        on_daemon(async {
+            let (mut opener, project) = shop_that_ships(false).await;
+            let ship = opener.subagents[0];
+            let kept =
+                |opener: &Opener, key| opener.daemon.slot(key).unwrap().kept.unwrap().number();
+            let (pull, _) = pull_423();
+            let read = |opener: &Opener, head: &str| {
+                vec![(
+                    pull.repo.clone(),
+                    Ok(vec![pulls::Found {
+                        pull: pull.clone(),
+                        head: head.to_owned(),
+                        on: vec![kept(opener, opener.key), kept(opener, ship)],
+                    }]),
+                )]
+            };
+            let now = Instant::now();
+
+            // Both are on its branch, and neither ran `gh pr create`: Cox
+            // does not guess.
+            opener.daemon.listed(project, read(&opener, "ship"), now);
+            assert_eq!(authors(&opener.daemon), [(423, None)]);
+            assert_eq!(kept_authors(&opener.daemon), [(423, false)]);
+
+            // One ran it, in a command that cut its address: listed
+            // again, the pull request it holds already is that chat's.
+            tells(&opener.agent(Some(0)), [opens_cut()]);
+            opener.pump().await;
+            assert_eq!(opener.daemon.due_pulls(now), std::slice::from_ref(&pull));
+            opener.daemon.listed(project, read(&opener, "ship"), now);
+            assert_eq!(authors(&opener.daemon), [(423, Some(ship))]);
+            assert_eq!(kept_authors(&opener.daemon), [(423, true)]);
+        });
+    }
+
+    #[test]
+    fn a_pull_request_on_a_branch_no_chat_is_on_is_the_chat_s_that_named_it_as_its_head() {
+        on_daemon(async {
+            let (mut opener, project) = shop_that_ships(false).await;
+            let ship = opener.subagents[0];
+            let (pull, _) = pull_423();
+            let read = |head: &str| {
+                vec![(
+                    pull.repo.clone(),
+                    Ok(vec![pulls::Found {
+                        pull: pull.clone(),
+                        head: head.to_owned(),
+                        on: Vec::new(),
+                    }]),
+                )]
+            };
+            let mut create = opens_cut();
+            if let AgentEvent::ToolCall { title, .. } = &mut create {
+                *title = Some("gh pr create --fill --head tennashi:ship | tail -1".to_owned());
+            }
+            tells(&opener.agent(Some(0)), [create]);
+            opener.pump().await;
+            let now = Instant::now();
+
+            // Another branch than the one it named is not its.
+            opener.daemon.listed(project, read("other"), now);
+            assert_eq!(authors(&opener.daemon), [(423, None)]);
+
+            opener.daemon.listed(project, read("ship"), now);
+            assert_eq!(authors(&opener.daemon), [(423, Some(ship))]);
+        });
+    }
+
     /// What the agent tells as it opens the pull request #423 with
     /// `gh pr create`.
     fn opens_423() -> AgentEvent {
@@ -6715,7 +6970,14 @@ mod tests {
             let listed = |pulls: &[&Pull]| {
                 vec![(
                     pull.repo.clone(),
-                    Ok(pulls.iter().map(|&pull| pull.clone()).collect()),
+                    Ok(pulls
+                        .iter()
+                        .map(|&pull| pulls::Found {
+                            pull: pull.clone(),
+                            head: String::new(),
+                            on: Vec::new(),
+                        })
+                        .collect()),
                 )]
             };
             for _ in 0..2 {

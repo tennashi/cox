@@ -16,6 +16,7 @@
 //! Cox keeps what each one it took away held, so that a chat that worked
 //! in it, sent a line again, has it made again first (see [`remake`]).
 
+use std::collections::HashMap;
 use std::ffi::OsStr;
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
@@ -609,6 +610,77 @@ fn keep_taken(repository: &Path, worktree: &Worktree, chat: i64) -> Result<(), S
     std::fs::write(file, taken).map_err(|error| error.to_string())
 }
 
+/// The chats on each branch of the repository at `repository`, a
+/// directory of the project in `project`, by the branch's short name,
+/// each chat by the number it is kept by, once: of `chats`, each with
+/// the folder it works in, those that work in a checkout that has the
+/// branch checked out, the repository's own or a worktree of it, and,
+/// whether in `chats` or not, the chat Cox made such a worktree for,
+/// even one it took away since, as it kept (see [`tidy`]). A chat that
+/// works in a folder of no checkout, or of one whose head is detached,
+/// is on no branch.
+#[must_use]
+pub fn chats_on(
+    repository: &Path,
+    project: &Path,
+    chats: &[(i64, PathBuf)],
+) -> HashMap<String, Vec<i64>> {
+    let own = git(repository, &["symbolic-ref", "--quiet", "--short", "HEAD"]).ok();
+    let mut checkouts = vec![(canonical(repository), own)];
+    let mut made: Vec<(String, i64)> = Vec::new();
+    if is_main(repository) {
+        for worktree in of(repository, project) {
+            if worktree.gone {
+                continue;
+            }
+            if let (Some(branch), Some(chat)) = (&worktree.branch, worktree.made_for) {
+                made.push((branch.clone(), chat));
+            }
+            checkouts.push((canonical(&worktree.path), worktree.branch));
+        }
+        made.extend(
+            taken(repository)
+                .into_iter()
+                .filter_map(|taken| Some((taken.branch?, taken.chat))),
+        );
+    }
+    // A chat works in the innermost checkout its folder is in: a worktree
+    // in the folder of a project that is a repository itself is not that
+    // repository's own checkout.
+    let worked = chats.iter().filter_map(|(chat, folder)| {
+        let folder = canonical(folder);
+        let (_, branch) = checkouts
+            .iter()
+            .filter(|(path, _)| folder.starts_with(path))
+            .max_by_key(|(path, _)| path.components().count())?;
+        Some((branch.clone()?, *chat))
+    });
+    let mut on: HashMap<String, Vec<i64>> = HashMap::new();
+    for (branch, chat) in made.into_iter().chain(worked) {
+        let chats = on.entry(branch).or_default();
+        if !chats.contains(&chat) {
+            chats.push(chat);
+        }
+    }
+    on
+}
+
+/// What Cox kept of each worktree of the repository whose main worktree
+/// is at `repository` that it took away by itself and did not make
+/// again.
+fn taken(repository: &Path) -> Vec<Taken> {
+    let Ok(common) = common_of(repository) else {
+        return Vec::new();
+    };
+    std::fs::read_dir(common.join(TAKEN))
+        .into_iter()
+        .flatten()
+        .filter_map(Result::ok)
+        .filter_map(|entry| std::fs::read(entry.path()).ok())
+        .filter_map(|kept| serde_json::from_slice(&kept).ok())
+        .collect()
+}
+
 /// The file, in the Git folder `common` of a repository, that keeps what
 /// the worktree of it in a folder named `name`, which Cox took away, held.
 fn taken_file(common: &Path, name: &OsStr) -> PathBuf {
@@ -1165,6 +1237,57 @@ mod tests {
             "Cox takes it away again"
         );
         assert!(!fix.exists());
+    }
+
+    #[test]
+    fn chats_are_on_the_branches_they_work_on_and_cox_made_worktrees_of_for_them() {
+        let project = TempDir::new();
+        let main = directory_of(&project, "app");
+        repository(&main);
+        let fix = made(&project, "fix/login", 3);
+        let side = made(&project, "side", 4);
+        std::fs::create_dir(fix.join("src")).unwrap();
+        let detached = directory_of(&project, "app-detached");
+        let path = detached.to_string_lossy();
+        run_git(&main, &["worktree", "add", "--quiet", "--detach", &path]).unwrap();
+        let chats = [
+            (1, project.to_path_buf()),
+            (2, main.clone()),
+            (5, fix.join("src")),
+            (6, detached),
+        ];
+        let on = |chats: &[(i64, PathBuf)]| {
+            let mut on: Vec<_> = chats_on(&main, &project, chats).into_iter().collect();
+            on.sort();
+            on
+        };
+
+        // The one in the project's folder, and the one at a detached head,
+        // are on none.
+        assert_eq!(
+            on(&chats),
+            [
+                ("fix/login".to_owned(), vec![3, 5]),
+                ("main".to_owned(), vec![2]),
+                ("side".to_owned(), vec![4]),
+            ]
+        );
+
+        // Taken away once its chat is done, the worktree is its chat's
+        // branch still.
+        let busy = Busy {
+            chats: vec![4],
+            folders: Vec::new(),
+        };
+        assert_eq!(tidy(&project, &busy).len(), 1);
+        assert!(!fix.exists() && side.exists());
+        assert_eq!(
+            on(&[]),
+            [
+                ("fix/login".to_owned(), vec![3]),
+                ("side".to_owned(), vec![4]),
+            ]
+        );
     }
 
     #[test]
