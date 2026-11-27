@@ -963,17 +963,13 @@ mod tests {
     }
 
     #[test]
-    fn coxs_own_maps_read() {
-        // Cox's maps of itself, which its agents keep as they move its code.
-        let maps = [
-            ("use", include_str!("../../../../maps/use.json")),
-            ("build", include_str!("../../../../maps/build.json")),
-        ];
-        for (name, text) in maps {
-            let vocabulary = Vocabulary::parse(text)
-                .unwrap_or_else(|error| panic!("maps/{name}.json does not read: {error}"));
-            assert_eq!(vocabulary.top.center, "cox", "{name}");
-        }
+    fn coxs_own_map_reads() {
+        // Cox's map of itself, which its agents keep as they move its
+        // code: one map, told from whoever sets Cox working.
+        let vocabulary = Vocabulary::parse(include_str!("../../../../maps/cox.json"))
+            .unwrap_or_else(|error| panic!("maps/cox.json does not read: {error}"));
+        assert_eq!(vocabulary.top.center, "cox");
+        assert_eq!(vocabulary.top.drivers, ["human", "debugger", "dev"]);
     }
 
     #[test]
