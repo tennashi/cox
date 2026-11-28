@@ -325,8 +325,17 @@ function connect(again = false) {
   }
   // Of the entries before those coxd tells first, the page asks for no
   // more of those it read back to already: coxd tells it all from there.
-  const holds = keeps && chat.from > 0 ? `&from=${chat.from}` : "";
-  const stream = new EventSource(kept === null ? "/events" : `/events?kept=${kept}${holds}`);
+  const asks = new URLSearchParams();
+  if (kept !== null) asks.set("kept", kept);
+  if (keeps && chat.from > 0) asks.set("from", chat.from);
+  // Nor to be told the list of chats it holds, which coxd tagged: only
+  // one that reads otherwise. What goes on, which the page asks for as
+  // the list comes, it asks for itself then.
+  if (listing) {
+    asks.set("listed", listing.tag);
+    readActivity();
+  }
+  const stream = new EventSource(`/events?${asks}`);
   events = stream;
   stream.onopen = () => { head.lost.hidden = true; };
   stream.onerror = () => {
