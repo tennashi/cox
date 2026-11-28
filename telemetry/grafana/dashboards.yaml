@@ -1,0 +1,7 @@
+apiVersion: 1
+providers:
+  - name: cox
+    type: file
+    allowUiUpdates: false
+    options:
+      path: /etc/cox/dashboards
