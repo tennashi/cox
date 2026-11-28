@@ -850,6 +850,73 @@ fn the_same_index_and_vocabulary_give_the_same_bytes() {
     );
 }
 
+#[test]
+fn the_outline_is_the_map_without_its_types_details() {
+    let map = generated(APP, &app());
+    let mut whole = serde_json::to_value(&map).unwrap();
+    for ty in whole["types"].as_object_mut().unwrap().values_mut() {
+        for detail in ["doc", "fields", "functions", "uses"] {
+            assert!(ty.as_object_mut().unwrap().remove(detail).is_some());
+        }
+    }
+    assert_eq!(serde_json::to_value(map.outline()).unwrap(), whole);
+    let driven = generated(DRIVEN, &driven());
+    assert!(serde_json::to_value(driven.outline()).unwrap()["slices"].is_array());
+}
+
+#[test]
+fn a_types_detail_is_the_type_and_what_the_other_types_fields_it_uses_name() {
+    let mut server = File::new(
+        "src/server.rs",
+        "pub struct Server {\n    \
+             store: Store,\n\
+         }\n\
+         impl Server {\n    \
+             pub fn run(&self) {\n        \
+                 self.store.inner;\n    \
+             }\n\
+         }",
+    );
+    server.define(&rust("server/Server#"), kind::STRUCT, 0, "Server", (0, 2));
+    server.define(
+        &rust("server/Server#store."),
+        kind::FIELD,
+        1,
+        "store",
+        (1, 1),
+    );
+    server.refer(&rust("store/Store#"), 1, "Store");
+    server.define(
+        &rust("server/impl#[Server]run()."),
+        kind::METHOD,
+        4,
+        "run",
+        (4, 6),
+    );
+    server.refer(&rust("server/Server#store."), 5, "store");
+    server.refer(&rust("store/Store#inner."), 5, "inner");
+    let mut store = File::new(
+        "src/store.rs",
+        "pub struct Store {\n    inner: Inner,\n}\npub struct Inner {}",
+    );
+    store.define(&rust("store/Store#"), kind::STRUCT, 0, "Store", (0, 2));
+    store.define(&rust("store/Store#inner."), kind::FIELD, 1, "inner", (1, 1));
+    store.refer(&rust("store/Inner#"), 1, "Inner");
+    store.define(&rust("store/Inner#"), kind::STRUCT, 3, "Inner", (3, 3));
+    let map = generated(APP, &index(&[server, store]));
+
+    let detail = map.detail("app/server/Server").unwrap();
+    assert_eq!(detail.ty, &map.types["app/server/Server"]);
+    // Its own field tells what it names itself.
+    let named: Vec<(&str, &[String])> = detail.to.into_iter().collect();
+    assert_eq!(
+        named,
+        [("app/store/Store.inner", &["app/store/Inner".to_owned()][..])]
+    );
+    assert!(map.detail("app/store/Store").unwrap().to.is_empty());
+    assert_eq!(map.detail("app/server/Nothing"), None);
+}
+
 /// Boxes `a` to `d`, each a module with a function that calls the
 /// others' as often as `calls` says, from the first to the second.
 fn meeting(calls: &[(&str, &str, usize)]) -> (Index, BTreeMap<String, String>) {

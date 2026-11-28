@@ -260,15 +260,16 @@ pub enum Internal {
         key: u64,
         answer: oneshot::Sender<Option<PathBuf>>,
     },
-    /// The map named `name`, or the first, of the project `of` names, as
-    /// JSON, as the window's Map page is told it, for the phone's, drawn
-    /// again after a failed index when it says `again`, told on `answer`,
-    /// or nothing of a chat or a project there is none of (see
-    /// [`crate::map::Maps::told`]).
+    /// The `part` the phone's Map page asks for of the map named `name`,
+    /// or the first, of the project `of` names, as JSON, as the window's
+    /// Map page is told it, drawn again after a failed index when it says
+    /// `again`, told on `answer`, or nothing of a chat or a project there
+    /// is none of (see [`crate::map::Maps::told`]).
     Map {
         of: MapOf,
         name: Option<String>,
         again: bool,
+        part: crate::map::Part,
         answer: oneshot::Sender<Option<String>>,
     },
     /// How the chats stand, as coxd lists them, and what the agent of
@@ -2030,19 +2031,27 @@ impl Daemon {
                 folder,
                 name,
                 again,
-            } => self.tell_map(id, folder, name, again),
+                part,
+            } => self.tell_map(id, folder, name, again, part),
         }
     }
 
-    /// Tells the window the map of the project in `folder` named `name`,
-    /// as it asked for it as `id`, once it is drawn, apart from the
-    /// daemon's loop, as drawing it reads the indexes and asks Git (see
-    /// [`crate::map::Maps::told`]).
-    fn tell_map(&self, id: u64, folder: PathBuf, name: Option<String>, again: bool) {
+    /// Tells the window the `part` it asked for, as `id`, of the map of
+    /// the project in `folder` named `name`, once it is drawn, apart from
+    /// the daemon's loop, as drawing it reads the indexes and asks Git
+    /// (see [`crate::map::Maps::told`]).
+    fn tell_map(
+        &self,
+        id: u64,
+        folder: PathBuf,
+        name: Option<String>,
+        again: bool,
+        part: crate::map::Part,
+    ) {
         let Some(window) = self.window.clone() else {
             return;
         };
-        let drawn = self.map_json(folder, name, again);
+        let drawn = self.map_json(folder, name, again, part);
         tokio::task::spawn_local(async move {
             let told = drawn.await;
             let _ = window.send(FromDaemon::Map { id, told });
@@ -2057,6 +2066,7 @@ impl Daemon {
         folder: PathBuf,
         name: Option<String>,
         again: bool,
+        part: crate::map::Part,
     ) -> impl Future<Output = String> + use<> {
         let failed =
             |why: String| serde_json::json!({ "state": "invalid", "problems": [why] }).to_string();
@@ -2065,9 +2075,11 @@ impl Daemon {
             let Some(maps) = maps else {
                 return failed("Cox has nowhere to keep the indexes of the code".to_owned());
             };
-            tokio::task::spawn_blocking(move || maps.told(&folder, name.as_deref(), again).json())
-                .await
-                .unwrap_or_else(|error| failed(format!("the map was not drawn: {error}")))
+            tokio::task::spawn_blocking(move || {
+                maps.told(&folder, name.as_deref(), again).json(&part)
+            })
+            .await
+            .unwrap_or_else(|error| failed(format!("the map was not drawn: {error}")))
         }
     }
 
@@ -2367,6 +2379,7 @@ impl Daemon {
                 of,
                 name,
                 again,
+                part,
                 answer,
             } => {
                 let folder = match of {
@@ -2381,7 +2394,7 @@ impl Daemon {
                     answer.send(None).ok();
                     return;
                 };
-                let drawn = self.map_json(folder, name, again);
+                let drawn = self.map_json(folder, name, again, part);
                 tokio::task::spawn_local(async move {
                     answer.send(Some(drawn.await)).ok();
                 });
@@ -4093,6 +4106,7 @@ mod tests {
                 of,
                 name: name.map(str::to_owned),
                 again: false,
+                part: crate::map::Part::default(),
                 answer,
             });
             told.await.unwrap()

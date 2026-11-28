@@ -17,9 +17,11 @@
 //!   boxes, and the names of the project's other maps (see
 //!   [`crate::stage::map::told`]); `cox://api/map`, its first map; and
 //!   `cox://api/map/again/<name>`, the map, making again the indexes that
-//!   failed, which only a plugin's own `fetch` has done. Asked with
-//!   `?seen=<tag>`, the tag of the map the page has, it leaves the map
-//!   out while it is the same (see [`coxd::map::since`]).
+//!   failed, which only a plugin's own `fetch` has done. The map comes
+//!   without its types' details: asked with `?detail=<id>`, it tells
+//!   the detail of the type of that id alone. Asked with `?seen=<tag>`,
+//!   the tag of the map the page has, it leaves the map out while it is
+//!   the same (see [`coxd::map::Part`]).
 //! - `cox://api/wiki`: the human's wiki, its pages, each with what it
 //!   links to, what links to it, where it was used, and what is wrong
 //!   with it; and `cox://api/wiki/<page>`, a page, with its text as HTML,
@@ -86,7 +88,6 @@
 //! A plugin opens a file on a tab of the stage by going to
 //! `cox://open/<path>#L<line>`, as the Map plugin does for a box's code.
 
-use std::borrow::Cow;
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
@@ -356,8 +357,9 @@ impl Plugins {
 
     /// The map `cox://api/map/<rest>` asks for, as coxd draws it (see
     /// [`map::told`]), without the map itself when `query` gives the tag
-    /// of the map the page has, `seen=<tag>`, and it is the same (see
-    /// [`coxd::map::since`]).
+    /// of the map the page has, `seen=<tag>`, and it is the same; or the
+    /// detail of the type `query` names, `detail=<id>` (see
+    /// [`coxd::map::Part`]).
     fn map(&self, rest: &str, query: &str) -> Option<Resource> {
         let (again, name) = match rest.strip_prefix("again/") {
             Some(name) => (true, name),
@@ -365,15 +367,19 @@ impl Plugins {
             None => return None,
         };
         let name = (!name.is_empty()).then(|| percent_decoded(name));
-        let told = map::told(&self.root, name.as_deref(), again);
-        let seen = query.split('&').find_map(|pair| pair.strip_prefix("seen="));
-        let body = match coxd::map::since(&told, seen) {
-            Cow::Borrowed(_) => told,
-            Cow::Owned(rest) => rest,
+        let asked = |name: &str| {
+            url::form_urlencoded::parse(query.as_bytes())
+                .find_map(|(one, value)| (one == name).then(|| value.into_owned()))
+        };
+        let part = match asked("detail") {
+            Some(id) => coxd::map::Part::Type(id),
+            None => coxd::map::Part::Outline {
+                seen: asked("seen"),
+            },
         };
         Some(Resource {
             mime: "application/json".to_owned(),
-            body: body.into_bytes(),
+            body: map::told(&self.root, name.as_deref(), again, part).into_bytes(),
         })
     }
 
@@ -807,6 +813,7 @@ mod tests {
                     "folder": ask.folder,
                     "name": ask.name,
                     "again": ask.again,
+                    "part": ask.part,
                 });
                 let _ = ask.answer.send(told.to_string());
             }
@@ -834,6 +841,12 @@ mod tests {
         assert_eq!(json["name"], "use");
         assert_eq!(json["again"], true);
         assert_eq!(asked("cox://api/map/a/b", Asker::Plugin), None);
+        // The part of the map the page asks for.
+        assert_eq!(json["part"]["outline"]["seen"], serde_json::Value::Null);
+        let json = asked("cox://api/map/use?seen=1f", Asker::Anyone).unwrap();
+        assert_eq!(json["part"]["outline"]["seen"], "1f");
+        let json = asked("cox://api/map?detail=my+shop%2FCart", Asker::Anyone).unwrap();
+        assert_eq!(json["part"]["type"], "my shop/Cart");
     }
 
     #[test]

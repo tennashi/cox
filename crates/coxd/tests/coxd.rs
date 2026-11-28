@@ -342,6 +342,7 @@ fn what_the_window_and_coxd_say_reads_back_as_it_was() {
         folder: PathBuf::from("/work"),
         name: Some("use".to_owned()),
         again: true,
+        part: coxd::map::Part::Type("cox/Chat".to_owned()),
     };
     let line = serde_json::to_string(&asked).unwrap();
     assert_eq!(serde_json::from_str::<ToDaemon>(&line).unwrap(), asked);
@@ -380,6 +381,7 @@ fn a_window_is_told_the_map_it_asks_for() {
         folder: project,
         name: None,
         again: false,
+        part: coxd::map::Part::default(),
     });
     let told = loop {
         if let FromDaemon::Map { id: 7, told } =

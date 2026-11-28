@@ -760,6 +760,7 @@ impl Workspace {
             folder: ask.folder,
             name: ask.name,
             again: ask.again,
+            part: ask.part,
         });
     }
 

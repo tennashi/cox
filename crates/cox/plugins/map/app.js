@@ -29,6 +29,10 @@
 // a few hundred megabytes of it each, so that the map read whole every
 // few seconds filled the page's memory by gigabytes.
 //
+// The map comes without its types' details, most of those megabytes:
+// the detail of a type is read as the type is chosen, from the same
+// address, asked with `detail=<id>` (see detail.js).
+//
 // The page draws from the JSON alone: on the phone, where nothing else
 // of Cox's is there, it is the same, but for the JSON's address. On the
 // stage, a file of the code opens on a tab of its own; on the phone, its
@@ -52,7 +56,7 @@ import {
   whenElsewhere,
   whenStill,
 } from "./canvas.js";
-import { chosenFunction, jump, setTypes } from "./detail.js";
+import { chosenFunction, jump, ownerOf, setTypes } from "./detail.js";
 import { setDrift, show as showDrift } from "./drift.js";
 
 // Where the map's JSON is: on the stage, Cox's own address; elsewhere,
@@ -193,15 +197,28 @@ function parsed(hash) {
 /// The map the page is to show: the one the hash names, or else the
 /// project's first.
 const mapAsked = () => parsed(location.hash).map;
-const address = (again) => {
-  const name = mapAsked() ?? (again ? told?.name : null);
+// Where the map named `name`, or the project's first, is asked `asks`,
+// the names and values of a query, making its failed indexes again when
+// `again`.
+const address = (name, asks, again = false) => {
   const path = name ? `${SOURCE}/${again ? "again/" : ""}${encodeURIComponent(name)}` : SOURCE;
-  // Another map's tag is not this one's: coxd tells all of it.
   const query = new URLSearchParams(QUERY);
-  if (tag) query.set("seen", tag);
+  for (const [key, value] of Object.entries(asks)) query.set(key, value);
   const asked = query.toString();
   return asked ? `${path}?${asked}` : path;
 };
+
+// Reads the detail of the type `id` of the map drawn, or nothing when it
+// does not read or the map has no such type.
+async function detail(id) {
+  try {
+    const response = await fetch(address(told?.name, { detail: id }));
+    const json = await response.json();
+    return json.type ? json : null;
+  } catch {
+    return null;
+  }
+}
 
 // How many times the page asked for the map: only the last ask's answer
 // is drawn.
@@ -213,7 +230,9 @@ async function load(again = false) {
   const map = mapAsked();
   let text;
   try {
-    const response = await fetch(address(again));
+    // Another map's tag is not this one's: coxd tells all of it.
+    const name = map ?? (again ? told?.name : null);
+    const response = await fetch(address(name, tag ? { seen: tag } : {}, again));
     text = await response.text();
   } catch (error) {
     text = JSON.stringify({ state: "unanswered", problems: [String(error)] });
@@ -266,12 +285,10 @@ function goWhereNow(at) {
   let id = last;
   let fn = null;
   if (last && !map.nodes[last]) {
-    const sep = last.lastIndexOf("::");
-    const ty = sep < 0 ? null : map.types[last.slice(0, sep)];
-    if (ty && ty.functions.some((f) => f.key === last)) {
-      id = ty.id;
-      fn = last;
-    } else id = null;
+    // A function, by its key: its type is shown, and it once the type's
+    // detail is read.
+    id = last.includes("::") ? ownerOf(last) : null;
+    if (id) fn = last;
   }
   // What is drawn may leave it out.
   if (id) reveal(id);
@@ -410,7 +427,7 @@ function shown(json) {
   const map = told.map;
   // Another map's drivers are not this one's.
   drawFor(was === told.name ? driver : null);
-  setTypes(map, told.root, onStage);
+  setTypes(map, tag, detail, told.root, onStage);
   setDrift(map, relative(told.file), told.state === "ready");
   layout();
   if (was !== told.name) {

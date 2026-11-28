@@ -1009,7 +1009,8 @@ impl Page {
     /// drawn again after a failed index when the path says `again/`
     /// before the name (see [`map_asked`]); without the map when the
     /// query gives the tag of the map the page has, `seen=<tag>`, and it
-    /// is the same (see [`crate::map::since`]).
+    /// is the same; or the detail of the type the query names,
+    /// `detail=<id>` (see [`crate::map::Part`]).
     async fn map(&self, request: &Request<Incoming>) -> Response<Body> {
         if !self.paired(request) {
             return answer(StatusCode::UNAUTHORIZED, TEXT, "Not paired");
@@ -1024,6 +1025,12 @@ impl Page {
                 Err((status, why)) => return answer(status, TEXT, why),
             },
         };
+        let part = match text_asked(request, "detail") {
+            Some(id) => crate::map::Part::Type(id),
+            None => crate::map::Part::Outline {
+                seen: text_asked(request, "seen"),
+            },
+        };
         let (asked, drawn) = tokio::sync::oneshot::channel();
         if self
             .internal
@@ -1031,6 +1038,7 @@ impl Page {
                 of,
                 name,
                 again,
+                part,
                 answer: asked,
             })
             .is_err()
@@ -1039,11 +1047,6 @@ impl Page {
         }
         let Ok(Some(told)) = drawn.await else {
             return answer(StatusCode::NOT_FOUND, TEXT, "No such chat or project");
-        };
-        let seen = text_asked(request, "seen");
-        let told = match crate::map::since(&told, seen.as_deref()) {
-            std::borrow::Cow::Borrowed(_) => told,
-            std::borrow::Cow::Owned(rest) => rest,
         };
         answer(StatusCode::OK, "application/json", told)
     }
@@ -3234,12 +3237,14 @@ mod tests {
                     of: MapOf::Chat(7),
                     name,
                     again: drawn_again,
+                    part,
                     answer,
                 }) = heard.recv().await
                 else {
                     panic!("coxd is not asked the map of the chat 7");
                 };
                 assert_eq!((name.as_deref(), drawn_again), (asked, again), "{path}");
+                assert_eq!(part, crate::map::Part::default(), "{path}");
                 answer.send(Some(r#"{"state":"none"}"#.to_owned())).unwrap();
                 let told = told.await.unwrap();
                 assert!(told.starts_with("HTTP/1.1 200"), "{path}: {told}");
@@ -3409,7 +3414,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn tells_a_phone_that_has_the_map_the_rest_alone() {
+    async fn asks_for_the_part_of_the_map_the_phone_asks_for() {
         let local = tokio::task::LocalSet::new();
         let test = local.run_until(async {
             let listener = listen(0).await.unwrap();
@@ -3425,25 +3430,32 @@ mod tests {
             let get = |path: &str| {
                 format!("GET {path} HTTP/1.1\r\nHost: x\r\n{cookie}Connection: close\r\n\r\n")
             };
-            let request = get("/map/api/map?kept=12&seen=0123456789abcdef");
-            let told = tokio::task::spawn_local(async move { ask(port, &request, "").await });
-            let Some(Internal::Key { number: 12, answer }) = heard.recv().await else {
-                panic!("coxd is not asked the key of the chat kept as 12");
-            };
-            answer.send(Some(7)).unwrap();
-            let Some(Internal::Map { answer, .. }) = heard.recv().await else {
-                panic!("coxd is not asked the map of the chat 7");
-            };
-            answer
-                .send(Some(
-                    r#"{"state":"ready","tag":"0123456789abcdef","map":{"nodes":{}}}"#.to_owned(),
-                ))
-                .unwrap();
-            let told = told.await.unwrap();
-            assert!(
-                told.ends_with(r#"{"state":"ready","tag":"0123456789abcdef"}"#),
-                "{told}"
-            );
+            for (query, asked) in [
+                (
+                    "seen=0123456789abcdef",
+                    crate::map::Part::Outline {
+                        seen: Some("0123456789abcdef".to_owned()),
+                    },
+                ),
+                (
+                    "detail=shop%2FCart",
+                    crate::map::Part::Type("shop/Cart".to_owned()),
+                ),
+            ] {
+                let request = get(&format!("/map/api/map?kept=12&{query}"));
+                let told = tokio::task::spawn_local(async move { ask(port, &request, "").await });
+                let Some(Internal::Key { number: 12, answer }) = heard.recv().await else {
+                    panic!("coxd is not asked the key of the chat kept as 12");
+                };
+                answer.send(Some(7)).unwrap();
+                let Some(Internal::Map { part, answer, .. }) = heard.recv().await else {
+                    panic!("coxd is not asked the map of the chat 7");
+                };
+                assert_eq!(part, asked, "{query}");
+                answer.send(Some(r#"{"tag":"0123"}"#.to_owned())).unwrap();
+                let told = told.await.unwrap();
+                assert!(told.ends_with(r#"{"tag":"0123"}"#), "{told}");
+            }
         });
         tokio::time::timeout(Duration::from_secs(30), test)
             .await

@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::Duration;
 
+use coxd::map::Part;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
 /// How long a page waits for coxd to draw a map: reading the indexes of
@@ -18,12 +19,14 @@ pub const PATIENCE: Duration = Duration::from_secs(60);
 
 /// A map a page asks coxd for, through the window: the project's
 /// folder, the map's name, or none for its first, whether to make again
-/// the indexes that failed, and where the JSON coxd answers goes.
+/// the indexes that failed, the part of it the page asks for, and where
+/// the JSON coxd answers goes.
 #[derive(Debug)]
 pub struct Ask {
     pub folder: PathBuf,
     pub name: Option<String>,
     pub again: bool,
+    pub part: Part,
     pub answer: std::sync::mpsc::Sender<String>,
 }
 
@@ -40,13 +43,13 @@ pub fn listen() -> UnboundedReceiver<Ask> {
     heard
 }
 
-/// The map of the project in `root` named `name`, or its first, as coxd
-/// draws it from the indexes of the project's code, as the JSON of
-/// [`coxd::map::Told`], making again the indexes that failed when
-/// `again`. When coxd does not answer, the JSON says so, as
-/// `{"state": "unanswered", "problems": [<why>]}`.
+/// The `part` a page asks for of the map of the project in `root` named
+/// `name`, or its first, as coxd draws it from the indexes of the
+/// project's code, as the JSON of [`coxd::map::Told`], making again the
+/// indexes that failed when `again`. When coxd does not answer, the JSON
+/// says so, as `{"state": "unanswered", "problems": [<why>]}`.
 #[must_use]
-pub fn told(root: &Path, name: Option<&str>, again: bool) -> String {
+pub fn told(root: &Path, name: Option<&str>, again: bool, part: Part) -> String {
     let unanswered =
         |why: &str| serde_json::json!({ "state": "unanswered", "problems": [why] }).to_string();
     let (answer, answered) = std::sync::mpsc::channel();
@@ -54,6 +57,7 @@ pub fn told(root: &Path, name: Option<&str>, again: bool) -> String {
         folder: root.to_owned(),
         name: name.map(str::to_owned),
         again,
+        part,
         answer,
     };
     let asked = ASKS

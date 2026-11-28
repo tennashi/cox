@@ -8,6 +8,10 @@
 // wherever it is, goes to it. In a map with drivers, the type's head
 // names the drivers that reach it, whichever one's slice is drawn. On a
 // narrow screen, all of it is in a drawer from below.
+//
+// The map comes without its types' details, megabytes of a large
+// project's: the detail of a type is read as the type is chosen, and
+// kept while the map is the same.
 
 import { ICON } from "./icons.js";
 import { afterRender, draw, esc, fitAbove, fitAll, focus, goTo, moving, node, placed, render, view, whenStill } from "./canvas.js";
@@ -16,23 +20,36 @@ const dt = document.getElementById("dt");
 const fl = document.getElementById("fl");
 
 let types = {};
-let functions = {};
-let fields = {};
+// The details read, by their type's id: each with the tag of the map it
+// was asked of, its type, and what the fields of other types its
+// functions use name, by the field's key.
+const details = new Map();
+// Those being read, by their type's id, and those that did not read,
+// which are read again once their type is chosen again.
+const reading = new Map();
+const failed = new Set();
+// The tag of the map, and what reads a type's detail of it.
+let tag = null;
+let read = async () => null;
 // The names of the drivers whose slices show each type, in the map's
 // order: empty for a map with no drivers.
 let reachedFrom = {};
 // Where a file opens on a tab of the stage, where there is one.
 let opens = null;
 
-/// Reads the types of `map` for their detail, with the files of the
-/// project in `root` opening on the stage when `link` says they can.
-export function setTypes(map, root, link) {
+/// Reads the types of `map`, tagged `of`, whose details `reader` reads,
+/// each by its type's id, with the files of the project in `root`
+/// opening on the stage when `link` says they can.
+export function setTypes(map, of, reader, root, link) {
   types = map.types;
-  functions = {};
-  fields = {};
-  for (const t of Object.values(types)) {
-    for (const f of t.functions) functions[f.key] = { t, f };
-    for (const f of t.fields) fields[f.key] = { t, f };
+  read = reader;
+  if (of !== tag) {
+    // Another map's details are not this one's: the one shown stays
+    // until it is read again.
+    tag = of;
+    reading.clear();
+    failed.clear();
+    for (const id of [...details.keys()]) if (id !== shownFor) details.delete(id);
   }
   reachedFrom = {};
   for (const slice of map.slices ?? []) {
@@ -41,6 +58,55 @@ export function setTypes(map, root, link) {
   }
   opens = link ? (file, line) => `cox://open${root}/${file}#L${line}` : null;
   stale = true;
+}
+
+/// The type whose member `key` is: a member's key is its type's id, `::`
+/// or `.`, and its name.
+export function ownerOf(key) {
+  for (let at = key.length; at > 0; ) {
+    at = Math.max(key.lastIndexOf("::", at - 1), key.lastIndexOf(".", at - 1));
+    if (at > 0 && types[key.slice(0, at)]) return key.slice(0, at);
+  }
+  return null;
+}
+
+// The detail of the type `id` as it was read last, if it was; read again
+// when it is of a map the page has no more.
+function detailOf(id) {
+  const detail = details.get(id);
+  if (detail?.tag !== tag && !failed.has(id)) want(id);
+  return detail ?? null;
+}
+
+// Reads the detail of the type `id` of the map as it is now, once however
+// often it is asked for meanwhile, and draws it if its type is chosen
+// still. Answers it, or nothing when it could not be read.
+function want(id) {
+  if (details.get(id)?.tag === tag) return Promise.resolve(details.get(id));
+  if (reading.has(id)) return reading.get(id);
+  const of = tag;
+  const asked = read(id).then((detail) => {
+    // Read of a map the page has left meanwhile, it is no longer asked for.
+    if (of !== tag) return null;
+    reading.delete(id);
+    if (detail) details.set(id, { tag: of, type: detail.type, to: detail.to ?? {}, text: JSON.stringify([detail.type, detail.to]) });
+    else failed.add(id);
+    whenStill(() => {
+      if (view.sel !== id) return;
+      stale = true;
+      render();
+    });
+    return detail ? details.get(id) : null;
+  });
+  reading.set(id, asked);
+  return asked;
+}
+
+// The function keyed `key` and its type, once its type's detail is read.
+function functionOf(key) {
+  const detail = details.get(ownerOf(key));
+  const f = detail?.type.functions.find((one) => one.key === key);
+  return f ? { detail, t: detail.type, f } : null;
 }
 
 const narrow = () => matchMedia("(max-width:700px)").matches;
@@ -57,7 +123,7 @@ function place(file, line) {
 
 // A function's name, which goes to it when it is one of the map's.
 const fnSpan = (key, shown) =>
-  key && functions[key] ? `<span class="f jump" data-jump="${esc(key)}">${esc(shown)}</span>` : `<span class="f">${esc(shown)}</span>`;
+  key && ownerOf(key) ? `<span class="f jump" data-jump="${esc(key)}">${esc(shown)}</span>` : `<span class="f">${esc(shown)}</span>`;
 
 const chip = (nd, self) => (nd && nd !== self ? `<span class="chip">${esc(node(nd).name)}</span>` : "");
 
@@ -168,7 +234,9 @@ function panel() {
   // The map read again with this type as it was: the detail stays as the
   // human left it.
   const reached = (id && reachedFrom[id]) || [];
-  const from = id ? `${narrow()}|${reached.join()}|${JSON.stringify(types[id])}` : null;
+  if (id !== shownFor) failed.delete(id);
+  const detail = id ? detailOf(id) : null;
+  const from = id ? `${narrow()}|${reached.join()}|${JSON.stringify(types[id])}|${detail?.text ?? failed.has(id)}` : null;
   if (id === shownFor && from === shownFrom) {
     stale = false;
     return;
@@ -198,20 +266,29 @@ function panel() {
     if (!id) dt.classList.remove("full");
   }
   if (!id) return;
-  const t = types[id];
+  const head = (t) =>
+    `<div class="grip"></div><div class="hd"><div class="ttl"><span class="ic"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="1.6" stroke-linecap="round">${ICON.braces}</svg></span><b>${esc(t.name)}</b><span class="k">${esc(t.kind)}</span></div>
+  <div class="k where">${esc(t.id)} · ${place(t.file, t.line)}</div>${reached.length ? `<div class="reached">Reached from: ${esc(reached.join(", "))}</div>` : ""}${t.doc ? `<div class="doc">${esc(t.doc)}</div>` : ""}</div>`;
+  if (!detail) {
+    // Its detail is being read: what the map says of it meanwhile.
+    const says = failed.has(id) ? "Where it is used could not be read. Choose it again to read it." : "Reading where it is used…";
+    fl.innerHTML = "";
+    dt.innerHTML = `${head(types[id])}<div class="m open"><div class="us"><div class="none">${says}</div></div></div>`;
+    return;
+  }
+  const t = detail.type;
   const fieldsTitle = t.kind === "enum" ? "Variants" : "Fields";
   const fieldsHTML = members(t, fieldsTitle, t.fields, false);
   fl.innerHTML = narrow()
     ? ""
     : `<div class="fh"><b>${esc(t.name)}</b><span>${fieldsTitle} ${t.fields.length}</span></div>${members(t, "", t.fields, false).replace(/^<h4><\/h4>/, "")}<div class="rest" data-rest></div>`;
-  dt.innerHTML = `<div class="grip"></div><div class="hd"><div class="ttl"><span class="ic"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="1.6" stroke-linecap="round">${ICON.braces}</svg></span><b>${esc(t.name)}</b><span class="k">${esc(t.kind)}</span></div>
-  <div class="k where">${esc(t.id)} · ${place(t.file, t.line)}</div>${reached.length ? `<div class="reached">Reached from: ${esc(reached.join(", "))}</div>` : ""}${t.doc ? `<div class="doc">${esc(t.doc)}</div>` : ""}</div>
+  dt.innerHTML = `${head(t)}
   <h4>Where it is used</h4><div class="m open"><div class="us">${usesHTML(t.uses, id)}</div></div>
   ${narrow() ? fieldsHTML : ""}
   ${members(t, "Functions", t.functions, true)}`;
   // Drawn again, the function that was open stays open, and so do the
   // rows that were, where the panels were scrolled to.
-  if (again && functions[again]?.t.id === id) {
+  if (again && functionOf(again)?.t.id === id) {
     const row = [...dt.querySelectorAll(".m.fn")].find((x) => x.dataset.fn === again);
     row?.classList.add("open");
     focusFn(again);
@@ -251,7 +328,9 @@ function restore(kept) {
 // nodes it calls and whose fields it uses, and the nodes those fields'
 // types name. `nodes` are the other ends, lit as its type is.
 function reach(fn) {
-  const { t: own, f } = functions[fn];
+  const { detail, t: own, f } = functionOf(fn);
+  // What a field names: the type's own tell it themselves.
+  const named = (key) => own.fields.find((field) => field.key === key)?.to ?? detail.to[key] ?? [];
   const links = [];
   const nodes = new Set();
   const add = (from, to, as) => {
@@ -262,15 +341,16 @@ function reach(fn) {
   for (const u of f.uses) if (!u.test) add(u.node, own.id, "caller");
   for (const c of f.calls) {
     add(own.id, c.node, c.kind === "field" ? "field" : "call");
-    if (c.kind === "field" && c.key && fields[c.key]) for (const n of fields[c.key].f.to) add(c.node, n, "target");
+    if (c.kind === "field" && c.key) for (const n of named(c.key)) add(c.node, n, "target");
   }
   return { own: own.id, name: `${own.name}::${f.name}`, links, nodes };
 }
-const fieldsOf = (fn) => functions[fn].f.calls.filter((c) => c.kind === "field" && c.key).map((c) => ({ key: c.key, writes: c.writes }));
+const fieldsOf = (fn) => functionOf(fn).f.calls.filter((c) => c.kind === "field" && c.key).map((c) => ({ key: c.key, writes: c.writes }));
 
 // Opens the function `fn` in the detail, or none: the fields it uses
 // light on the left, and what it relates to is laid out on the map.
 function focusFn(fn) {
+  if (fn && !functionOf(fn)) fn = null;
   actFn = fn;
   const reached = fn ? reach(fn) : null;
   focus(reached && { own: reached.own, name: reached.name, links: reached.links }, ...(narrow() ? [] : [LEFT, RIGHT]));
@@ -304,10 +384,14 @@ export function jump(fn) {
 }
 
 function jumpNow(fn) {
-  const found = functions[fn];
-  if (!found) return;
-  const tid = found.t.id;
+  const tid = ownerOf(fn);
+  if (!tid) return;
   if (view.sel !== tid) showTypeNow(tid);
+  if (details.get(tid)?.tag !== tag) {
+    // Once its type's detail is read, if the page is still at the type.
+    want(tid).then((detail) => detail && whenStill(() => view.sel === tid && jumpNow(fn)));
+    return;
+  }
   dt.querySelectorAll(".m.fn.open").forEach((r) => r.classList.remove("open"));
   const row = [...dt.querySelectorAll(".m.fn")].find((x) => x.dataset.fn === fn);
   if (!row) return;
@@ -354,7 +438,7 @@ function onClick(e) {
   if (go) {
     const row = [...document.querySelectorAll(".pane .m.fld")].find((x) => x.dataset.f === go.dataset.go);
     if (row) row.scrollIntoView({ block: "center", behavior: "smooth" });
-    else if (fields[go.dataset.go]) showType(fields[go.dataset.go].t.id);
+    else if (ownerOf(go.dataset.go)) showType(ownerOf(go.dataset.go));
     return;
   }
   const m = e.target.closest(".m[data-m]");

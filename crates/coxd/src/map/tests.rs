@@ -628,7 +628,7 @@ fn a_map_that_does_not_read_or_is_not_there_is_told_why() {
         told.problems
     );
     assert_eq!(fake.runs(), []);
-    let json: serde_json::Value = serde_json::from_str(&told.json()).unwrap();
+    let json: serde_json::Value = serde_json::from_str(&told.json(&Part::default())).unwrap();
     assert_eq!(json["state"], "invalid");
 }
 
@@ -638,7 +638,7 @@ fn how_a_map_stands_is_told_as_json() {
     let root = TempDir::new();
     repository(&root);
     let told = fake.settled(&root);
-    let json: serde_json::Value = serde_json::from_str(&told.json()).unwrap();
+    let json: serde_json::Value = serde_json::from_str(&told.json(&Part::default())).unwrap();
     assert_eq!(json["state"], "ready");
     assert_eq!(json["name"], "shop");
     assert_eq!(json["indexes"][0]["state"], "ready");
@@ -648,17 +648,43 @@ fn how_a_map_stands_is_told_as_json() {
 }
 
 #[test]
+fn a_page_is_told_the_map_without_its_types_details_and_each_as_it_asks() {
+    let fake = Fake::new();
+    let root = TempDir::new();
+    repository(&root);
+    let told = fake.settled(&root);
+    let json: serde_json::Value = serde_json::from_str(&told.json(&Part::default())).unwrap();
+    let cart = &json["map"]["types"]["shop/Cart"];
+    assert_eq!(cart["box"], "cart");
+    assert_eq!(cart["functions"], serde_json::Value::Null);
+    assert_eq!(cart["uses"], serde_json::Value::Null);
+
+    let detail = told.json(&Part::Type("shop/Cart".to_owned()));
+    let detail: serde_json::Value = serde_json::from_str(&detail).unwrap();
+    assert_eq!(detail["tag"], json["tag"]);
+    assert_eq!(detail["type"]["id"], "shop/Cart");
+    assert!(detail["type"]["functions"].is_array());
+    assert!(detail["to"].is_object());
+
+    let none = told.json(&Part::Type("shop/Nothing".to_owned()));
+    let none: serde_json::Value = serde_json::from_str(&none).unwrap();
+    assert_eq!(none, serde_json::json!({ "tag": json["tag"] }));
+}
+
+#[test]
 fn a_page_that_has_the_map_is_told_the_rest_alone() {
     let fake = Fake::new();
     let root = TempDir::new();
     repository(&root);
+    let seen = |tag: &str| Part::Outline {
+        seen: Some(tag.to_owned()),
+    };
     let mut told = fake.settled(&root);
-    let full = told.json();
+    let full = told.json(&Part::default());
     let json: serde_json::Value = serde_json::from_str(&full).unwrap();
     let tag = json["tag"].as_str().unwrap().to_owned();
     assert_eq!(tag.len(), 16);
-    assert_eq!(super::since(&full, None), full);
-    assert_eq!(super::since(&full, Some("0123456789abcdef")), full);
+    assert_eq!(told.json(&seen("0123456789abcdef")), full);
 
     // What changed in the code changes; the map does not.
     told.changed.insert(
@@ -669,9 +695,8 @@ fn a_page_that_has_the_map_is_told_the_rest_alone() {
             removed: 3,
         },
     );
-    let again = told.json();
-    let rest = super::since(&again, Some(&tag));
-    assert!(rest.len() < again.len() / 2, "{rest}");
+    let rest = told.json(&seen(&tag));
+    assert!(rest.len() < full.len() / 2, "{rest}");
     let rest: serde_json::Value = serde_json::from_str(&rest).unwrap();
     assert_eq!(rest["tag"], tag.as_str());
     assert_eq!(rest["map"], serde_json::Value::Null);
@@ -679,17 +704,27 @@ fn a_page_that_has_the_map_is_told_the_rest_alone() {
     assert_eq!(rest["state"], "ready");
     assert_eq!(rest["indexes"][0]["state"], "ready");
 
+    // The same map drawn again has the same tag.
+    assert_eq!(fake.settled(&root).tag.as_deref(), Some(tag.as_str()));
+
     // A map that changed is told whole, with its new tag.
-    told.map.as_mut().unwrap().types.clear();
-    let other = told.json();
-    assert_eq!(super::since(&other, Some(&tag)), other);
-    let other: serde_json::Value = serde_json::from_str(&other).unwrap();
-    assert_ne!(other["tag"], tag.as_str());
+    let renamed = VOCABULARY.replace(r#""name": "Cart""#, r#""name": "Basket""#);
+    std::fs::write(root.join("maps/shop.json"), renamed).unwrap();
+    let other = fake.settled(&root);
+    assert_ne!(other.tag.as_deref(), Some(tag.as_str()));
+    let other: serde_json::Value = serde_json::from_str(&other.json(&seen(&tag))).unwrap();
+    assert_eq!(other["map"]["nodes"]["cart"]["name"], "Basket");
+
+    // A type's detail, which the outline leaves out, changes the tag too.
+    let mut map = Generated::clone(told.map.as_ref().unwrap());
+    assert_eq!(super::tag_of(&map), tag);
+    map.types.get_mut("shop/Cart").unwrap().doc.push('!');
+    assert_ne!(super::tag_of(&map), tag);
 
     // No map, no tag: all of it.
     told.map = None;
-    let none = told.json();
-    assert_eq!(super::since(&none, Some(&tag)), none);
+    told.tag = None;
+    let none = told.json(&seen(&tag));
     assert!(!none.contains("\"tag\""));
 }
 
