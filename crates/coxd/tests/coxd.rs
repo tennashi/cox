@@ -81,6 +81,7 @@ fn run_keeping(
                 })
             },
             || Rc::new(NoAgents),
+            &coxd::telemetry::Telemetry::off(),
         )
     })
 }
@@ -370,6 +371,7 @@ fn a_window_is_told_the_map_it_asks_for() {
                 home,
                 || Rc::new(Store::in_memory().unwrap()),
                 || Rc::new(NoAgents),
+                &coxd::telemetry::Telemetry::off(),
             )
         })
     };

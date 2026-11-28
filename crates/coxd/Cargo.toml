@@ -85,6 +85,14 @@ flate2 = "1.1.10"
 tar = "0.4.46"
 bzip2 = "0.6.1"
 zip = { version = "9.3.0", default-features = false, features = ["deflate-flate2"] }
+# What coxd measures of itself, sent as OpenTelemetry metrics over
+# OTLP/HTTP, with ureq, when `settings.json` names where to: see
+# `src/telemetry.rs`.
+opentelemetry = { version = "0.33.1", default-features = false, features = ["metrics"] }
+opentelemetry_sdk = { version = "0.33.1", default-features = false, features = ["metrics"] }
+opentelemetry-otlp = { version = "0.33.1", default-features = false, features = ["metrics", "http-proto"] }
+opentelemetry-http = { version = "0.33.1", default-features = false }
+async-trait = "0.1.92"
 
 [dev-dependencies]
 # coxd's own integration tests share `testing` with the window's.
@@ -93,6 +101,9 @@ agent-client-protocol.workspace = true
 cox-git = { workspace = true, features = ["test-support"] }
 # Tests move the time a chat waits on forward, as for a stop.
 tokio = { workspace = true, features = ["test-util"] }
+# Tests read what coxd's telemetry sent, as an OTLP endpoint would.
+opentelemetry-proto = { version = "0.33.1", default-features = false, features = ["gen-tonic-messages", "metrics"] }
+prost = "0.14.4"
 
 [build-dependencies]
 # Reading coxd's sources for what a build of it is: see `build.rs`. The
