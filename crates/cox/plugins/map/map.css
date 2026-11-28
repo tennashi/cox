@@ -452,6 +452,11 @@ svg .mono {
   color: var(--accent);
   text-decoration-color: var(--accent);
 }
+.pane .reached {
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--dim);
+}
 .pane .doc {
   margin-top: 8px;
   color: var(--dim);
