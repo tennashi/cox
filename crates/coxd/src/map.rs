@@ -32,6 +32,7 @@ pub mod cache;
 pub mod index;
 pub mod indexers;
 mod jobs;
+mod mise;
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};

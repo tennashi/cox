@@ -176,7 +176,8 @@ fn borrow(code: &Code, indexer: &Indexer, members: &[String], copy: &Path) {
 
 /// Runs `indexer` with `command` in `copy`, on `members`, or on all of
 /// it when there are none, writing in `work`, until `stop` stops it, and
-/// answers the index it wrote, with each file's text from `copy`.
+/// answers the index it wrote, with each file's text from `copy`. The
+/// copy's mise config is trusted there as the checkout's is.
 fn indexed(
     code: &Code,
     (indexer, members): (&Indexer, &[String]),
@@ -216,6 +217,7 @@ fn indexed(
     });
     let mut run = Command::new(program);
     run.args(before).args(args).current_dir(copy);
+    super::mise::carry(&mut run, program, &code.checkout, copy);
     tracing::info!(indexer = %indexer.name, commit = %code.commit, "indexing {}", code.checkout.display());
     let ran = crate::process::run_stoppable(&mut run, DEADLINE, stop)
         .map_err(|error| format!("{program} does not start: {error}"))?;
