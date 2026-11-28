@@ -372,12 +372,14 @@ pub(crate) mod testing {
                     let mut body = vec![0; length];
                     reader.read_exact(&mut body).unwrap();
                     let path = head.split(' ').nth(1).unwrap_or_default().to_owned();
-                    let _ = stream.write_all(
-                        b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
-                    );
+                    // Kept before it is answered: the sender goes on as soon
+                    // as it has the answer, and reads what was kept.
                     if to.send((path, body)).is_err() {
                         break;
                     }
+                    let _ = stream.write_all(
+                        b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                    );
                 }
             });
             Self { port, posted }
