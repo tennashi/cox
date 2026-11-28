@@ -439,6 +439,34 @@ mod tests {
     }
 
     #[test]
+    fn the_documentation_lists_every_instrument_with_its_unit_and_labels() {
+        let documentation = include_str!("../../../../docs/configuration.md");
+        let listed: Vec<_> = documentation
+            .lines()
+            .filter(|line| line.starts_with("| `cox."))
+            .collect();
+        assert_eq!(listed.len(), Instrument::ALL.len());
+        for instrument in Instrument::ALL {
+            let spec = instrument.spec();
+            let labels: Vec<_> = spec
+                .labels
+                .iter()
+                .map(|label| format!("`{}`", label.key))
+                .collect();
+            let labels = if labels.is_empty() {
+                "none".to_owned()
+            } else {
+                labels.join(", ")
+            };
+            let row = format!("| `{}` | {} | {labels} |", spec.name, spec.unit.name());
+            assert!(
+                listed.iter().any(|line| line.starts_with(&row)),
+                "docs/configuration.md does not list {row}"
+            );
+        }
+    }
+
+    #[test]
     fn a_unit_takes_only_what_a_measurement_can_be() {
         assert!(Unit::Seconds.takes(0.0));
         assert!(Unit::Seconds.takes(1.5));
