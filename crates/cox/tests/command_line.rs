@@ -266,7 +266,10 @@ fn the_daemon_ends_well_once_its_socket_is_taken_away() {
 /// A port for the phone's page that no one listens on, nor on the two
 /// after it, where coxd relays to the phone and serves the sketches'
 /// mocks, below the ports the system hands out, and apart from those
-/// another test of these was given.
+/// another test of these was given. It asks by connecting: a socket that
+/// listened here, even for a moment, could pass to a `cox` another test
+/// starts just then, as macOS marks a socket to close in a child only
+/// after it is made, and hold the port for as long as that `cox` runs.
 fn free_port() -> u16 {
     static GIVEN: std::sync::Mutex<Vec<u16>> = std::sync::Mutex::new(Vec::new());
     let mut given = GIVEN.lock().unwrap();
@@ -275,7 +278,8 @@ fn free_port() -> u16 {
         .step_by(3)
         .find(|&port| {
             given.iter().all(|other| other.abs_diff(port) > 2)
-                && (port..port + 3).all(|port| TcpListener::bind(("127.0.0.1", port)).is_ok())
+                && (port..port + 3)
+                    .all(|port| std::net::TcpStream::connect(("127.0.0.1", port)).is_err())
         })
         .inspect(|&port| given.push(port))
         .expect("a free port")
