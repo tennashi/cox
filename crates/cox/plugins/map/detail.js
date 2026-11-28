@@ -5,8 +5,9 @@
 // opened lights the fields it uses on the left, the others folding into
 // one row, the uses of each by that function, and on the map takes what
 // it relates to in the open box to an area at its top. A function's name,
-// wherever it is, goes to it. On a narrow screen, all of it is in a
-// drawer from below.
+// wherever it is, goes to it. In a map with drivers, the type's head
+// names the drivers that reach it, whichever one's slice is drawn. On a
+// narrow screen, all of it is in a drawer from below.
 
 import { ICON } from "./icons.js";
 import { afterRender, draw, esc, fitAbove, fitAll, focus, goTo, moving, node, placed, render, view, whenStill } from "./canvas.js";
@@ -17,6 +18,9 @@ const fl = document.getElementById("fl");
 let types = {};
 let functions = {};
 let fields = {};
+// The names of the drivers whose slices show each type, in the map's
+// order: empty for a map with no drivers.
+let reachedFrom = {};
 // Where a file opens on a tab of the stage, where there is one.
 let opens = null;
 
@@ -29,6 +33,11 @@ export function setTypes(map, root, link) {
   for (const t of Object.values(types)) {
     for (const f of t.functions) functions[f.key] = { t, f };
     for (const f of t.fields) fields[f.key] = { t, f };
+  }
+  reachedFrom = {};
+  for (const slice of map.slices ?? []) {
+    const name = map.nodes[slice.driver].name;
+    for (const level of Object.values(slice.levels)) for (const id in level.parts) if (id in types) (reachedFrom[id] ??= []).push(name);
   }
   opens = link ? (file, line) => `cox://open${root}/${file}#L${line}` : null;
   stale = true;
@@ -158,7 +167,8 @@ function panel() {
   if (id === shownFor && !stale) return;
   // The map read again with this type as it was: the detail stays as the
   // human left it.
-  const from = id ? `${narrow()}|${JSON.stringify(types[id])}` : null;
+  const reached = (id && reachedFrom[id]) || [];
+  const from = id ? `${narrow()}|${reached.join()}|${JSON.stringify(types[id])}` : null;
   if (id === shownFor && from === shownFrom) {
     stale = false;
     return;
@@ -195,7 +205,7 @@ function panel() {
     ? ""
     : `<div class="fh"><b>${esc(t.name)}</b><span>${fieldsTitle} ${t.fields.length}</span></div>${members(t, "", t.fields, false).replace(/^<h4><\/h4>/, "")}<div class="rest" data-rest></div>`;
   dt.innerHTML = `<div class="grip"></div><div class="hd"><div class="ttl"><span class="ic"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="1.6" stroke-linecap="round">${ICON.braces}</svg></span><b>${esc(t.name)}</b><span class="k">${esc(t.kind)}</span></div>
-  <div class="k where">${esc(t.id)} · ${place(t.file, t.line)}</div>${t.doc ? `<div class="doc">${esc(t.doc)}</div>` : ""}</div>
+  <div class="k where">${esc(t.id)} · ${place(t.file, t.line)}</div>${reached.length ? `<div class="reached">Reached from: ${esc(reached.join(", "))}</div>` : ""}${t.doc ? `<div class="doc">${esc(t.doc)}</div>` : ""}</div>
   <h4>Where it is used</h4><div class="m open"><div class="us">${usesHTML(t.uses, id)}</div></div>
   ${narrow() ? fieldsHTML : ""}
   ${members(t, "Functions", t.functions, true)}`;
