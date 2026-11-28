@@ -225,7 +225,13 @@ const APP: &str = r#"{
 }"#;
 
 fn generated(vocabulary: &str, (index, texts): &(Index, BTreeMap<String, String>)) -> Generated {
-    generate(index, &Vocabulary::parse(vocabulary).unwrap(), "", texts)
+    generate(
+        index,
+        &Vocabulary::parse(vocabulary).unwrap(),
+        "",
+        &[],
+        texts,
+    )
 }
 
 fn drift_ids(map: &Generated) -> Vec<&str> {
@@ -1068,7 +1074,7 @@ fn a_repositorys_map_claims_files_from_the_repositorys_folder() {
     // the repository's map names them from the repository's.
     let (index, texts) = go_package("directories/m/");
     let vocabulary = Vocabulary::parse(GO_FILES).unwrap();
-    let map = generate(&index, &vocabulary, "directories/m/", &texts);
+    let map = generate(&index, &vocabulary, "directories/m/", &[], &texts);
     assert_eq!(map.types["example.com/m/pkg/B"].owner, "bee");
     assert_eq!(
         map.types["example.com/m/pkg/B"].file,
@@ -1081,13 +1087,37 @@ fn a_repositorys_map_claims_files_from_the_repositorys_folder() {
     assert_eq!(map.nodes["bee"].code.as_deref(), Some("pkg/b.go"));
     assert_eq!(drift_ids(&map), ["claim-gone:web/"]);
     // From the project's folder, the claim is of no file there is.
-    let map = generate(&index, &vocabulary, "", &texts);
+    let map = generate(&index, &vocabulary, "", &[], &texts);
     assert_eq!(map.types["example.com/m/pkg/B"].owner, "pkg");
     assert_eq!(drift_ids(&map), ["claim-gone:pkg/b.go", "claim-gone:web/"]);
     // Nor is a file of another folder claimed from the repository's.
     let (index, texts) = go_package("directories/other/");
-    let map = generate(&index, &vocabulary, "directories/m/", &texts);
+    let map = generate(&index, &vocabulary, "directories/m/", &[], &texts);
     assert_eq!(map.types["example.com/m/pkg/B"].owner, "pkg");
+}
+
+#[test]
+fn a_claim_of_a_file_no_indexer_reads_is_of_a_file_the_code_has() {
+    // The commit has scripts and a workflow, which are in no index.
+    let (index, texts) = go_package("directories/m/");
+    let vocabulary = GO_FILES.replace(
+        r#""files": ["web/"]"#,
+        r#""files": ["web/", "scripts", ".github/workflows/ci.yml", "docs"]"#,
+    );
+    let vocabulary = Vocabulary::parse(&vocabulary).unwrap();
+    let tracked = [
+        "directories/m/.github/workflows/ci.yml",
+        "directories/m/scripts/deploy.sh",
+        "directories/m/scripts-old/run.sh",
+        "directories/other/docs/a.md",
+        "directories/other/web/index.html",
+    ]
+    .map(str::to_owned);
+    let map = generate(&index, &vocabulary, "directories/m/", &tracked, &texts);
+    // What no commit has is gone still, as is a file of another folder.
+    assert_eq!(drift_ids(&map), ["claim-gone:docs", "claim-gone:web/"]);
+    // A file of the index is there with none of them told.
+    assert_eq!(map.files["directories/m/pkg/b.go"], "bee");
 }
 
 #[test]

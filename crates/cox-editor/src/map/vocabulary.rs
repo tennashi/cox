@@ -109,10 +109,11 @@ pub struct Node {
     #[serde(default)]
     pub claims: Vec<String>,
     /// The files it owns, from the folder the map's [`super::MAPS_FOLDER`]
-    /// is in, the project's or a repository's, or folders of them, for
+    /// is in, the project's or a repository's, or folders of them: for
     /// code whose smallest module holds several files, as a package of
-    /// Go does: a file belongs to the box with the longest of these it is
-    /// or is in, before any claim of its module.
+    /// Go does, and for what no index reads, as scripts. A file belongs
+    /// to the box with the longest of these it is or is in, before any
+    /// claim of its module.
     #[serde(default)]
     pub files: Vec<String>,
     /// Whether it opens on the types of the code it owns. A box that

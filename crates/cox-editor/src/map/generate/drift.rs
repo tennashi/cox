@@ -99,7 +99,9 @@ fn name<'v>(map: &'v Map<'_, '_>, node: &'v str) -> &'v str {
         .map_or(node, |node| node.name.as_str())
 }
 
-/// The claims of modules and files the code no longer has.
+/// The claims of modules and files the code no longer has. A file the
+/// code has is one of the index, or one its commit has that no indexer
+/// reads, as a script, or what sets the code up to run.
 fn claims(map: &Map<'_, '_>) -> Vec<Drift> {
     let code = map.code;
     let modules: BTreeSet<&str> = code
@@ -128,10 +130,11 @@ fn claims(map: &Map<'_, '_>) -> Vec<Drift> {
         .into_iter()
         .filter(|&(claim, _, file)| {
             if file {
-                !code
-                    .documents
-                    .iter()
-                    .any(|document| map.claims_file(claim, document.path))
+                let indexed = code.documents.iter().map(|document| document.path);
+                let tracked = map.tracked.iter().map(String::as_str);
+                !indexed
+                    .chain(tracked)
+                    .any(|path| map.claims_file(claim, path))
             } else {
                 !modules.iter().any(|module| under(module, claim))
             }

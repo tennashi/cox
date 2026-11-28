@@ -87,16 +87,20 @@ impl Sources for BTreeMap<String, String> {
 /// The files `vocabulary` claims are from the folder `files_from` of the
 /// index's paths, with a `/` after it, as `directories/cox/` for a map a
 /// repository of the project keeps, or empty: a file outside it is none
-/// of theirs.
+/// of theirs. `tracked` are the files the code's commits have, by their
+/// paths as the index's are, among them those no indexer reads, as a
+/// script: a claim of one of them is of a file the code has.
 #[must_use]
 pub fn generate(
     index: &Index,
     vocabulary: &Vocabulary,
     files_from: &str,
+    tracked: &[String],
     sources: &(impl Sources + ?Sized),
 ) -> Generated {
     let code = Code::read(index, sources);
     let mut map = Map::new(&code, vocabulary, files_from);
+    map.tracked = tracked;
     map.find_types();
     map.attach_members();
     map.read_references();
@@ -164,6 +168,8 @@ struct Map<'c, 'a> {
     file_claims: Vec<(&'c str, &'c str)>,
     /// The folder the files claimed are from (see [`generate`]).
     files_from: &'c str,
+    /// The files the code's commits have (see [`generate`]).
+    tracked: &'c [String],
     /// The box that owns each module the code has, if one does.
     module_boxes: HashMap<&'c str, Option<&'c str>>,
     /// The node each node a level places is inside of.
@@ -211,6 +217,7 @@ impl<'c, 'a> Map<'c, 'a> {
             module_claims,
             file_claims,
             files_from,
+            tracked: &[],
             module_boxes: HashMap::new(),
             inside_of: vocabulary.inside_of(),
             types: Vec::new(),
