@@ -139,13 +139,17 @@ fn open_window_asking(
 }
 
 /// The window of Cox started again, keeping its chats in `store`, its
-/// agents added to `agents`, as a workspace the window does not show.
+/// agents added to `agents`, as a workspace the window does not show,
+/// once the daemon before it has kept all the window told it, such as
+/// the chat shown last, which the one started reads from `store`.
 fn start_again(
     cx: &mut VisualTestContext,
     home: PathBuf,
     store: &KeptStore,
     agents: &Agents,
 ) -> Entity<Workspace> {
+    let before = root(cx);
+    settled(cx, &before);
     let fakes = Fakes {
         agents: agents.clone(),
         ..Fakes::default()
