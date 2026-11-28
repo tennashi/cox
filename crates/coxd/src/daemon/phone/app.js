@@ -539,18 +539,15 @@ function resolvedGroup(project, done) {
 }
 
 // The map of the project at `index`, on its shelf: a button that opens it
-// over the list. coxd tells a map by a chat that works in the project, so
-// it is asked by one of the project's chats, one that is no sketch if
-// there is one, as a sketch works in a folder of its own; a project with
-// no chat kept has none to ask by, and no button.
+// over the list. It is asked by the project, not by one of its chats,
+// as a chat may work in a folder of its own, a sketch's or a worktree's,
+// whose map is of another commit than the project's.
 function projectMap(index) {
-  const rows = listing.chats.concat(listing.archived)
-    .filter((row) => row.project === index && row.kept !== null);
-  const by = rows.find((row) => !(row.setup && row.setup.sketch)) || rows[0];
-  if (!by || listing.projects[index].missing) return null;
+  const project = listing.projects[index];
+  if (project.id === null || project.missing) return null;
   return el("button", {
     type: "button", class: "map", "aria-label": `Map of ${projectName(index)}`,
-    onclick: () => openMap({}, by.kept),
+    onclick: () => openMap({}, `project=${project.id}`),
   }, icon("map", 16), "Map");
 }
 
@@ -1637,11 +1634,12 @@ function mapShownName(shown) {
 // Where the phone shows the Map page, beside its own, open where the
 // agent showed the map, as the window's stage opens it: the map's name and
 // `:`, unless the project's first, then the ids of the nodes from the top
-// down, each encoded; of the project of the chat kept as `kept`.
-function mapAddress(shown, kept) {
+// down, each encoded; of what `whose` names, in the page's query: where
+// a chat works, as `kept=<n>`, or a project, as `project=<n>`.
+function mapAddress(shown, whose) {
   const at = (shown.at || []).map(encodeURIComponent).join("/");
   const hash = shown.map ? `${encodeURIComponent(shown.map)}:${at}` : at;
-  return `/map/?kept=${kept}#${hash}`;
+  return `/map/?${whose}#${hash}`;
 }
 
 // A map of the project the agent showed on the stage: a row that opens it
@@ -1659,16 +1657,16 @@ function mapShownRow(shown) {
 // map, as it is drawn now: it is the window's own page, read beside the
 // phone's, whose taps, drags and pinches move through the map. With
 // nothing shown, as from the head's button or a project's on the list, it
-// opens at the project's first map, of the project of the chat kept as
-// `kept`: the chat shown, unless given.
-function openMap(shown, kept = chat.kept) {
+// opens at the first map, of what `whose` names (see `mapAddress`): where
+// the chat shown works, unless given.
+function openMap(shown, whose = `kept=${chat.kept}`) {
   const close = () => { viewer.remove(); document.body.classList.remove("trying"); };
   const name = mapShownName(shown);
   const viewer = el("div", { id: "map", role: "dialog", "aria-label": name },
     el("div", { class: "bar" },
       el("button", { type: "button", class: "icon-button", "aria-label": chat ? "Back to the chat" : "Back to the chats", onclick: close }, "‹"),
       el("span", { class: "page" }, name)),
-    el("iframe", { src: mapAddress(shown, kept), title: name }));
+    el("iframe", { src: mapAddress(shown, whose), title: name }));
   document.getElementById("map")?.remove();
   document.body.classList.add("trying");
   document.body.append(viewer);

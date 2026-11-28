@@ -68,7 +68,8 @@
 //! `cox://api/map` (see [`map_asked`]). The human opens the same page
 //! whenever they will, at the project's first map: from the head of a
 //! chat of a project, and from a project's shelf on the list of chats,
-//! which asks by one of the project's chats.
+//! which asks by the project, `?project=<number>`, for the map of the
+//! project's own folder, not of a worktree one of its chats works in.
 //!
 //! What coxd answers the phone as text, as the page's files and the map,
 //! megabytes of JSON, it packs with gzip for a browser that reads it so
@@ -92,7 +93,7 @@ use std::time::Duration;
 
 use anyhow::Context as _;
 use bytes::Bytes;
-use cox_core::store::ChatId;
+use cox_core::store::{ChatId, ProjectId};
 use http_body::Frame;
 use hyper::body::Incoming;
 use hyper::header::{self, HeaderValue};
@@ -106,7 +107,7 @@ pub(crate) mod tailnet;
 
 use super::push::{self, Notice, Pushed, Pushes, Subscription};
 use super::wire::{FromDaemon, ToDaemon};
-use super::{Internal, Sketching};
+use super::{Internal, MapOf, Sketching};
 use crate::activity;
 use crate::chat::conversation::{Content, Entry};
 use crate::storage::{self, Kept};
@@ -1001,8 +1002,9 @@ impl Page {
         }
     }
 
-    /// The map of the project where the chat `request` names works,
-    /// `?kept=<number>`, as JSON, as the window's Map page is told it:
+    /// The map of the project `request` names, `?project=<number>`, or
+    /// of where the chat it names works, `?kept=<number>`, as JSON, as
+    /// the window's Map page is told it:
     /// the project's first, or the one the path names after `api/map/`,
     /// drawn again after a failed index when the path says `again/`
     /// before the name (see [`map_asked`]); without the map when the
@@ -1015,15 +1017,18 @@ impl Page {
         let Some((name, again)) = map_asked(request.uri().path()) else {
             return answer(StatusCode::NOT_FOUND, TEXT, "Not found");
         };
-        let key = match self.chat_named(request).await {
-            Ok(key) => key,
-            Err((status, why)) => return answer(status, TEXT, why),
+        let of = match project_asked(request) {
+            Some(project) => MapOf::Project(project),
+            None => match self.chat_named(request).await {
+                Ok(key) => MapOf::Chat(key),
+                Err((status, why)) => return answer(status, TEXT, why),
+            },
         };
         let (asked, drawn) = tokio::sync::oneshot::channel();
         if self
             .internal
             .send(Internal::Map {
-                key,
+                of,
                 name,
                 again,
                 answer: asked,
@@ -1033,7 +1038,7 @@ impl Page {
             return answer(StatusCode::SERVICE_UNAVAILABLE, TEXT, "coxd is stopping");
         }
         let Ok(Some(told)) = drawn.await else {
-            return answer(StatusCode::NOT_FOUND, TEXT, "No such chat");
+            return answer(StatusCode::NOT_FOUND, TEXT, "No such chat or project");
         };
         let seen = text_asked(request, "seen");
         let told = match crate::map::since(&told, seen.as_deref()) {
@@ -1528,6 +1533,12 @@ fn chat_asked(request: &Request<Incoming>) -> Option<i64> {
     url::form_urlencoded::parse(query.as_bytes())
         .find_map(|(name, value)| (name == "kept").then(|| value.parse::<i64>().ok()))
         .flatten()
+}
+
+/// The project the query of `request` names, `project=<number>`, by the
+/// number it is kept by, as the page lists it.
+fn project_asked(request: &Request<Incoming>) -> Option<ProjectId> {
+    serde_json::from_str(&text_asked(request, "project")?).ok()
 }
 
 /// The place in a conversation the query of `request` names, `at=<n>`.
@@ -3220,7 +3231,7 @@ mod tests {
                 };
                 answer.send(Some(7)).unwrap();
                 let Some(Internal::Map {
-                    key: 7,
+                    of: MapOf::Chat(7),
                     name,
                     again: drawn_again,
                     answer,
@@ -3341,6 +3352,56 @@ mod tests {
             assert!(top.starts_with("HTTP/1.1 200"), "{top}");
             assert!(!top.contains("content-encoding"), "{top}");
             assert!(body.len() < PACKED_FROM);
+        });
+        tokio::time::timeout(Duration::from_secs(30), test)
+            .await
+            .expect("the page answers in time");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn asks_the_map_of_a_project_by_the_project_whatever_chat_is_named() {
+        let local = tokio::task::LocalSet::new();
+        let test = local.run_until(async {
+            let listener = listen(0).await.unwrap();
+            let port = listener.local_addr().unwrap().port();
+            let (internal, mut heard) = unbounded_channel();
+            tokio::task::spawn_local(serve(
+                listener,
+                Rc::new(Phones::new("secret".to_owned(), None)),
+                None,
+                internal,
+            ));
+            let cookie = "Cookie: cox_phone=secret\r\n";
+            let get = |path: &str| {
+                format!("GET {path} HTTP/1.1\r\nHost: x\r\n{cookie}Connection: close\r\n\r\n")
+            };
+            let request = get("/map/api/map/use?project=3&kept=12");
+            let told = tokio::task::spawn_local(async move { ask(port, &request, "").await });
+            let Some(Internal::Map {
+                of: MapOf::Project(project),
+                name,
+                answer,
+                ..
+            }) = heard.recv().await
+            else {
+                panic!("coxd is not asked the map of a project");
+            };
+            assert_eq!(project.to_string(), "3");
+            assert_eq!(name.as_deref(), Some("use"));
+            answer.send(Some(r#"{"state":"none"}"#.to_owned())).unwrap();
+            let told = told.await.unwrap();
+            assert!(told.starts_with("HTTP/1.1 200"), "{told}");
+            assert!(told.ends_with(r#"{"state":"none"}"#), "{told}");
+
+            let request = get("/map/api/map?project=4");
+            let gone = tokio::task::spawn_local(async move { ask(port, &request, "").await });
+            let Some(Internal::Map { answer, .. }) = heard.recv().await else {
+                panic!("coxd is not asked the map of a project");
+            };
+            answer.send(None).unwrap();
+            let gone = gone.await.unwrap();
+            assert!(gone.starts_with("HTTP/1.1 404"), "{gone}");
+            assert!(gone.ends_with("No such chat or project"), "{gone}");
         });
         tokio::time::timeout(Duration::from_secs(30), test)
             .await

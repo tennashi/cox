@@ -153,6 +153,15 @@ pub enum Sketching {
 /// and title.
 pub type Staged = (PathBuf, Vec<(String, String)>);
 
+/// Whose map the phone asks for: that of the folder a chat works in, by
+/// the chat's key, as its sketch's or its worktree's, or that of a
+/// project's own folder, whichever folders its chats work in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MapOf {
+    Chat(u64),
+    Project(ProjectId),
+}
+
 /// What the daemon's chats' tasks heard, marked with the chat's key and
 /// the generation of its agent.
 pub enum Internal {
@@ -251,13 +260,13 @@ pub enum Internal {
         key: u64,
         answer: oneshot::Sender<Option<PathBuf>>,
     },
-    /// The map named `name`, or the first, of the project where the chat
-    /// `key` works, as JSON, as the window's Map page is told it, for the
-    /// phone's, drawn again after a failed index when it says `again`,
-    /// told on `answer`, or nothing of a chat there is none of (see
+    /// The map named `name`, or the first, of the project `of` names, as
+    /// JSON, as the window's Map page is told it, for the phone's, drawn
+    /// again after a failed index when it says `again`, told on `answer`,
+    /// or nothing of a chat or a project there is none of (see
     /// [`crate::map::Maps::told`]).
     Map {
-        key: u64,
+        of: MapOf,
         name: Option<String>,
         again: bool,
         answer: oneshot::Sender<Option<String>>,
@@ -2355,12 +2364,20 @@ impl Daemon {
                 answer.send(self.slot(key).map(|slot| self.cwd(slot))).ok();
             }
             Internal::Map {
-                key,
+                of,
                 name,
                 again,
                 answer,
             } => {
-                let Some(folder) = self.slot(key).map(|slot| self.cwd(slot)) else {
+                let folder = match of {
+                    MapOf::Chat(key) => self.slot(key).map(|slot| self.cwd(slot)),
+                    MapOf::Project(id) => self
+                        .projects
+                        .iter()
+                        .find(|project| project.id == Some(id) && !project.deleted)
+                        .map(|project| project.folder.clone()),
+                };
+                let Some(folder) = folder else {
                     answer.send(None).ok();
                     return;
                 };
@@ -4052,49 +4069,97 @@ mod tests {
         assert!(now.is_empty(), "{now:?}");
     }
 
-    #[test]
-    fn the_phone_is_told_the_map_of_the_project_the_chat_works_in() {
+    /// A folder with a map of its own, `maps/<name>.json`.
+    fn folder_with_map(name: &str) -> TempDir {
         let folder = TempDir::new();
         std::fs::create_dir_all(folder.join("maps")).unwrap();
         std::fs::write(
-            folder.join("maps/shop.json"),
+            folder.join(format!("maps/{name}.json")),
             r#"{ "nodes": { "shop": { "name": "Shop" } }, "top": { "center": "shop" } }"#,
         )
         .unwrap();
-        let (store, chat) = one_chat(&folder);
-        let home = TempDir::new();
-        let (mut daemon, _) = daemon_of(&store, &home);
+        folder
+    }
+
+    /// What `daemon` tells the phone of the map `name` of `of`.
+    fn map_told(daemon: &mut Daemon, of: MapOf, name: Option<&str>) -> Option<serde_json::Value> {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let told = tokio::task::LocalSet::new().block_on(&runtime, async {
+            let (answer, told) = oneshot::channel();
+            daemon.hear(Internal::Map {
+                of,
+                name: name.map(str::to_owned),
+                again: false,
+                answer,
+            });
+            told.await.unwrap()
+        });
+        told.map(|told| serde_json::from_str(&told).unwrap())
+    }
+
+    /// A daemon of `store` that draws maps, keeping what it makes in `home`.
+    fn daemon_with_maps(store: &Rc<Store>, home: &TempDir) -> Daemon {
+        let (mut daemon, _) = daemon_of(store, home);
         daemon.maps = Some(crate::map::Maps::new(
             home.join("indexes"),
             Some(home.join("scratch")),
             Vec::new(),
         ));
-        let key = key_of(&mut daemon, chat);
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap();
-        let mut map_of = |key: u64, name: Option<&str>| {
-            tokio::task::LocalSet::new().block_on(&runtime, async {
-                let (answer, told) = oneshot::channel();
-                daemon.hear(Internal::Map {
-                    key,
-                    name: name.map(str::to_owned),
-                    again: false,
-                    answer,
-                });
-                told.await.unwrap()
-            })
-        };
+        daemon
+    }
 
-        let told: serde_json::Value = serde_json::from_str(&map_of(key, None).unwrap()).unwrap();
+    #[test]
+    fn the_phone_is_told_the_map_of_the_project_the_chat_works_in() {
+        let folder = folder_with_map("shop");
+        let (store, chat) = one_chat(&folder);
+        let home = TempDir::new();
+        let mut daemon = daemon_with_maps(&store, &home);
+        let key = key_of(&mut daemon, chat);
+
+        let told = map_told(&mut daemon, MapOf::Chat(key), None).unwrap();
         assert_eq!(told["root"], folder.display().to_string());
         assert_eq!(told["name"], "shop");
         assert_eq!(told["map"]["top"]["center"], "shop");
-        let other: serde_json::Value =
-            serde_json::from_str(&map_of(key, Some("other")).unwrap()).unwrap();
+        let other = map_told(&mut daemon, MapOf::Chat(key), Some("other")).unwrap();
         assert_eq!(other["state"], "none");
-        assert_eq!(map_of(key + 1, None), None, "no chat, no map");
+        assert_eq!(
+            map_told(&mut daemon, MapOf::Chat(key + 1), None),
+            None,
+            "no chat, no map"
+        );
+    }
+
+    #[test]
+    fn the_phone_is_told_the_map_of_a_project_from_its_own_folder_not_its_chat_s_worktree() {
+        let folder = folder_with_map("shop");
+        let worktree = folder_with_map("old");
+        let (store, chat) = one_chat(&folder);
+        let project = kept_chat(&store, chat).project.unwrap();
+        let home = TempDir::new();
+        let mut daemon = daemon_with_maps(&store, &home);
+        let key = key_of(&mut daemon, chat);
+        daemon.slot_mut(key).unwrap().setup = Some(Setup {
+            folder: Some(worktree.to_path_buf()),
+            ..Setup::default()
+        });
+
+        let of_chat = map_told(&mut daemon, MapOf::Chat(key), None).unwrap();
+        assert_eq!(of_chat["root"], worktree.display().to_string());
+        assert_eq!(of_chat["name"], "old");
+        let of_project = map_told(&mut daemon, MapOf::Project(project), None).unwrap();
+        assert_eq!(of_project["root"], folder.display().to_string());
+        assert_eq!(of_project["name"], "shop");
+
+        let other = TempDir::new();
+        let gone = store.project(&other, "Other").unwrap();
+        assert_eq!(
+            map_told(&mut daemon, MapOf::Project(gone), None),
+            None,
+            "no project the daemon lists, no map"
+        );
     }
 
     #[test]
