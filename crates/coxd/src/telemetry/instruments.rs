@@ -216,12 +216,18 @@ pub const CLIENT: Label = Label {
     values: &["ios", "android"],
 };
 
-/// What a cold start of the page had reached: the answer's first byte,
-/// the document read, the first list of chats, that list drawn on the
-/// screen, and the browser's first contentful paint.
+/// What a cold start of the page had reached, in the order a start
+/// reaches them. Before the answer's first byte: the service worker
+/// started, the browser began to fetch the page, the name looked up, the
+/// connection opened, TLS agreed on it, and the request sent. Then the
+/// answer's first byte, the document read, the first list of chats, that
+/// list drawn on the screen, and the browser's first contentful paint.
 pub const COLD_PHASE: Label = Label {
     key: "phase",
-    values: &["response", "dom", "listing", "drawn", "fcp"],
+    values: &[
+        "worker", "fetch", "dns", "connect", "tls", "request", "response", "dom", "listing",
+        "drawn", "fcp",
+    ],
 };
 
 /// A file of the page, as the browser timed its fetch.

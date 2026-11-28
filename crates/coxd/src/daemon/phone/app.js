@@ -249,6 +249,22 @@ const telemetry = (() => {
   const tellColdStart = (drawnAt) => {
     const [navigation] = performance.getEntriesByType("navigation");
     if (navigation) {
+      // What the browser timed before the answer's first byte. Safari
+      // gives 0 for what did not happen, as a service worker's start with
+      // no worker to start and TLS's start over plain HTTP, and for what
+      // ended before the page was asked for: none of those is told. For a
+      // connection used again it gives each of these the time the fetch
+      // began, which tells that none of the start went to them.
+      const secure = navigation.secureConnectionStart > 0;
+      const before = [
+        ["worker", navigation.workerStart],
+        ["fetch", navigation.fetchStart],
+        ["dns", navigation.domainLookupEnd],
+        ["connect", secure ? navigation.secureConnectionStart : navigation.connectEnd],
+        ["tls", secure ? navigation.connectEnd : 0],
+        ["request", navigation.requestStart],
+      ];
+      for (const [phase, at] of before) if (at > 0) record("cold", at / 1000, phase);
       record("cold", navigation.responseStart / 1000, "response");
       if (navigation.domContentLoadedEventEnd > 0) record("cold", navigation.domContentLoadedEventEnd / 1000, "dom");
       record("resource", (navigation.responseEnd - navigation.startTime) / 1000, "document");

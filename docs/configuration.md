@@ -133,7 +133,7 @@ file's name or anything typed.
 | `cox.daemon.loop.lag` | s | none | How late `coxd`'s one thread came back to a timer. |
 | `cox.daemon.chat.read.duration` | s | none | How long `coxd` took to read a closed chat as it was opened. |
 | `cox.daemon.chat.read.entries` | 1 | none | How many entries that chat held. |
-| `cox.phone.page.cold_start` | s | `client`, `phase` | How long after the page was asked for a cold start reached each phase: `response`, `dom`, `fcp`, `listing`, `drawn`. |
+| `cox.phone.page.cold_start` | s | `client`, `phase` | How long after the page was asked for a cold start reached each phase. Before the answer's first byte: `worker` (the service worker started), `fetch` (the browser began to fetch the page), `dns` (the name was looked up), `connect` (the connection opened), `tls` (TLS was agreed on it), `request` (the request was sent). Then `response`, `dom`, `fcp`, `listing`, `drawn`. A phase that did not happen, as `worker` with no service worker and `tls` over plain HTTP, is not told. |
 | `cox.phone.page.resource.duration` | s | `client`, `file` | How long the browser took to fetch a file of the page. |
 | `cox.phone.page.chat_open` | s | `client`, `phase` | How long after the tap the opening of a chat reached each phase: `listing`, `patch`, `drawn`. |
 | `cox.phone.page.draw.duration` | s | `client`, `view` | How long the page's script took over one draw of `home` or `chat`. |

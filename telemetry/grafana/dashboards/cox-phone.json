@@ -61,7 +61,7 @@
         "uid": "prometheus"
       },
       "gridPos": {
-        "h": 11,
+        "h": 23,
         "w": 12,
         "x": 0,
         "y": 1
@@ -99,13 +99,145 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
+          "expr": "histogram_quantile(0.5, sum by (le) (rate(cox_phone_page_cold_start_seconds_bucket{client=~\"$client\", phase=\"worker\"}[$__range])))",
+          "legendFormat": "worker p50",
+          "instant": true,
+          "range": false
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(cox_phone_page_cold_start_seconds_bucket{client=~\"$client\", phase=\"worker\"}[$__range])))",
+          "legendFormat": "worker p95",
+          "instant": true,
+          "range": false
+        },
+        {
+          "refId": "C",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "histogram_quantile(0.5, sum by (le) (rate(cox_phone_page_cold_start_seconds_bucket{client=~\"$client\", phase=\"fetch\"}[$__range])))",
+          "legendFormat": "fetch p50",
+          "instant": true,
+          "range": false
+        },
+        {
+          "refId": "D",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(cox_phone_page_cold_start_seconds_bucket{client=~\"$client\", phase=\"fetch\"}[$__range])))",
+          "legendFormat": "fetch p95",
+          "instant": true,
+          "range": false
+        },
+        {
+          "refId": "E",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "histogram_quantile(0.5, sum by (le) (rate(cox_phone_page_cold_start_seconds_bucket{client=~\"$client\", phase=\"dns\"}[$__range])))",
+          "legendFormat": "dns p50",
+          "instant": true,
+          "range": false
+        },
+        {
+          "refId": "F",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(cox_phone_page_cold_start_seconds_bucket{client=~\"$client\", phase=\"dns\"}[$__range])))",
+          "legendFormat": "dns p95",
+          "instant": true,
+          "range": false
+        },
+        {
+          "refId": "G",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "histogram_quantile(0.5, sum by (le) (rate(cox_phone_page_cold_start_seconds_bucket{client=~\"$client\", phase=\"connect\"}[$__range])))",
+          "legendFormat": "connect p50",
+          "instant": true,
+          "range": false
+        },
+        {
+          "refId": "H",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(cox_phone_page_cold_start_seconds_bucket{client=~\"$client\", phase=\"connect\"}[$__range])))",
+          "legendFormat": "connect p95",
+          "instant": true,
+          "range": false
+        },
+        {
+          "refId": "I",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "histogram_quantile(0.5, sum by (le) (rate(cox_phone_page_cold_start_seconds_bucket{client=~\"$client\", phase=\"tls\"}[$__range])))",
+          "legendFormat": "tls p50",
+          "instant": true,
+          "range": false
+        },
+        {
+          "refId": "J",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(cox_phone_page_cold_start_seconds_bucket{client=~\"$client\", phase=\"tls\"}[$__range])))",
+          "legendFormat": "tls p95",
+          "instant": true,
+          "range": false
+        },
+        {
+          "refId": "K",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "histogram_quantile(0.5, sum by (le) (rate(cox_phone_page_cold_start_seconds_bucket{client=~\"$client\", phase=\"request\"}[$__range])))",
+          "legendFormat": "request p50",
+          "instant": true,
+          "range": false
+        },
+        {
+          "refId": "L",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(cox_phone_page_cold_start_seconds_bucket{client=~\"$client\", phase=\"request\"}[$__range])))",
+          "legendFormat": "request p95",
+          "instant": true,
+          "range": false
+        },
+        {
+          "refId": "M",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
           "expr": "histogram_quantile(0.5, sum by (le) (rate(cox_phone_page_cold_start_seconds_bucket{client=~\"$client\", phase=\"response\"}[$__range])))",
           "legendFormat": "response p50",
           "instant": true,
           "range": false
         },
         {
-          "refId": "B",
+          "refId": "N",
           "datasource": {
             "type": "prometheus",
             "uid": "prometheus"
@@ -116,7 +248,7 @@
           "range": false
         },
         {
-          "refId": "C",
+          "refId": "O",
           "datasource": {
             "type": "prometheus",
             "uid": "prometheus"
@@ -127,7 +259,7 @@
           "range": false
         },
         {
-          "refId": "D",
+          "refId": "P",
           "datasource": {
             "type": "prometheus",
             "uid": "prometheus"
@@ -138,7 +270,7 @@
           "range": false
         },
         {
-          "refId": "E",
+          "refId": "Q",
           "datasource": {
             "type": "prometheus",
             "uid": "prometheus"
@@ -149,7 +281,7 @@
           "range": false
         },
         {
-          "refId": "F",
+          "refId": "R",
           "datasource": {
             "type": "prometheus",
             "uid": "prometheus"
@@ -160,7 +292,7 @@
           "range": false
         },
         {
-          "refId": "G",
+          "refId": "S",
           "datasource": {
             "type": "prometheus",
             "uid": "prometheus"
@@ -171,7 +303,7 @@
           "range": false
         },
         {
-          "refId": "H",
+          "refId": "T",
           "datasource": {
             "type": "prometheus",
             "uid": "prometheus"
@@ -182,7 +314,7 @@
           "range": false
         },
         {
-          "refId": "I",
+          "refId": "U",
           "datasource": {
             "type": "prometheus",
             "uid": "prometheus"
@@ -193,7 +325,7 @@
           "range": false
         },
         {
-          "refId": "J",
+          "refId": "V",
           "datasource": {
             "type": "prometheus",
             "uid": "prometheus"
@@ -214,7 +346,7 @@
         "uid": "prometheus"
       },
       "gridPos": {
-        "h": 11,
+        "h": 23,
         "w": 12,
         "x": 12,
         "y": 1
@@ -326,7 +458,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 12
+        "y": 24
       },
       "fieldConfig": {
         "defaults": {
@@ -382,7 +514,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 12
+        "y": 24
       },
       "fieldConfig": {
         "defaults": {
@@ -449,7 +581,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 12
+        "y": 24
       },
       "fieldConfig": {
         "defaults": {
@@ -513,7 +645,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 20
+        "y": 32
       },
       "panels": [
         {
@@ -528,7 +660,7 @@
             "h": 8,
             "w": 12,
             "x": 0,
-            "y": 21
+            "y": 33
           },
           "fieldConfig": {
             "defaults": {
@@ -584,7 +716,7 @@
             "h": 8,
             "w": 12,
             "x": 12,
-            "y": 21
+            "y": 33
           },
           "fieldConfig": {
             "defaults": {
@@ -640,7 +772,7 @@
             "h": 8,
             "w": 8,
             "x": 0,
-            "y": 29
+            "y": 41
           },
           "fieldConfig": {
             "defaults": {
@@ -696,7 +828,7 @@
             "h": 8,
             "w": 8,
             "x": 8,
-            "y": 29
+            "y": 41
           },
           "fieldConfig": {
             "defaults": {
@@ -763,7 +895,7 @@
             "h": 8,
             "w": 8,
             "x": 16,
-            "y": 29
+            "y": 41
           },
           "fieldConfig": {
             "defaults": {
@@ -819,7 +951,7 @@
             "h": 8,
             "w": 12,
             "x": 0,
-            "y": 37
+            "y": 49
           },
           "fieldConfig": {
             "defaults": {
@@ -875,7 +1007,7 @@
             "h": 8,
             "w": 12,
             "x": 12,
-            "y": 37
+            "y": 49
           },
           "fieldConfig": {
             "defaults": {
@@ -941,7 +1073,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 45
+        "y": 57
       },
       "panels": [
         {
@@ -956,7 +1088,7 @@
             "h": 8,
             "w": 12,
             "x": 0,
-            "y": 46
+            "y": 58
           },
           "fieldConfig": {
             "defaults": {
@@ -1012,7 +1144,7 @@
             "h": 8,
             "w": 12,
             "x": 12,
-            "y": 46
+            "y": 58
           },
           "fieldConfig": {
             "defaults": {
@@ -1068,7 +1200,7 @@
             "h": 8,
             "w": 8,
             "x": 0,
-            "y": 54
+            "y": 66
           },
           "fieldConfig": {
             "defaults": {
@@ -1135,7 +1267,7 @@
             "h": 8,
             "w": 8,
             "x": 8,
-            "y": 54
+            "y": 66
           },
           "fieldConfig": {
             "defaults": {
@@ -1202,7 +1334,7 @@
             "h": 8,
             "w": 4,
             "x": 16,
-            "y": 54
+            "y": 66
           },
           "fieldConfig": {
             "defaults": {
@@ -1269,7 +1401,7 @@
             "h": 8,
             "w": 4,
             "x": 20,
-            "y": 54
+            "y": 66
           },
           "fieldConfig": {
             "defaults": {
@@ -1335,7 +1467,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 62
+        "y": 74
       },
       "panels": [
         {
@@ -1350,7 +1482,7 @@
             "h": 8,
             "w": 8,
             "x": 0,
-            "y": 63
+            "y": 75
           },
           "fieldConfig": {
             "defaults": {
@@ -1406,7 +1538,7 @@
             "h": 8,
             "w": 8,
             "x": 8,
-            "y": 63
+            "y": 75
           },
           "fieldConfig": {
             "defaults": {
@@ -1462,7 +1594,7 @@
             "h": 8,
             "w": 8,
             "x": 16,
-            "y": 63
+            "y": 75
           },
           "fieldConfig": {
             "defaults": {
@@ -1518,7 +1650,7 @@
             "h": 8,
             "w": 12,
             "x": 0,
-            "y": 71
+            "y": 83
           },
           "fieldConfig": {
             "defaults": {
@@ -1574,7 +1706,7 @@
             "h": 8,
             "w": 12,
             "x": 12,
-            "y": 71
+            "y": 83
           },
           "fieldConfig": {
             "defaults": {
@@ -1630,7 +1762,7 @@
             "h": 8,
             "w": 12,
             "x": 0,
-            "y": 79
+            "y": 91
           },
           "fieldConfig": {
             "defaults": {
@@ -1686,7 +1818,7 @@
             "h": 8,
             "w": 12,
             "x": 12,
-            "y": 79
+            "y": 91
           },
           "fieldConfig": {
             "defaults": {
