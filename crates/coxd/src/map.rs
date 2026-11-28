@@ -283,13 +283,16 @@ fn tag_of(map: &Generated) -> String {
 /// What a map is drawn from: its vocabulary's text, and the folder the
 /// files it claims are from (see [`Named::files_from`]); the indexes
 /// kept, each with the folder its paths are from, from the project's, as
-/// `directories/cox/`, or empty; and whether some code is not in them,
-/// which leaves out the drift.
+/// `directories/cox/`, or empty; the code of each repository, with the
+/// same folder, whose files a claim may be of though no index reads
+/// them; and whether some code is not in the indexes, which leaves out
+/// the drift.
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Drawing {
     vocabulary: String,
     files_from: String,
     indexes: Vec<(String, Key)>,
+    codes: Vec<(String, Code)>,
     partly: bool,
 }
 
@@ -373,13 +376,16 @@ impl Maps {
             }
         };
         let mut indexes = Vec::new();
+        let mut codes = Vec::new();
         for (_, folder) in &repositories {
-            self.index_all(root, folder, again, &mut told.indexes, &mut indexes);
+            let code = self.index_all(root, folder, again, &mut told.indexes, &mut indexes);
+            codes.extend(code);
         }
         let drawing = Drawing {
             vocabulary: text,
             files_from: named.files_from,
             indexes,
+            codes,
             partly: told.indexes.iter().any(|indexed| indexed.drawn.is_none()),
         };
         let ((map, tag), lost) = self.draw(drawing, &vocabulary);
@@ -424,11 +430,21 @@ impl Maps {
                 document
             }));
         }
+        let mut tracked = Vec::new();
+        for (prefix, code) in &drawing.codes {
+            match code.files() {
+                Ok(files) => tracked.extend(files.iter().map(|file| format!("{prefix}{file}"))),
+                Err(error) => {
+                    tracing::warn!("the files of {} are not listed: {error}", code.commit);
+                }
+            }
+        }
         // The text of each file is in its index.
         let mut map = cox_editor::map::generate::generate(
             &Index { documents },
             vocabulary,
             &drawing.files_from,
+            &tracked,
             &BTreeMap::new(),
         );
         if drawing.partly || !lost.is_empty() {
@@ -458,7 +474,8 @@ impl Maps {
     /// Tells into `indexes` how the index of each language of the
     /// repository checked out in `folder` stands, for the project in
     /// `root`, and adds to `drawn` those the map is drawn from, each with
-    /// the folder its paths are from.
+    /// the folder its paths are from. It answers the repository's code,
+    /// with the same folder, if it has a commit.
     fn index_all(
         &self,
         root: &Path,
@@ -466,7 +483,7 @@ impl Maps {
         again: bool,
         indexes: &mut Vec<Indexed>,
         drawn: &mut Vec<(String, Key)>,
-    ) {
+    ) -> Option<(String, Code)> {
         let directory = folder
             .strip_prefix(root)
             .map_or_default(|directory| directory.to_string_lossy().into_owned());
@@ -491,7 +508,7 @@ impl Maps {
                     state: IndexState::Uncommitted { why },
                     ..blank
                 });
-                return;
+                return None;
             }
         };
         let blank = Indexed {
@@ -505,7 +522,7 @@ impl Maps {
                     state: IndexState::Failed { reason },
                     ..blank
                 });
-                return;
+                return Some((prefix, code));
             }
         };
         if reads.is_empty() {
@@ -520,7 +537,7 @@ impl Maps {
                 state: IndexState::Unknown { known },
                 ..blank
             });
-            return;
+            return Some((prefix, code));
         }
         for reads in &reads {
             let blank = Indexed {
@@ -534,6 +551,7 @@ impl Maps {
                 drawn.push((prefix.clone(), kept));
             }
         }
+        Some((prefix, code))
     }
 
     /// What each indexer that reads `code` reads of it, as it was found

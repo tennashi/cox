@@ -55,7 +55,7 @@ fn told_of(vocabulary: &str, others: &[&str]) -> Told {
     let index = Index::decode(FIXTURE).unwrap();
     let vocabulary = Vocabulary::parse(vocabulary).unwrap();
     let sources = BTreeMap::from([("src/lib.rs".to_owned(), LIB.to_owned())]);
-    let map = generate(&index, &vocabulary, "", &sources);
+    let map = generate(&index, &vocabulary, "", &[], &sources);
     let mut maps: Vec<Named> = others
         .iter()
         .map(|name| Named {

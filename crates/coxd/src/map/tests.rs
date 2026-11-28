@@ -607,6 +607,56 @@ fn a_map_a_repository_keeps_is_the_projects_its_files_from_the_repositorys() {
 }
 
 #[test]
+fn a_claim_of_a_file_the_commit_has_that_no_indexer_reads_is_no_drift() {
+    let fake = Fake::new();
+    let root = TempDir::new();
+    let app = root.join(crate::settings::DIRECTORIES).join("app");
+    repository(&app);
+    // A box owns the scripts and a workflow, which no index has, and a
+    // folder that is not committed.
+    let ops = r#""gone": { "name": "Gone", "claims": ["shop/gone"] },
+    "ops": { "name": "Ops", "files": ["directories/app/scripts", "directories/app/.github/workflows/ci.yml", "directories/app/infrastructure"] }"#;
+    let vocabulary = VOCABULARY.replace(
+        r#""gone": { "name": "Gone", "claims": ["shop/gone"] }"#,
+        ops,
+    );
+    std::fs::create_dir_all(root.join("maps")).unwrap();
+    std::fs::write(root.join("maps/shop.json"), &vocabulary).unwrap();
+    for file in ["scripts/deploy.sh", ".github/workflows/ci.yml"] {
+        std::fs::create_dir_all(app.join(file).parent().unwrap()).unwrap();
+        std::fs::write(app.join(file), "").unwrap();
+    }
+    commit(&app, "scripts");
+    std::fs::create_dir_all(app.join("infrastructure")).unwrap();
+    std::fs::write(app.join("infrastructure/main.tf"), "").unwrap();
+
+    let drift = |told: Told| -> Vec<String> {
+        let map = told.map.unwrap();
+        map.drift.iter().map(|drift| drift.id.clone()).collect()
+    };
+    let told = fake.settled(&root);
+    assert_eq!(told.state, State::Ready);
+    assert_eq!(
+        drift(told),
+        [
+            "claim-gone:directories/app/infrastructure",
+            "claim-gone:shop/gone"
+        ]
+    );
+    // Once it is committed, the map is drawn again, of the commit's
+    // files, though its index is the last commit's still.
+    std::fs::write(&fake.gate, "").unwrap();
+    commit(&app, "infrastructure");
+    let told = fake.maps.told(&root, Some("shop"), false);
+    assert_eq!(told.state, State::Indexing);
+    assert_eq!(drift(told), ["claim-gone:shop/gone"]);
+    std::fs::remove_file(&fake.gate).unwrap();
+    let told = fake.settled(&root);
+    assert_eq!(told.state, State::Ready);
+    assert_eq!(drift(told), ["claim-gone:shop/gone"]);
+}
+
+#[test]
 fn a_map_that_does_not_read_or_is_not_there_is_told_why() {
     let fake = Fake::new();
     let root = TempDir::new();

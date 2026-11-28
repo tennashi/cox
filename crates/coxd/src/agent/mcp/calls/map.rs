@@ -45,8 +45,10 @@ its name: its first claim unless given. `many: true` says there are several of i
 chat. `claims` are the modules it owns, as the index names them: the package, then the \
 namespaces, joined by `/`, as `app/server` or `httpx._client`; a module belongs to the box with \
 the longest claim it is in. `files` are the files or folders it owns, from the folder that \
-holds the map's `maps`, the project's or its repository's, for code whose smallest module \
-holds several files, as a package of Go does; they win over `claims`. `open: false` keeps a \
+holds the map's `maps`, the project's or its repository's: for code whose smallest module \
+holds several files, as a package of Go does, where they win over `claims`; and for what no \
+index reads, as scripts, workflows or what sets up where the code runs. A claim of a file \
+is drift only when the commit has no such file or folder. `open: false` keeps a \
 box that owns code closed. `lines: \"hand\"` takes its lines from the vocabulary rather than \
 from the code.\n\
 - `top`: `{\"center\", \"drivers\", \"left\", \"right\", \"lines\"}`: the node of the \
