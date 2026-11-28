@@ -2400,6 +2400,14 @@ async fn sketched<'a>(
     say(cx, &workspace, "hello").await;
     let made = open_sketch(cx, &workspace, &asks, Sketch::Empty, 2).await;
     std::fs::write(made.join("index.html"), "<p>shop</p>\n").unwrap();
+    // The sketch's turn ends, and the first chat hears of it, in real
+    // time: what a test does next comes after both, whenever they came.
+    let hears = shown(cx, &workspace);
+    wait_until(cx, &hears, |conversation| {
+        conversation.state() == State::Idle
+            && matches!(conversation.entries(), [.., Entry::Cox(_), Entry::Reply(_)])
+    })
+    .await;
     let (first, sketch) = workspace.read_with(cx, |workspace, _| {
         let mut chats = workspace.chats(0);
         let first = chats.next().unwrap().key();
