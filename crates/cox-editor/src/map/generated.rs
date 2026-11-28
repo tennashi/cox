@@ -1,8 +1,10 @@
 //! A map as generated: its vocabulary's nodes and levels, with what the
 //! code's index says below the boxes that own code, and where the two
-//! disagree. It is all a page needs to draw the map, with nothing to ask
-//! back, and it comes out the same, byte for byte, from the same index,
-//! vocabulary and files (see [`super::generate`]).
+//! disagree. It is all a page needs to draw the map, and it comes out the
+//! same, byte for byte, from the same index, vocabulary and files (see
+//! [`super::generate`]). A page is told it in parts: its [`Outline`]
+//! first, which the map is drawn from, then the [`Detail`] of each type
+//! the human chooses.
 //!
 //! Every id is the index's: a module is its package and namespaces, as
 //! `cox/daemon/chat`; a type is its module and its name, as
@@ -43,6 +45,107 @@ pub struct Generated {
     /// map as it is drawn for that driver alone.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub slices: Vec<Slice>,
+}
+
+/// What a page draws a map from before a type is chosen: all of it but
+/// what only a type's detail shows, its documentation, its members and
+/// where they are used, which is megabytes of a large project's map and
+/// is told of one type at a time (see [`Generated::detail`]).
+#[derive(Clone, Debug, Serialize)]
+pub struct Outline<'m> {
+    says: &'m str,
+    nodes: &'m BTreeMap<String, Node>,
+    top: &'m Top,
+    levels: &'m BTreeMap<String, Level>,
+    types: BTreeMap<&'m str, Head<'m>>,
+    edges: &'m [Edge],
+    drift: &'m [Drift],
+    #[serde(skip_serializing_if = "<[Slice]>::is_empty")]
+    slices: &'m [Slice],
+}
+
+/// A type as the map draws it: what it is and where, without its detail.
+#[derive(Clone, Debug, Serialize)]
+struct Head<'m> {
+    id: &'m str,
+    name: &'m str,
+    module: &'m str,
+    #[serde(rename = "box")]
+    owner: &'m str,
+    kind: &'m str,
+    file: &'m str,
+    line: usize,
+}
+
+impl Type {
+    fn head(&self) -> Head<'_> {
+        Head {
+            id: &self.id,
+            name: &self.name,
+            module: &self.module,
+            owner: &self.owner,
+            kind: &self.kind,
+            file: &self.file,
+            line: self.line,
+        }
+    }
+}
+
+/// The detail of a type: all of it, and, for what its functions relate
+/// to, the nodes that each field of another type they use names (see
+/// [`Field::to`]), by the field's key, of the fields that name some.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct Detail<'m> {
+    #[serde(rename = "type")]
+    pub ty: &'m Type,
+    pub to: BTreeMap<&'m str, &'m [String]>,
+}
+
+impl Generated {
+    /// The map without its types' details.
+    #[must_use]
+    pub fn outline(&self) -> Outline<'_> {
+        Outline {
+            says: &self.says,
+            nodes: &self.nodes,
+            top: &self.top,
+            levels: &self.levels,
+            types: self
+                .types
+                .iter()
+                .map(|(id, ty)| (id.as_str(), ty.head()))
+                .collect(),
+            edges: &self.edges,
+            drift: &self.drift,
+            slices: &self.slices,
+        }
+    }
+
+    /// The detail of the type `id`, if the map has it.
+    #[must_use]
+    pub fn detail(&self, id: &str) -> Option<Detail<'_>> {
+        let ty = self.types.get(id)?;
+        let to = ty
+            .functions
+            .iter()
+            .flat_map(|function| &function.calls)
+            .filter(|call| call.kind == CallKind::Field)
+            .filter_map(|call| self.field(call.key.as_deref()?))
+            .filter(|(owner, field)| owner.id != ty.id && !field.to.is_empty())
+            .map(|(_, field)| (field.key.as_str(), field.to.as_slice()))
+            .collect();
+        Some(Detail { ty, to })
+    }
+
+    /// The field keyed `key`, and its type: a field's key is its type's
+    /// id, `.` and its name.
+    fn field(&self, key: &str) -> Option<(&Type, &Field)> {
+        key.rmatch_indices('.').find_map(|(at, _)| {
+            let ty = self.types.get(&key[..at])?;
+            let field = ty.fields.iter().find(|field| field.key == key)?;
+            Some((ty, field))
+        })
+    }
 }
 
 /// What a driver sets working: the map with what the driver does not

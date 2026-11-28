@@ -91,7 +91,8 @@ fn told_of(vocabulary: &str, others: &[&str]) -> Told {
             note: None,
             state: IndexState::Ready,
         }],
-        map: Some(map),
+        map: Some(std::sync::Arc::new(map)),
+        tag: None,
         changed: BTreeMap::new(),
     }
 }
@@ -359,7 +360,7 @@ async fn how_the_indexes_stand_is_told_until_they_are_ready() {
             how: "go is not on Cox's PATH: install Go: https://go.dev/doc/install".to_owned(),
         },
     });
-    if let Some(map) = &mut told.map {
+    if let Some(map) = told.map.as_mut().map(std::sync::Arc::make_mut) {
         map.drift.clear();
     }
     let (answered, _) = shown(json!({}), told).await;
@@ -381,7 +382,7 @@ async fn how_the_indexes_stand_is_told_until_they_are_ready() {
 #[tokio::test]
 async fn agreed_drift_is_told_with_why() {
     let mut told = told(&[]);
-    if let Some(map) = &mut told.map {
+    if let Some(map) = told.map.as_mut().map(std::sync::Arc::make_mut) {
         map.drift[0].agreed = Some("Kept for the next release.".to_owned());
     }
     let (answered, _) = shown(json!({}), told).await;
@@ -414,7 +415,7 @@ async fn a_type_not_there_while_the_code_is_indexed_is_said_to_wait() {
 #[tokio::test]
 async fn drift_on_what_is_shown_comes_first_and_the_rest_is_counted() {
     let mut told = told(&[]);
-    if let Some(map) = &mut told.map {
+    if let Some(map) = told.map.as_mut().map(std::sync::Arc::make_mut) {
         let gone = map.drift.remove(0);
         for number in 0..20 {
             map.drift.push(Drift {
@@ -462,7 +463,7 @@ async fn callers_are_told_a_function_once_and_tests_as_a_count() {
         test,
         writes: false,
     };
-    if let Some(map) = &mut told.map {
+    if let Some(map) = told.map.as_mut().map(std::sync::Arc::make_mut) {
         let add = &mut map.types.get_mut("shop/Cart").unwrap().functions[0];
         add.uses = vec![
             called(20, "Shop::buy", Some("shop/Shop::buy"), false),

@@ -33,7 +33,6 @@ pub mod index;
 pub mod indexers;
 mod jobs;
 
-use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -43,7 +42,7 @@ use cox_editor::map::generated::Generated;
 use cox_editor::map::vocabulary::Vocabulary;
 use cox_editor::map::{self as maps, Named};
 use cox_editor::scip::Index;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 
 use self::cache::{Cache, Key};
@@ -100,8 +99,32 @@ pub const PAGE: &[(&str, &[u8])] = &[
     ("icons.js", include_bytes!("../../cox/plugins/map/icons.js")),
 ];
 
-/// What a page is told of one of the project's maps: all it draws the
-/// map from, with nothing to ask back.
+/// What a page asks of a map: megabytes of a large project's map are the
+/// details of its types, which a page shows of one type at a time, so
+/// that it is told the map without them, and each as the human chooses
+/// its type.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Part {
+    /// What the map is drawn from (see
+    /// [`cox_editor::map::generated::Outline`]), with how it stands;
+    /// without the map when the page has the one tagged `seen` and it is
+    /// the same, so that a page that reads the map every few seconds, as
+    /// what changed in the code changes, is not sent it again each time.
+    Outline { seen: Option<String> },
+    /// The detail of the type of this id (see
+    /// [`cox_editor::map::generated::Detail`]).
+    Type(String),
+}
+
+impl Default for Part {
+    fn default() -> Self {
+        Self::Outline { seen: None }
+    }
+}
+
+/// What a page is told of one of the project's maps: what it draws the
+/// map from, and how it stands.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Told {
     /// The project's name: its folder's.
@@ -126,7 +149,11 @@ pub struct Told {
     /// vocabulary does not read. Its JSON goes last, after its tag (see
     /// [`Told::json`]).
     #[serde(skip)]
-    pub map: Option<Generated>,
+    pub map: Option<Arc<Generated>>,
+    /// The map's tag, which is another's for another map: a page that
+    /// has the map gives it back, to be told the rest alone.
+    #[serde(skip)]
+    pub tag: Option<String>,
     /// What changed in the code of the map's nodes, by id, as the
     /// Changes tab shows each repository's changes: of a box, in the
     /// files it owns and those of the boxes inside it, all the way down;
@@ -235,7 +262,22 @@ struct Inner {
     /// The indexes being made, and those that failed.
     jobs: Mutex<Jobs>,
     /// The maps drawn last, the last first.
-    drawn: Mutex<Vec<(Drawing, Generated)>>,
+    drawn: Mutex<Vec<(Drawing, Drawn)>>,
+}
+
+/// A map as drawn, and its tag.
+type Drawn = (Arc<Generated>, String);
+
+/// The tag of `map`: the start of the sum of all of its JSON, its types'
+/// details too, so that a page that has it is told when any of it
+/// changed.
+fn tag_of(map: &Generated) -> String {
+    let mut sum = Sha256::new();
+    // Writing into a sum does not fail, and a map's JSON has no key that
+    // is no string.
+    let _ = serde_json::to_writer(&mut sum, map);
+    let sum = format!("{:x}", sum.finalize());
+    sum[..16].to_owned()
 }
 
 /// What a map is drawn from: its vocabulary's text, and the folder the
@@ -306,6 +348,7 @@ impl Maps {
             problems: Vec::new(),
             indexes: Vec::new(),
             map: None,
+            tag: None,
             changed: BTreeMap::new(),
         };
         let Some(named) = named else {
@@ -339,7 +382,7 @@ impl Maps {
             indexes,
             partly: told.indexes.iter().any(|indexed| indexed.drawn.is_none()),
         };
-        let (map, lost) = self.draw(drawing, &vocabulary);
+        let ((map, tag), lost) = self.draw(drawing, &vocabulary);
         for indexed in &mut told.indexes {
             let of = |key: &Key| {
                 indexed.drawn.as_ref() == Some(&key.commit)
@@ -358,15 +401,16 @@ impl Maps {
         told.state = State::of(&told.indexes);
         told.changed = changed(&map, &changed_files(root));
         told.map = Some(map);
+        told.tag = Some(tag);
         told
     }
 
     /// The map `drawing` says, of `vocabulary`: as it was drawn last, if
     /// it was drawn of the same; and what the indexes that could not be
     /// read, as one taken away meanwhile, are kept by.
-    fn draw(&self, drawing: Drawing, vocabulary: &Vocabulary) -> (Generated, Vec<Key>) {
-        if let Some(map) = self.drawn_as(&drawing) {
-            return (map, Vec::new());
+    fn draw(&self, drawing: Drawing, vocabulary: &Vocabulary) -> (Drawn, Vec<Key>) {
+        if let Some(drawn) = self.drawn_as(&drawing) {
+            return (drawn, Vec::new());
         }
         let mut documents = Vec::new();
         let mut lost = Vec::new();
@@ -391,6 +435,8 @@ impl Maps {
             // Drift against code that is not in the map is no drift.
             map.drift.clear();
         }
+        let tag = tag_of(&map);
+        let map = (Arc::new(map), tag);
         if lost.is_empty() {
             let mut drawn = self.0.drawn.lock().unwrap_or_else(PoisonError::into_inner);
             drawn.insert(0, (drawing, map.clone()));
@@ -400,7 +446,7 @@ impl Maps {
     }
 
     /// The map drawn last of `drawing`, if it is kept.
-    fn drawn_as(&self, drawing: &Drawing) -> Option<Generated> {
+    fn drawn_as(&self, drawing: &Drawing) -> Option<Drawn> {
         let mut drawn = self.0.drawn.lock().unwrap_or_else(PoisonError::into_inner);
         let at = drawn.iter().position(|(of, _)| of == drawing)?;
         let found = drawn.remove(at);
@@ -855,52 +901,53 @@ impl State {
 }
 
 impl Told {
-    /// It as JSON, for a page: the map last, as `"map"`, after its tag, as
-    /// `"tag"`, which a page that has the map already gives back to be
-    /// told the rest alone (see [`since`]).
+    /// The `part` of it a page asks for, as JSON: how the map stands,
+    /// then the map's tag, as `"tag"`, and its outline, as `"map"`,
+    /// unless the page has the map so tagged; or the detail of a type,
+    /// as `"type"` and `"to"`, after the tag of the map it is of, with no
+    /// `"type"` for a type the map has none of.
     #[must_use]
-    pub fn json(&self) -> String {
+    pub fn json(&self, part: &Part) -> String {
         let failed = |error: serde_json::Error| {
             serde_json::json!({ "state": "invalid", "problems": [error.to_string()] }).to_string()
+        };
+        let seen = match part {
+            Part::Outline { seen } => seen,
+            Part::Type(id) => {
+                let detail = self.map.as_ref().and_then(|map| map.detail(id));
+                let detail = Detail {
+                    tag: self.tag.as_deref(),
+                    detail,
+                };
+                return serde_json::to_string(&detail).unwrap_or_else(failed);
+            }
         };
         let head = match serde_json::to_string(self) {
             Ok(head) => head,
             Err(error) => return failed(error),
         };
-        let Some(map) = &self.map else {
+        let (Some(map), Some(tag)) = (&self.map, &self.tag) else {
             return head;
         };
-        let map = match serde_json::to_string(map) {
-            Ok(map) => map,
-            Err(error) => return failed(error),
-        };
-        let sum = format!("{:x}", Sha256::digest(&map));
-        let tag = &sum[..16];
-        // The head is an object of the fields above, never empty.
+        // The head is an object of the fields above, never empty, and a
+        // tag is hexadecimal.
         let fields = head.strip_suffix('}').unwrap_or(&head);
-        format!("{fields}{TAG}{tag}\",\"map\":{map}}}")
+        if seen.as_ref() == Some(tag) {
+            return format!("{fields},\"tag\":\"{tag}\"}}");
+        }
+        match serde_json::to_string(&map.outline()) {
+            Ok(map) => format!("{fields},\"tag\":\"{tag}\",\"map\":{map}}}"),
+            Err(error) => failed(error),
+        }
     }
 }
 
-/// What starts a map's tag in [`Told::json`], after the other fields:
-/// no field before it names `tag`, and no string holds `"` unescaped.
-const TAG: &str = ",\"tag\":\"";
-
-/// What a page that has the map tagged `seen` is told of `json`, as
-/// [`Told::json`] writes it: the rest alone, with the tag but not the
-/// map, when the map is the same, so that a page that reads the map
-/// every few seconds is not sent megabytes of it again each time, as
-/// what changed in the code changes; else all of it.
-#[must_use]
-pub fn since<'a>(json: &'a str, seen: Option<&str>) -> Cow<'a, str> {
-    let Some(at) = json.find(TAG) else {
-        return Cow::Borrowed(json);
-    };
-    let tag = json[at + TAG.len()..].split('"').next().unwrap_or_default();
-    if tag.is_empty() || Some(tag) != seen {
-        return Cow::Borrowed(json);
-    }
-    Cow::Owned(format!("{}{TAG}{tag}\"}}", &json[..at]))
+/// The detail of a type, as a page is told it (see [`Told::json`]).
+#[derive(Serialize)]
+struct Detail<'m> {
+    tag: Option<&'m str>,
+    #[serde(flatten)]
+    detail: Option<cox_editor::map::generated::Detail<'m>>,
 }
 
 #[cfg(test)]
