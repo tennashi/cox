@@ -80,6 +80,14 @@
 //! reads coxd's key on `/push`, and posts where to push to it there, or
 //! to `/push/end` to be told no more, its service worker, `/sw.js`,
 //! showing what is pushed.
+//!
+//! When `settings.json` names where coxd sends what it measures of
+//! itself (see [`crate::telemetry`]), the page measures itself too, as
+//! how long a cold start and the opening of a chat take on the phone,
+//! which coxd cannot see, and posts it to `/telemetry` every few
+//! seconds, for coxd to send with its own. coxd tells the page to, in the
+//! page's own file, as `data-telemetry` on its `<html>`; a page not told
+//! measures and posts nothing, and coxd takes no report.
 
 use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, BTreeSet};
@@ -89,7 +97,7 @@ use std::path::Path;
 use std::pin::Pin;
 use std::rc::Rc;
 use std::task::{Context, Poll};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::Context as _;
 use bytes::Bytes;
@@ -111,6 +119,7 @@ use super::{Internal, MapOf, Sketching};
 use crate::activity;
 use crate::chat::conversation::{Content, Entry};
 use crate::storage::{self, Kept};
+use crate::telemetry::{Instrument, Telemetry, instruments};
 use crate::theme;
 
 /// The cookie that holds the secret, once the phone is paired.
@@ -589,12 +598,16 @@ impl Phones {
 /// Serves the page on `listener` to the `phones`, telling the daemon, on
 /// `internal`, of the phones that follow the chats, and pushing to them
 /// what it says of the chats; the pages it frames being passed on by the
-/// relay, as `relayed` has it, if they are (see [`relay`]).
+/// relay, as `relayed` has it, if they are (see [`relay`]). How long
+/// each answer took, and how large it is, is recorded on `telemetry`,
+/// under the pattern of what was asked for (see
+/// [`instruments::route`]).
 pub async fn serve(
     listener: TcpListener,
     phones: Rc<Phones>,
     relayed: Option<Relayed>,
     internal: UnboundedSender<Internal>,
+    telemetry: Telemetry,
 ) {
     if let Some(pushes) = &phones.pushes {
         let (to, notices) = unbounded_channel();
@@ -607,6 +620,7 @@ pub async fn serve(
         internal,
         last: Cell::new(0),
         relayed,
+        telemetry,
     });
     loop {
         let stream = match listener.accept().await {
@@ -621,6 +635,8 @@ pub async fn serve(
             let service = hyper::service::service_fn(move |request: Request<Incoming>| {
                 let page = Rc::clone(&page);
                 async move {
+                    let since = Instant::now();
+                    let route = instruments::route(request.uri().path());
                     let packs = accepts_gzip(request.headers());
                     let answer = if request.method() == Method::POST {
                         page.posted(request).await
@@ -646,6 +662,7 @@ pub async fn serve(
                         page.answer(&request)
                     };
                     let answer = if packs { packed(answer).await } else { answer };
+                    page.answered(route, since, &answer);
                     Ok::<_, Infallible>(answer)
                 }
             });
@@ -667,6 +684,8 @@ struct Page {
     last: Cell<u64>,
     /// What the relay passes on to the phone, if it does.
     relayed: Option<Relayed>,
+    /// Where what the page's answers took goes, if anywhere.
+    telemetry: Telemetry,
 }
 
 /// What the relay passes on to the phone: the sketches' mocks, served on
@@ -677,6 +696,22 @@ pub struct Relayed {
 }
 
 impl Page {
+    /// Records that the request counted under `route`, which came at
+    /// `since`, has its answer, `answer`, and how large that is, unless
+    /// it is the stream of events.
+    fn answered(&self, route: &str, since: Instant, answer: &Response<Body>) {
+        if !self.telemetry.on() {
+            return;
+        }
+        let status = answer.status().as_u16().to_string();
+        self.telemetry
+            .seconds(Instrument::HttpDuration, since, &[route, &status]);
+        if let Body::Whole(Some(bytes)) = answer.body() {
+            self.telemetry
+                .count(Instrument::HttpResponseSize, bytes.len(), &[route, &status]);
+        }
+    }
+
     fn answer(&self, request: &Request<Incoming>) -> Response<Body> {
         let path = request.uri().path();
         if let Some(token) = path.strip_prefix("/pair/") {
@@ -716,13 +751,20 @@ impl Page {
             return map_page(file);
         }
         match FILES.iter().find(|(at, _, _)| *at == path) {
-            Some((at, kind, text)) => {
-                let mut response = answer(StatusCode::OK, kind, *text);
-                if *at == "/" {
-                    self.frame_relayed(request.headers(), &mut response);
-                }
+            Some((at, kind, text)) if *at == "/" => {
+                let mut response = if self.telemetry.on() {
+                    answer(
+                        StatusCode::OK,
+                        kind,
+                        text.replacen(UNTOLD, TOLD_TO_REPORT, 1),
+                    )
+                } else {
+                    answer(StatusCode::OK, kind, *text)
+                };
+                self.frame_relayed(request.headers(), &mut response);
                 response
             }
+            Some((_, kind, text)) => answer(StatusCode::OK, kind, *text),
             None => answer(StatusCode::NOT_FOUND, TEXT, "Not found"),
         }
     }
@@ -772,7 +814,7 @@ impl Page {
         {
             return answer(StatusCode::SERVICE_UNAVAILABLE, TEXT, "coxd is stopping");
         }
-        let Ok(Some((folder, staged))) = staged.await else {
+        let Ok(Some((folder, staged))) = self.telemetry.waited("pages", staged).await else {
             return answer(StatusCode::NOT_FOUND, TEXT, "No such chat");
         };
         let mut pages = Vec::new();
@@ -841,7 +883,7 @@ impl Page {
         {
             return answer(StatusCode::SERVICE_UNAVAILABLE, TEXT, "coxd is stopping");
         }
-        let Ok(Some(content)) = content.await else {
+        let Ok(Some(content)) = self.telemetry.waited("content", content).await else {
             return answer(StatusCode::NOT_FOUND, TEXT, "Nothing there");
         };
         answer(
@@ -881,7 +923,7 @@ impl Page {
         {
             return answer(StatusCode::SERVICE_UNAVAILABLE, TEXT, "coxd is stopping");
         }
-        let Ok(Some(entries)) = entries.await else {
+        let Ok(Some(entries)) = self.telemetry.waited("entries", entries).await else {
             return answer(StatusCode::NOT_FOUND, TEXT, "No such chat");
         };
         let told = entries
@@ -922,7 +964,7 @@ impl Page {
         {
             return answer(StatusCode::SERVICE_UNAVAILABLE, TEXT, "coxd is stopping");
         }
-        let Ok(Some(folder)) = folder.await else {
+        let Ok(Some(folder)) = self.telemetry.waited("folder", folder).await else {
             return answer(StatusCode::NOT_FOUND, TEXT, "No such chat");
         };
         match tokio::task::spawn_blocking(move || cox_git::changes::read(&folder)).await {
@@ -959,7 +1001,7 @@ impl Page {
         {
             return answer(StatusCode::SERVICE_UNAVAILABLE, TEXT, "coxd is stopping");
         }
-        let Ok(sketching) = sketching.await else {
+        let Ok(sketching) = self.telemetry.waited("sketching", sketching).await else {
             return answer(StatusCode::NOT_FOUND, TEXT, "No such chat");
         };
         // Whether the project is in a Git repository asks Git, and the
@@ -1045,7 +1087,7 @@ impl Page {
         {
             return answer(StatusCode::SERVICE_UNAVAILABLE, TEXT, "coxd is stopping");
         }
-        let Ok(Some(told)) = drawn.await else {
+        let Ok(Some(told)) = self.telemetry.waited("map", drawn).await else {
             return answer(StatusCode::NOT_FOUND, TEXT, "No such chat or project");
         };
         answer(StatusCode::OK, "application/json", told)
@@ -1059,7 +1101,7 @@ impl Page {
         self.internal
             .send(Internal::Activity { answer: asked })
             .ok()?;
-        standing.await.ok()
+        self.telemetry.waited("activity", standing).await.ok()
     }
 
     /// What goes on in every project, as JSON, as the window's Activity
@@ -1160,7 +1202,9 @@ impl Page {
     /// names, if it is done in one; at `/activity/resume` and
     /// `/activity/fix`, what its Activity has a chat do (see
     /// [`Self::say`]); at `/push`, where to
-    /// push to the phone; and at `/push/end`, where to push no more.
+    /// push to the phone; at `/push/end`, where to push no more; and at
+    /// `/telemetry`, what the page measured of itself, which coxd takes
+    /// only while it sends its own (see [`Telemetry::report`]).
     async fn posted(&self, request: Request<Incoming>) -> Response<Body> {
         if !self.paired(&request) {
             return answer(StatusCode::UNAUTHORIZED, TEXT, "Not paired");
@@ -1170,7 +1214,13 @@ impl Page {
         }
         let path = request.uri().path().to_owned();
         let kept = chat_asked(&request);
-        let body = http_body_util::Limited::new(request.into_body(), MOST);
+        let reports = path == "/telemetry";
+        if reports && !self.telemetry.on() {
+            return answer(StatusCode::NOT_FOUND, TEXT, "Not found");
+        }
+        let client = client_of(request.headers());
+        let most = if reports { MOST_REPORT } else { MOST };
+        let body = http_body_util::Limited::new(request.into_body(), most);
         let Ok(body) = http_body_util::BodyExt::collect(body).await else {
             return answer(StatusCode::PAYLOAD_TOO_LARGE, TEXT, "Too long");
         };
@@ -1181,6 +1231,10 @@ impl Page {
             "/activity/fix" => self.say(kept, Some(&body)).await,
             "/push" => self.subscribe(&body),
             "/push/end" => self.unsubscribe(&body),
+            "/telemetry" => {
+                self.telemetry.report(&body, client);
+                answer(StatusCode::NO_CONTENT, TEXT, "")
+            }
             _ => answer(StatusCode::NOT_FOUND, TEXT, "Not found"),
         }
     }
@@ -1311,7 +1365,7 @@ impl Page {
                 answer: asked,
             })
             .ok()?;
-        key.await.ok().flatten()
+        self.telemetry.waited("key", key).await.ok().flatten()
     }
 
     /// The stream of events of a phone that follows the chats, watching
@@ -1352,6 +1406,7 @@ impl Page {
             beat: tokio::time::interval(BEAT),
             id,
             internal: self.internal.clone(),
+            telemetry: self.telemetry.clone(),
         };
         let mut response = Response::new(Body::Events(events));
         let headers = response.headers_mut();
@@ -1439,6 +1494,33 @@ fn told_changes(diff: &cox_git::changes::Diff) -> serde_json::Value {
 
 /// How long what the page does may be, as a line sent, at most.
 const MOST: usize = 256 * 1024;
+
+/// How long a report of what the page measured may be, at most: a page
+/// reports a few hundred measurements at most, of some thirty bytes each.
+const MOST_REPORT: usize = 32 * 1024;
+
+/// The `<html>` tag of the page's file, as it is kept.
+const UNTOLD: &str = "<html lang=\"en\">";
+
+/// That tag when coxd tells the page to report what it measures of
+/// itself.
+const TOLD_TO_REPORT: &str = "<html lang=\"en\" data-telemetry>";
+
+/// The kind of phone that sent `headers`, as its browser names itself: a
+/// value of [`instruments::CLIENT`], or [`instruments::OTHER`].
+fn client_of(headers: &hyper::HeaderMap) -> &'static str {
+    let agent = headers
+        .get(header::USER_AGENT)
+        .and_then(|agent| agent.to_str().ok())
+        .unwrap_or_default();
+    if agent.contains("iPhone") || agent.contains("iPad") {
+        "ios"
+    } else if agent.contains("Android") {
+        "android"
+    } else {
+        instruments::OTHER
+    }
+}
 
 /// The type of the answers in words.
 const TEXT: &str = "text/plain; charset=utf-8";
@@ -1872,6 +1954,9 @@ struct Events {
     beat: tokio::time::Interval,
     id: u64,
     internal: UnboundedSender<Internal>,
+    /// Where how large each event is, how long it took to write, and how
+    /// many waited behind it goes, if anywhere.
+    telemetry: Telemetry,
 }
 
 impl Events {
@@ -1880,12 +1965,37 @@ impl Events {
             let opens = matches!(told, Some(FromDaemon::Patch { .. })) && !self.opened;
             self.opened |= opens;
             let opens = opens.then_some(self.holds);
-            return Poll::Ready(told.map(|told| event(told, opens)));
+            return Poll::Ready(told.map(|told| self.told(told, opens)));
         }
         if self.beat.poll_tick(context).is_ready() {
             return Poll::Ready(Some(Bytes::from_static(b": beat\n\n")));
         }
         Poll::Pending
+    }
+}
+
+impl Events {
+    /// `told` as [`event`] has it, recording what telling it took.
+    fn told(&self, told: FromDaemon, opens: Option<usize>) -> Bytes {
+        if !self.telemetry.on() {
+            return event(told, opens);
+        }
+        let kind = match &told {
+            FromDaemon::Listing(..) => "listing",
+            FromDaemon::Patch { .. } if opens.is_some() => "patch_first",
+            FromDaemon::Patch { .. } => "patch",
+            FromDaemon::News { .. } => "news",
+            _ => instruments::OTHER,
+        };
+        self.telemetry
+            .count(Instrument::SseQueue, self.told.len(), &[]);
+        let since = Instant::now();
+        let bytes = event(told, opens);
+        self.telemetry
+            .seconds(Instrument::SseEncodeDuration, since, &[kind]);
+        self.telemetry
+            .count(Instrument::SseEventSize, bytes.len(), &[kind]);
+        bytes
     }
 }
 
@@ -2128,7 +2238,13 @@ mod tests {
             let listener = listen(0).await.unwrap();
             let port = listener.local_addr().unwrap().port();
             let (internal, _heard) = unbounded_channel();
-            tokio::task::spawn_local(serve(listener, Rc::clone(&phones), None, internal));
+            tokio::task::spawn_local(serve(
+                listener,
+                Rc::clone(&phones),
+                None,
+                internal,
+                Telemetry::off(),
+            ));
             let get = |path: &str, secret: &str| {
                 format!(
                     "GET {path} HTTP/1.1\r\nHost: x\r\nCookie: cox_phone={secret}\r\n\
@@ -2180,6 +2296,18 @@ mod tests {
         }
     }
 
+    /// Serves the page to the phones paired with "secret", with nothing
+    /// relayed, recording on `telemetry`: its port, and what coxd's main
+    /// loop hears of it.
+    async fn served(telemetry: Telemetry) -> (u16, UnboundedReceiver<Internal>) {
+        let listener = listen(0).await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (internal, heard) = unbounded_channel();
+        let phones = Rc::new(Phones::new("secret".to_owned(), None));
+        tokio::task::spawn_local(serve(listener, phones, None, internal, telemetry));
+        (port, heard)
+    }
+
     /// What the page answers `request`, written whole on a connection
     /// of its own to `port`, up to `until` in what it answers, or all of
     /// it when `until` is empty.
@@ -2208,7 +2336,7 @@ mod tests {
                 let listener = listen(0).await.unwrap();
                 let port = listener.local_addr().unwrap().port();
                 let (internal, mut heard) = unbounded_channel();
-                tokio::task::spawn_local(serve(listener, Rc::new(Phones::new("secret".to_owned(), None)), None, internal));
+                tokio::task::spawn_local(serve(listener, Rc::new(Phones::new("secret".to_owned(), None)), None, internal, Telemetry::off()));
 
                 let unpaired = ask(port, "GET / HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n", "").await;
                 assert!(unpaired.starts_with("HTTP/1.1 401"), "{unpaired}");
@@ -2290,6 +2418,146 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
+    async fn counts_a_phones_request_under_the_pattern_of_what_it_asked_for() {
+        use crate::telemetry::testing::{Collector, labels};
+        let collector = Collector::start();
+        let telemetry = collector.telemetry();
+        let local = tokio::task::LocalSet::new();
+        let test = local.run_until(async {
+            let (port, _heard) = served(telemetry.clone()).await;
+            let get = |path: &str, cookie: &str| {
+                format!("GET {path} HTTP/1.1\r\nHost: x\r\n{cookie}Connection: close\r\n\r\n")
+            };
+            let cookie = "Cookie: cox_phone=secret\r\n";
+            for path in ["/media/12/shot.png", "/media/13/clip.mp4"] {
+                let missing = ask(port, &get(path, cookie), "").await;
+                assert!(missing.starts_with("HTTP/1.1 404"), "{missing}");
+            }
+            let guessed = ask(port, &get("/pair/a-guess", ""), "").await;
+            assert!(guessed.starts_with("HTTP/1.1 403"), "{guessed}");
+            let page = ask(port, &get("/", cookie), "").await;
+            assert!(page.starts_with("HTTP/1.1 200"), "{page}");
+            let unknown = ask(port, &get("/wp-login.php", cookie), "").await;
+            assert!(unknown.starts_with("HTTP/1.1 404"), "{unknown}");
+        });
+        tokio::time::timeout(Duration::from_secs(30), test)
+            .await
+            .expect("the page answers in time");
+
+        let mut counted: Vec<_> = collector
+            .sent_by(&telemetry)
+            .into_iter()
+            .filter(|series| series.name == "cox.phone.http.duration")
+            .map(|series| (series.labels, series.count))
+            .collect();
+        counted.sort();
+        assert_eq!(
+            counted,
+            [
+                (labels(&[("route", "/"), ("status", "200")]), 1),
+                (labels(&[("route", "/media/*"), ("status", "404")]), 2),
+                (labels(&[("route", "/pair/*"), ("status", "403")]), 1),
+                (labels(&[("route", "other"), ("status", "404")]), 1),
+            ]
+        );
+    }
+
+    /// A report of the page's, `body`, posted to `/telemetry` with
+    /// `headers`.
+    fn reported(headers: &str, body: &str) -> String {
+        format!(
+            "POST /telemetry HTTP/1.1\r\nHost: x\r\n{headers}Content-Type: application/json\r\n\
+             Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        )
+    }
+
+    /// What the page's own headers are, from a paired iPhone.
+    const FROM_THE_PAGE: &str = "Cookie: cox_phone=secret\r\nX-Cox: phone\r\n\
+        User-Agent: Mozilla/5.0 (iPhone; CPU iPhone OS 26_1 like Mac OS X)\r\n";
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn takes_what_the_page_measured_from_a_paired_phone_while_it_sends_its_own() {
+        use crate::telemetry::testing::{Collector, labels};
+        let collector = Collector::start();
+        let telemetry = collector.telemetry();
+        let local = tokio::task::LocalSet::new();
+        let test = local.run_until(async {
+            let (port, _heard) = served(telemetry.clone()).await;
+            let page = ask(
+                port,
+                "GET / HTTP/1.1\r\nHost: x\r\nCookie: cox_phone=secret\r\nConnection: close\r\n\r\n",
+                "",
+            )
+            .await;
+            assert!(page.contains("<html lang=\"en\" data-telemetry>"), "{page}");
+
+            let report = r#"{"m": [["open", 0.4, "drawn"], ["open", 0.5, "made-up"], ["nothing", 1, ""]]}"#;
+            let taken = ask(port, &reported(FROM_THE_PAGE, report), "").await;
+            assert!(taken.starts_with("HTTP/1.1 204"), "{taken}");
+
+            let unpaired = ask(port, &reported("X-Cox: phone\r\n", report), "").await;
+            assert!(unpaired.starts_with("HTTP/1.1 401"), "{unpaired}");
+            let elsewhere = "Cookie: cox_phone=secret\r\n";
+            let elsewhere = ask(port, &reported(elsewhere, report), "").await;
+            assert!(elsewhere.starts_with("HTTP/1.1 403"), "{elsewhere}");
+            let long = format!(r#"{{"m": [["open", 0.4, "{}"]]}}"#, "x".repeat(MOST_REPORT));
+            let long = ask(port, &reported(FROM_THE_PAGE, &long), "").await;
+            assert!(long.starts_with("HTTP/1.1 413"), "{long}");
+        });
+        tokio::time::timeout(Duration::from_secs(30), test)
+            .await
+            .expect("the page answers in time");
+
+        let mut opened: Vec<_> = collector
+            .sent_by(&telemetry)
+            .into_iter()
+            .filter(|series| series.name.starts_with("cox.phone.page."))
+            .map(|series| (series.name, series.labels, series.count))
+            .collect();
+        opened.sort();
+        assert_eq!(
+            opened,
+            [
+                (
+                    "cox.phone.page.chat_open".to_owned(),
+                    labels(&[("client", "ios"), ("phase", "drawn")]),
+                    1
+                ),
+                (
+                    "cox.phone.page.chat_open".to_owned(),
+                    labels(&[("client", "ios"), ("phase", "other")]),
+                    1
+                ),
+            ]
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn has_the_page_report_nothing_and_takes_no_report_while_it_sends_nothing() {
+        let local = tokio::task::LocalSet::new();
+        let test = local.run_until(async {
+            let (port, _heard) = served(Telemetry::off()).await;
+            let page = ask(
+                port,
+                "GET / HTTP/1.1\r\nHost: x\r\nCookie: cox_phone=secret\r\nConnection: close\r\n\r\n",
+                "",
+            )
+            .await;
+            assert!(page.starts_with("HTTP/1.1 200"), "{page}");
+            assert!(page.contains(UNTOLD), "{page}");
+            assert!(!page.contains("data-telemetry"), "{page}");
+
+            let report = r#"{"m": [["open", 0.4, "drawn"]]}"#;
+            let refused = ask(port, &reported(FROM_THE_PAGE, report), "").await;
+            assert!(refused.starts_with("HTTP/1.1 404"), "{refused}");
+        });
+        tokio::time::timeout(Duration::from_secs(30), test)
+            .await
+            .expect("the page answers in time");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
     async fn takes_no_process_on_the_mac_for_the_human_by_what_tailscale_would_say() {
         let local = tokio::task::LocalSet::new();
         let test = local.run_until(async {
@@ -2301,6 +2569,7 @@ mod tests {
                 Rc::new(Phones::new("secret".to_owned(), None)),
                 None,
                 internal,
+                Telemetry::off(),
             ));
             let as_tailscale_says =
                 "Host: mac.tail1234.ts.net\r\nTailscale-User-Login: me@github\r\n";
@@ -2431,6 +2700,7 @@ mod tests {
                 Rc::new(Phones::new("secret".to_owned(), None)),
                 None,
                 internal,
+                Telemetry::off(),
             ));
             let get = |path: &str, cookie: &str| {
                 format!("GET {path} HTTP/1.1\r\nHost: x\r\n{cookie}Connection: close\r\n\r\n")
@@ -2596,6 +2866,7 @@ mod tests {
                 Rc::new(Phones::new("secret".to_owned(), None)),
                 None,
                 internal,
+                Telemetry::off(),
             ));
             let get = |path: &str, cookie: &str| {
                 format!("GET {path} HTTP/1.1\r\nHost: x\r\n{cookie}Connection: close\r\n\r\n")
@@ -2795,6 +3066,7 @@ mod tests {
                 Rc::new(Phones::new("secret".to_owned(), None)),
                 None,
                 internal,
+                Telemetry::off(),
             ));
             tokio::task::spawn_local(play_coxd(heard, told, now, Rc::default()));
             let get = |path: &str, cookie: &str| {
@@ -2934,6 +3206,7 @@ mod tests {
                 Rc::new(Phones::new("secret".to_owned(), None)),
                 None,
                 internal,
+                Telemetry::off(),
             ));
             tokio::task::spawn_local(play_coxd(heard, told, Vec::new(), Rc::clone(&done)));
             let posted = |path: &str, head: &str, body: &str| {
@@ -3041,6 +3314,7 @@ mod tests {
                 Rc::new(Phones::new("secret".to_owned(), None)),
                 None,
                 internal,
+                Telemetry::off(),
             ));
             let posted = |path: &str, line: &str| {
                 format!(
@@ -3135,6 +3409,7 @@ mod tests {
                 Rc::new(Phones::new("secret".to_owned(), None)),
                 None,
                 internal,
+                Telemetry::off(),
             ));
             let get = |path: &str, cookie: &str| {
                 format!("GET {path} HTTP/1.1\r\nHost: x\r\n{cookie}Connection: close\r\n\r\n")
@@ -3160,15 +3435,7 @@ mod tests {
     async fn serves_the_map_page_and_the_chats_map_to_a_paired_phone_alone() {
         let local = tokio::task::LocalSet::new();
         let test = local.run_until(async {
-            let listener = listen(0).await.unwrap();
-            let port = listener.local_addr().unwrap().port();
-            let (internal, mut heard) = unbounded_channel();
-            tokio::task::spawn_local(serve(
-                listener,
-                Rc::new(Phones::new("secret".to_owned(), None)),
-                None,
-                internal,
-            ));
+            let (port, mut heard) = served(Telemetry::off()).await;
             let get = |path: &str, cookie: &str| {
                 format!("GET {path} HTTP/1.1\r\nHost: x\r\n{cookie}Connection: close\r\n\r\n")
             };
@@ -3297,6 +3564,7 @@ mod tests {
                 Rc::new(Phones::new("secret".to_owned(), None)),
                 None,
                 internal,
+                Telemetry::off(),
             ));
             let get = |path: &str, accepts: &str| {
                 format!(
@@ -3375,6 +3643,7 @@ mod tests {
                 Rc::new(Phones::new("secret".to_owned(), None)),
                 None,
                 internal,
+                Telemetry::off(),
             ));
             let cookie = "Cookie: cox_phone=secret\r\n";
             let get = |path: &str| {
@@ -3425,6 +3694,7 @@ mod tests {
                 Rc::new(Phones::new("secret".to_owned(), None)),
                 None,
                 internal,
+                Telemetry::off(),
             ));
             let cookie = "Cookie: cox_phone=secret\r\n";
             let get = |path: &str| {
@@ -3496,6 +3766,7 @@ mod tests {
                 Rc::new(Phones::new("secret".to_owned(), Some(pushes))),
                 None,
                 internal,
+                Telemetry::off(),
             ));
             assert!(
                 matches!(heard.recv().await, Some(Internal::Push { .. })),

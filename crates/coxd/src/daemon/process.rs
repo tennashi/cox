@@ -38,6 +38,7 @@ use tokio::sync::oneshot;
 
 use super::wire::{FromDaemon, Hello, ToDaemon};
 use super::{Daemon, Internal, Spawns};
+use crate::telemetry::Telemetry;
 
 /// How often coxd looks whether it was asked to stop, and whether its
 /// socket is still where a window finds it.
@@ -45,7 +46,8 @@ const LOOK_EVERY: Duration = Duration::from_millis(500);
 
 /// Runs coxd on `socket` until it is stopped: the chats kept in `store`,
 /// Cox's own working in `home`, their agents started by
-/// `spawns`, all made on this thread.
+/// `spawns`, all made on this thread, and what it measures of itself
+/// recorded on `telemetry`.
 ///
 /// # Errors
 ///
@@ -56,6 +58,7 @@ pub fn run(
     home: PathBuf,
     store: impl FnOnce() -> Rc<Store>,
     spawns: impl FnOnce() -> Rc<dyn Spawns>,
+    telemetry: &Telemetry,
 ) -> anyhow::Result<()> {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -72,6 +75,9 @@ pub fn run(
         tokio::task::spawn_local(stop_when_asked(socket.to_owned(), bound, stop));
         tokio::task::spawn_local(schedules(internal.clone()));
         tokio::task::spawn_local(super::pulls::look(internal.clone()));
+        if telemetry.on() {
+            tokio::task::spawn_local(telemetry.clone().watch_lag());
+        }
         let mut phones = None;
         if let Some(port) = super::phone::port() {
             match super::phone::token() {
@@ -97,6 +103,7 @@ pub fn run(
                             Rc::clone(&served),
                             relayed,
                             internal.clone(),
+                            telemetry.clone(),
                         ));
                         phones = Some(served);
                     }
@@ -110,6 +117,7 @@ pub fn run(
         tracing::info!(socket = %socket.display(), "coxd runs");
         let mut daemon = Daemon::new(home, false, store(), spawns(), internal);
         daemon.phones = phones;
+        daemon.telemetry = telemetry.clone();
         daemon.serve(None, from_window, heard, stopped).await;
         // Unless another coxd listens there now, as when the data folder
         // was made again.

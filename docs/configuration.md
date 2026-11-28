@@ -57,6 +57,7 @@ Every key is optional. Paths may be absolute or start with `~`.
     "command": ["plamo-translate", "--from", "{from}", "--to", "{to}"]
   },
   "phone": {"port": 7421, "tailscale": true},
+  "telemetry": {"endpoint": "http://127.0.0.1:4318"},
   "vim": true,
   "search": "https://duckduckgo.com/?q=%s",
   "subagents": "chats"
@@ -76,13 +77,71 @@ Every key is optional. Paths may be absolute or start with `~`.
 | `phone` | `false` turns off the page for the phone, and `true` turns it on for a Cox that is not installed, such as one `cargo xtask run` runs. | on for an installed Cox, off for any other |
 | `phone.port` | The port of the page for the phone. The relay, which passes the pages served on the Mac's own address on to the phone, listens on the next port, and the sketches' mocks are served on the one after. | `7421` |
 | `phone.tailscale` | `false` stops `coxd` from running `tailscale serve` for the page and the pages the relay passes on, and `true` has a Cox that is not installed run it. | `true` for an installed Cox, `false` for any other |
+| `telemetry.endpoint` | The OTLP endpoint `coxd` sends what it measures of itself to, from `http://` or `https://`. See [Telemetry](#telemetry). | none: nothing is sent |
 | `vim` | `true` makes the keys work as in Vim. See [Vim's keys](#vims-keys). | `false` |
 | `search` | The search engine: the address of its results, from `http://` or `https://`, with `%s` where the words go. Cox searches with it for the words typed in a page's address line, as a browser does (a `?` first searches for whatever follows), in the menu of the stage's +, and after Vim's `:open` or `:tabopen`. One without `%s` is not used. | `https://www.google.com/search?q=%s` |
 | `subagents` | Where a chat's agent runs the subagents it hands work to. `"chats"` runs each in a chat of its own, under the chat that runs it, which you see and can step into: Cox starts Claude Code's sessions with its own `Agent` and `Task` tools turned off, so that it, and a skill that spawns subagents, uses Cox's `agent` tool in their place, with the same arguments. Its `agent` says so first, and Claude Code loads it always, rather than only once the agent searches for it, as it does Cox's other tools, so that an agent that reaches for `Agent` or `Task` finds it. Other agents read no such option and keep their own. `"agent"` leaves the subagents to the agent, out of sight. A chat keeps what the setting said when its session started, so a change applies to chats started after it, and to a chat whose agent starts a new session, as when you switch its agent. | `"agent"` |
 
 The settings card (Cmd-, or Ctrl-,) sets `agent`, `home`, `workflow`,
 `wiki`, `translation`, `vim` and `search` for you, and leaves the rest of the file
-as it is. `coxd` reads `phone` only when it starts.
+as it is. `coxd` reads `phone` and `telemetry` only when it starts.
+
+### Telemetry
+
+`coxd` can send how long its work for the phone's page takes as
+OpenTelemetry metrics, so that you can watch the page's speed in a tool
+such as Grafana. Nothing is sent unless you turn it on: without
+`telemetry.endpoint`, `coxd` measures nothing, opens no connection, and
+the phone's page reports nothing.
+
+To turn it on:
+
+1. Run something that takes OTLP over HTTP on the Mac, such as an
+   OpenTelemetry Collector, or Grafana's `grafana/otel-lgtm` image.
+2. Name its endpoint in `settings.json`, without `/v1/metrics`:
+
+   ```json
+   {"telemetry": {"endpoint": "http://127.0.0.1:4318"}}
+   ```
+
+`coxd` reads the setting when it starts, as it does `phone`, so it
+takes effect the next time `coxd` starts.
+
+`coxd` then posts its metrics to `<endpoint>/v1/metrics` once a minute,
+as the service `coxd`. Set `OTEL_METRIC_EXPORT_INTERVAL`, in
+milliseconds, to send more often. The phone's page posts what it
+measures of itself to `coxd` every few seconds, and `coxd` sends it with
+its own.
+
+Every instrument is a histogram. A label takes only the values listed
+here, and `other` for anything else. No label holds a chat's number, a
+file's name or anything typed.
+
+| Instrument | Unit | Labels | Measures |
+| --- | --- | --- | --- |
+| `cox.phone.http.duration` | s | `route`, `status` | How long `coxd` took to have its answer to a request of the phone. For the stream of events, until the stream opened. |
+| `cox.phone.http.response.size` | By | `route`, `status` | The size of an answer to the phone, as sent. |
+| `cox.phone.ask.wait` | s | `ask` | How long a request of the phone waited for `coxd`'s main loop. |
+| `cox.phone.sse.event.size` | By | `kind` | The size of an event told to the phone. |
+| `cox.phone.sse.encode.duration` | s | `kind` | How long `coxd` took to write an event for the phone as JSON. |
+| `cox.phone.sse.queue` | 1 | none | How many events waited behind the one `coxd` told the phone. |
+| `cox.daemon.hear.duration` | s | `event` | How long `coxd`'s main loop took over one thing it heard. |
+| `cox.daemon.settle.duration` | s | none | How long the main loop took to settle after it, as listing the chats again. |
+| `cox.daemon.loop.lag` | s | none | How late `coxd`'s one thread came back to a timer. |
+| `cox.daemon.chat.read.duration` | s | none | How long `coxd` took to read a closed chat as it was opened. |
+| `cox.daemon.chat.read.entries` | 1 | none | How many entries that chat held. |
+| `cox.phone.page.cold_start` | s | `client`, `phase` | How long after the page was asked for a cold start reached each phase: `response`, `dom`, `fcp`, `listing`, `drawn`. |
+| `cox.phone.page.resource.duration` | s | `client`, `file` | How long the browser took to fetch a file of the page. |
+| `cox.phone.page.chat_open` | s | `client`, `phase` | How long after the tap the opening of a chat reached each phase: `listing`, `patch`, `drawn`. |
+| `cox.phone.page.draw.duration` | s | `client`, `view` | How long the page's script took over one draw of `home` or `chat`. |
+| `cox.phone.page.draw.to_paint` | s | `client`, `view` | How long from the start of a draw until the browser had painted it. |
+| `cox.phone.page.sse.parse.duration` | s | `client`, `kind` | How long the page took to parse an event. |
+| `cox.phone.page.lag` | s | `client` | How late a timer of the page's thread fired: the most in each report. |
+
+`route` is the pattern of the path asked for, such as `/events` or
+`/media/*`. `client` is `ios`, `android` or `other`, read from the
+browser's name. [`instruments.rs`](../crates/coxd/src/telemetry/instruments.rs)
+lists every label's values.
 
 ### Vim's keys
 
@@ -696,6 +755,7 @@ file of that name. Cox's own plugins, in
 | `RUST_LOG` | What Cox writes to standard error. Errors only by default. |
 | `COX_LOG` | What Cox keeps in its log files in `logs` in the data folder. Down to `debug` by default. |
 | `COX_REGISTRY` | Another ACP Registry to fetch, such as a mirror. |
+| `OTEL_METRIC_EXPORT_INTERVAL` | How often `coxd` sends its [telemetry](#telemetry), in milliseconds, when it is on. `60000` by default. |
 | `COX_SERVER_<NAME>_VERSION`, `COX_SERVER_<NAME>_SOURCE` | The version, and the source, of the language server `<name>` that Cox gets. See [Where Cox gets a server](#where-cox-gets-a-server). |
 | `ANDROID_HOME`, `ANDROID_SDK_ROOT` | The Android SDK whose emulator Cox runs. |
 | `ANDROID_AVD_HOME`, `ANDROID_EMULATOR_HOME`, `ANDROID_USER_HOME` | Where Cox finds the Android virtual devices. |

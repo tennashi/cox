@@ -74,6 +74,7 @@ pub mod schedule;
 pub mod scratch;
 pub mod settings;
 pub mod storage;
+pub mod telemetry;
 pub mod terminal;
 #[cfg(any(test, feature = "test-support"))]
 pub mod testing;

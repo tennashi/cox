@@ -69,6 +69,7 @@ use crate::chat::sketch::{self, Sketch};
 use crate::chat::spent::Spent;
 use crate::settings::Subagents;
 use crate::storage;
+use crate::telemetry::{Instrument, Telemetry};
 use crate::terminal::run_unseen;
 use crate::trigger::By;
 use crate::workflow;
@@ -343,6 +344,48 @@ pub enum Internal {
     Tidied {
         removed: Vec<crate::worktrees::Removed>,
     },
+}
+
+impl Internal {
+    /// What telemetry names it, a value of
+    /// [`crate::telemetry::instruments::EVENT`].
+    const fn name(&self) -> &'static str {
+        match self {
+            Self::Agent { .. } => "agent",
+            Self::Asked { .. } => "asked",
+            Self::Stage { .. } => "stage",
+            Self::Checked { .. } => "checked",
+            Self::LoggedIn { .. } => "logged_in",
+            Self::Judge { .. } => "judge",
+            Self::Trigger { .. } => "trigger",
+            Self::Gathered { .. } => "gathered",
+            Self::GatheredEnough { .. } => "gathered_enough",
+            Self::StopDue { .. } => "stop_due",
+            Self::Settled { .. } => "settled",
+            Self::Cancel { .. } => "cancel",
+            Self::Attach { .. } => "attach",
+            Self::Detach { .. } => "detach",
+            Self::View { .. } => "view",
+            Self::ViewChat { .. } => "view_chat",
+            Self::Key { .. } => "key",
+            Self::Unview { .. } => "unview",
+            Self::Act { .. } => "act",
+            Self::Folder { .. } => "folder",
+            Self::Map { .. } => "map",
+            Self::Activity { .. } => "activity",
+            Self::Content { .. } => "content",
+            Self::Entries { .. } => "entries",
+            Self::Pages { .. } => "pages",
+            Self::Sketching { .. } => "sketching",
+            Self::Push { .. } => "push",
+            Self::Quit => "quit",
+            Self::Schedules => "schedules",
+            Self::Pulls => "pulls",
+            Self::Pulled { .. } => "pulled",
+            Self::Listed { .. } => "listed",
+            Self::Tidied { .. } => "tidied",
+        }
+    }
 }
 
 /// How many of the project's other chats a chat's agent is told of, at
@@ -809,6 +852,8 @@ pub struct Daemon {
     /// The phones coxd serves the page to, for the human to unpair them
     /// all, unless it serves none.
     phones: Option<Rc<phone::Phones>>,
+    /// Where what coxd measures of itself goes, if anywhere.
+    telemetry: Telemetry,
     /// What the window was last told of the projects and chats.
     listed: Option<Listing>,
     /// The commands the window runs, by their numbers, with where their
@@ -985,6 +1030,7 @@ impl Daemon {
             viewers: HashMap::new(),
             push: None,
             phones: None,
+            telemetry: Telemetry::off(),
             listed: None,
             running: HashMap::new(),
             seeing: HashMap::new(),
@@ -1182,16 +1228,28 @@ impl Daemon {
         loop {
             tokio::select! {
                 message = from_window.recv() => match message {
-                    Some(message) => self.act(message),
+                    Some(message) => {
+                        let since = Instant::now();
+                        self.act(message);
+                        self.telemetry.seconds(Instrument::HearDuration, since, &["window"]);
+                    }
                     None => break,
                 },
-                Some(event) = heard.recv() => self.hear(event),
+                Some(event) = heard.recv() => {
+                    let name = event.name();
+                    let since = Instant::now();
+                    self.hear(event);
+                    self.telemetry.seconds(Instrument::HearDuration, since, &[name]);
+                }
                 _ = &mut stop => break,
             }
             if self.done {
                 break;
             }
+            let since = Instant::now();
             self.settle();
+            self.telemetry
+                .seconds(Instrument::SettleDuration, since, &[]);
         }
         // The chats' agents stop with them.
         for slot in self.chats.iter_mut().chain(&mut self.archived) {
@@ -1306,10 +1364,15 @@ impl Daemon {
         let setup = slot.setup.clone();
         let goal = slot.goal.clone();
         let spent = slot.spent.clone();
+        let since = Instant::now();
         let entries = self.store.entries(kept).unwrap_or_else(|error| {
             tracing::error!("the chat cannot be read: {error:#}");
             vec![Entry::Note(format!("Cox cannot read this chat: {error:#}"))]
         });
+        self.telemetry
+            .seconds(Instrument::ChatReadDuration, since, &[]);
+        self.telemetry
+            .count(Instrument::ChatReadEntries, entries.len(), &[]);
         let session = self
             .store
             .session(kept)
