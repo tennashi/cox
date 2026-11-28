@@ -86,6 +86,14 @@ const contents = new Map();
 // time.
 const PLACES = 40;
 let drawnPlaces = PLACES;
+// The place of what asks the human, kept as long as the agent asks the
+// same, so that what the human picked and wrote there, and the button
+// under their finger, outlast the page drawing again: { key, at, told,
+// node }.
+let asking = null;
+// The places of the conversation, which stay in the page from one drawing
+// to the next for that place to stay in it.
+const talk = el("div", { class: "conversation" });
 // Whether the human opened the plan under the head.
 let planOpen = false;
 // How many turns toward its goal a chat takes on a line of the human's,
@@ -108,6 +116,19 @@ function el(tag, props, ...children) {
     node.append(typeof child === "string" ? document.createTextNode(child) : child);
   }
   return node;
+}
+
+// Makes `nodes` the children of `parent`, leaving where they are those
+// that are its children already, in the same order: a node taken out and
+// put back loses the keyboard, and the tap the finger is half through.
+function settle(parent, nodes) {
+  const stay = new Set(nodes);
+  for (const child of [...parent.childNodes]) if (!stay.has(child)) child.remove();
+  let next = parent.firstChild;
+  for (const node of nodes) {
+    if (node === next) next = next.nextSibling;
+    else parent.insertBefore(node, next);
+  }
 }
 
 // The window's icons, as its own SVGs draw them, in the color of the text
@@ -647,8 +668,9 @@ function drawChat() {
     places.push(place(el("p", { class: "waits" }, el("span", { class: "dot busy" }),
       chat.state === "Checking" ? "Checking the turn…" : `${agent} is at work…`), null, null, false));
   }
-  nodes.push(el("div", { class: "conversation" }, places));
-  main.replaceChildren(...nodes);
+  settle(talk, places);
+  nodes.push(talk);
+  settle(main, nodes);
   if (atEnd) window.scrollTo(0, document.body.scrollHeight);
 }
 
@@ -1109,6 +1131,7 @@ function conversation(entries, current) {
   const found = [];
   let speaking = null;
   const asked = askedAt(chat);
+  if (asked < 0) asking = null;
   for (let at = 0; at < entries.length; at++) {
     const entry = entries[at];
     if (!entry) continue;
@@ -1136,10 +1159,16 @@ function conversation(entries, current) {
     const asks = (kind === "permission" || kind === "question") && at === asked;
     const first = at;
     found.push(() => {
-      const node = entryNode(first, kind, value, asks);
+      if (asks) {
+        const told = JSON.stringify(value);
+        if (!asking || asking.key !== chat.key || asking.at !== first || asking.told !== told) {
+          // What asks the human is marked by its amber dot alone.
+          asking = { key: chat.key, at: first, told, node: place(entryNode(first, kind, value, true), "asking", null, false) };
+        }
+        return asking.node;
+      }
+      const node = entryNode(first, kind, value, false);
       if (!node) return null;
-      // What asks the human is marked by its amber dot alone.
-      if (asks) return place(node, "asking", null, false);
       return place(node, starts ? speaker : null, starts ? name : null, starts);
     });
   }
