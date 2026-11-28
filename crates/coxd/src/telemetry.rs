@@ -44,6 +44,10 @@ const METRICS: &str = "/v1/metrics";
 /// stop for long.
 const SEND_WITHIN: Duration = Duration::from_secs(5);
 
+/// The most measurements of one report of the phone's page that are
+/// read: the page reports far fewer every few seconds.
+pub const MOST_REPORTED: usize = 500;
+
 /// Where coxd's measurements go: to an OTLP endpoint, or nowhere. A
 /// clone records to the same place.
 #[derive(Clone, Default)]
@@ -202,6 +206,31 @@ impl Telemetry {
             tokio::time::sleep(EVERY).await;
             let late = Instant::now().saturating_duration_since(due);
             self.record(Instrument::LoopLag, late.as_secs_f64(), &[]);
+        }
+    }
+
+    /// Records what a phone's page measured, as `body` reports it, from a
+    /// phone of the kind `client`. A report is `{"m": [[name, value,
+    /// label], ...]}`: the name the page says an instrument by (see
+    /// [`Instrument::reported`]), its value, and the value of the label
+    /// the instrument has beside `client`, or `""` for one that has none.
+    /// A measurement of a name the table does not list is left out, as
+    /// are those after the first [`MOST_REPORTED`].
+    pub fn report(&self, body: &[u8], client: &str) {
+        #[derive(serde::Deserialize)]
+        struct Report {
+            m: Vec<(String, f64, String)>,
+        }
+        if !self.on() {
+            return;
+        }
+        let Ok(report) = serde_json::from_slice::<Report>(body) else {
+            return;
+        };
+        for (name, value, label) in report.m.into_iter().take(MOST_REPORTED) {
+            if let Some(instrument) = Instrument::reported(&name) {
+                self.record(instrument, value, &[client, &label]);
+            }
         }
     }
 
@@ -452,12 +481,80 @@ mod tests {
     }
 
     #[test]
+    fn takes_of_a_pages_report_what_the_table_lists() {
+        let collector = Collector::start();
+        let telemetry = collector.telemetry();
+        let report = json!({"m": [
+            ["cold", 0.8, "drawn"],
+            ["cold", 0.9, "made-up"],
+            ["draw", 0.01, "chat"],
+            ["lag", 0.004, ""],
+            ["cox.daemon.settle.duration", 1.0, ""],
+            ["nothing", 1.0, ""],
+            ["draw", -1.0, "chat"],
+            ["draw", 1e300, "chat"],
+        ]});
+
+        telemetry.report(report.to_string().as_bytes(), "ios");
+        telemetry.report(br#"{"m": [["draw"]]}"#, "ios");
+        telemetry.report(b"not json", "ios");
+
+        let mut sent: Vec<_> = collector
+            .sent_by(&telemetry)
+            .into_iter()
+            .map(|series| (series.name, series.labels, series.count))
+            .collect();
+        sent.sort();
+        assert_eq!(
+            sent,
+            [
+                (
+                    "cox.phone.page.cold_start".to_owned(),
+                    labels(&[("client", "ios"), ("phase", "drawn")]),
+                    1
+                ),
+                (
+                    "cox.phone.page.cold_start".to_owned(),
+                    labels(&[("client", "ios"), ("phase", "other")]),
+                    1
+                ),
+                (
+                    "cox.phone.page.draw.duration".to_owned(),
+                    labels(&[("client", "ios"), ("view", "chat")]),
+                    1
+                ),
+                (
+                    "cox.phone.page.lag".to_owned(),
+                    labels(&[("client", "ios")]),
+                    1
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn reads_no_more_of_a_report_than_a_page_would_send() {
+        let collector = Collector::start();
+        let telemetry = collector.telemetry();
+        let many: Vec<_> = (0..MOST_REPORTED + 100)
+            .map(|_| json!(["draw", 0.01, "home"]))
+            .collect();
+
+        telemetry.report(json!({ "m": many }).to_string().as_bytes(), "android");
+
+        let sent = collector.sent_by(&telemetry);
+        assert_eq!(sent.len(), 1);
+        assert_eq!(sent[0].count, MOST_REPORTED as u64);
+    }
+
+    #[test]
     fn sends_nothing_unless_the_settings_name_an_endpoint() {
         let collector = Collector::start();
         for setting in [None, Some(json!({})), Some(json!({"endpoint": null}))] {
             let telemetry = Telemetry::set_up(setting.as_ref());
             assert!(!telemetry.on(), "{setting:?}");
             telemetry.record(Instrument::SettleDuration, 0.01, &[]);
+            telemetry.report(br#"{"m": [["draw", 0.01, "home"]]}"#, "ios");
             telemetry.stop();
         }
         assert_eq!(collector.requests(), 0);

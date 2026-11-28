@@ -80,6 +80,14 @@
 //! reads coxd's key on `/push`, and posts where to push to it there, or
 //! to `/push/end` to be told no more, its service worker, `/sw.js`,
 //! showing what is pushed.
+//!
+//! When `settings.json` names where coxd sends what it measures of
+//! itself (see [`crate::telemetry`]), the page measures itself too, as
+//! how long a cold start and the opening of a chat take on the phone,
+//! which coxd cannot see, and posts it to `/telemetry` every few
+//! seconds, for coxd to send with its own. coxd tells the page to, in the
+//! page's own file, as `data-telemetry` on its `<html>`; a page not told
+//! measures and posts nothing, and coxd takes no report.
 
 use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, BTreeSet};
@@ -743,13 +751,20 @@ impl Page {
             return map_page(file);
         }
         match FILES.iter().find(|(at, _, _)| *at == path) {
-            Some((at, kind, text)) => {
-                let mut response = answer(StatusCode::OK, kind, *text);
-                if *at == "/" {
-                    self.frame_relayed(request.headers(), &mut response);
-                }
+            Some((at, kind, text)) if *at == "/" => {
+                let mut response = if self.telemetry.on() {
+                    answer(
+                        StatusCode::OK,
+                        kind,
+                        text.replacen(UNTOLD, TOLD_TO_REPORT, 1),
+                    )
+                } else {
+                    answer(StatusCode::OK, kind, *text)
+                };
+                self.frame_relayed(request.headers(), &mut response);
                 response
             }
+            Some((_, kind, text)) => answer(StatusCode::OK, kind, *text),
             None => answer(StatusCode::NOT_FOUND, TEXT, "Not found"),
         }
     }
@@ -1187,7 +1202,9 @@ impl Page {
     /// names, if it is done in one; at `/activity/resume` and
     /// `/activity/fix`, what its Activity has a chat do (see
     /// [`Self::say`]); at `/push`, where to
-    /// push to the phone; and at `/push/end`, where to push no more.
+    /// push to the phone; at `/push/end`, where to push no more; and at
+    /// `/telemetry`, what the page measured of itself, which coxd takes
+    /// only while it sends its own (see [`Telemetry::report`]).
     async fn posted(&self, request: Request<Incoming>) -> Response<Body> {
         if !self.paired(&request) {
             return answer(StatusCode::UNAUTHORIZED, TEXT, "Not paired");
@@ -1197,7 +1214,13 @@ impl Page {
         }
         let path = request.uri().path().to_owned();
         let kept = chat_asked(&request);
-        let body = http_body_util::Limited::new(request.into_body(), MOST);
+        let reports = path == "/telemetry";
+        if reports && !self.telemetry.on() {
+            return answer(StatusCode::NOT_FOUND, TEXT, "Not found");
+        }
+        let client = client_of(request.headers());
+        let most = if reports { MOST_REPORT } else { MOST };
+        let body = http_body_util::Limited::new(request.into_body(), most);
         let Ok(body) = http_body_util::BodyExt::collect(body).await else {
             return answer(StatusCode::PAYLOAD_TOO_LARGE, TEXT, "Too long");
         };
@@ -1208,6 +1231,10 @@ impl Page {
             "/activity/fix" => self.say(kept, Some(&body)).await,
             "/push" => self.subscribe(&body),
             "/push/end" => self.unsubscribe(&body),
+            "/telemetry" => {
+                self.telemetry.report(&body, client);
+                answer(StatusCode::NO_CONTENT, TEXT, "")
+            }
             _ => answer(StatusCode::NOT_FOUND, TEXT, "Not found"),
         }
     }
@@ -1467,6 +1494,33 @@ fn told_changes(diff: &cox_git::changes::Diff) -> serde_json::Value {
 
 /// How long what the page does may be, as a line sent, at most.
 const MOST: usize = 256 * 1024;
+
+/// How long a report of what the page measured may be, at most: a page
+/// reports a few hundred measurements at most, of some thirty bytes each.
+const MOST_REPORT: usize = 32 * 1024;
+
+/// The `<html>` tag of the page's file, as it is kept.
+const UNTOLD: &str = "<html lang=\"en\">";
+
+/// That tag when coxd tells the page to report what it measures of
+/// itself.
+const TOLD_TO_REPORT: &str = "<html lang=\"en\" data-telemetry>";
+
+/// The kind of phone that sent `headers`, as its browser names itself: a
+/// value of [`instruments::CLIENT`], or [`instruments::OTHER`].
+fn client_of(headers: &hyper::HeaderMap) -> &'static str {
+    let agent = headers
+        .get(header::USER_AGENT)
+        .and_then(|agent| agent.to_str().ok())
+        .unwrap_or_default();
+    if agent.contains("iPhone") || agent.contains("iPad") {
+        "ios"
+    } else if agent.contains("Android") {
+        "android"
+    } else {
+        instruments::OTHER
+    }
+}
 
 /// The type of the answers in words.
 const TEXT: &str = "text/plain; charset=utf-8";
@@ -2406,6 +2460,101 @@ mod tests {
                 (labels(&[("route", "other"), ("status", "404")]), 1),
             ]
         );
+    }
+
+    /// A report of the page's, `body`, posted to `/telemetry` with
+    /// `headers`.
+    fn reported(headers: &str, body: &str) -> String {
+        format!(
+            "POST /telemetry HTTP/1.1\r\nHost: x\r\n{headers}Content-Type: application/json\r\n\
+             Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        )
+    }
+
+    /// What the page's own headers are, from a paired iPhone.
+    const FROM_THE_PAGE: &str = "Cookie: cox_phone=secret\r\nX-Cox: phone\r\n\
+        User-Agent: Mozilla/5.0 (iPhone; CPU iPhone OS 26_1 like Mac OS X)\r\n";
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn takes_what_the_page_measured_from_a_paired_phone_while_it_sends_its_own() {
+        use crate::telemetry::testing::{Collector, labels};
+        let collector = Collector::start();
+        let telemetry = collector.telemetry();
+        let local = tokio::task::LocalSet::new();
+        let test = local.run_until(async {
+            let (port, _heard) = served(telemetry.clone()).await;
+            let page = ask(
+                port,
+                "GET / HTTP/1.1\r\nHost: x\r\nCookie: cox_phone=secret\r\nConnection: close\r\n\r\n",
+                "",
+            )
+            .await;
+            assert!(page.contains("<html lang=\"en\" data-telemetry>"), "{page}");
+
+            let report = r#"{"m": [["open", 0.4, "drawn"], ["open", 0.5, "made-up"], ["nothing", 1, ""]]}"#;
+            let taken = ask(port, &reported(FROM_THE_PAGE, report), "").await;
+            assert!(taken.starts_with("HTTP/1.1 204"), "{taken}");
+
+            let unpaired = ask(port, &reported("X-Cox: phone\r\n", report), "").await;
+            assert!(unpaired.starts_with("HTTP/1.1 401"), "{unpaired}");
+            let elsewhere = "Cookie: cox_phone=secret\r\n";
+            let elsewhere = ask(port, &reported(elsewhere, report), "").await;
+            assert!(elsewhere.starts_with("HTTP/1.1 403"), "{elsewhere}");
+            let long = format!(r#"{{"m": [["open", 0.4, "{}"]]}}"#, "x".repeat(MOST_REPORT));
+            let long = ask(port, &reported(FROM_THE_PAGE, &long), "").await;
+            assert!(long.starts_with("HTTP/1.1 413"), "{long}");
+        });
+        tokio::time::timeout(Duration::from_secs(30), test)
+            .await
+            .expect("the page answers in time");
+
+        let mut opened: Vec<_> = collector
+            .sent_by(&telemetry)
+            .into_iter()
+            .filter(|series| series.name.starts_with("cox.phone.page."))
+            .map(|series| (series.name, series.labels, series.count))
+            .collect();
+        opened.sort();
+        assert_eq!(
+            opened,
+            [
+                (
+                    "cox.phone.page.chat_open".to_owned(),
+                    labels(&[("client", "ios"), ("phase", "drawn")]),
+                    1
+                ),
+                (
+                    "cox.phone.page.chat_open".to_owned(),
+                    labels(&[("client", "ios"), ("phase", "other")]),
+                    1
+                ),
+            ]
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn has_the_page_report_nothing_and_takes_no_report_while_it_sends_nothing() {
+        let local = tokio::task::LocalSet::new();
+        let test = local.run_until(async {
+            let (port, _heard) = served(Telemetry::off()).await;
+            let page = ask(
+                port,
+                "GET / HTTP/1.1\r\nHost: x\r\nCookie: cox_phone=secret\r\nConnection: close\r\n\r\n",
+                "",
+            )
+            .await;
+            assert!(page.starts_with("HTTP/1.1 200"), "{page}");
+            assert!(page.contains(UNTOLD), "{page}");
+            assert!(!page.contains("data-telemetry"), "{page}");
+
+            let report = r#"{"m": [["open", 0.4, "drawn"]]}"#;
+            let refused = ask(port, &reported(FROM_THE_PAGE, report), "").await;
+            assert!(refused.starts_with("HTTP/1.1 404"), "{refused}");
+        });
+        tokio::time::timeout(Duration::from_secs(30), test)
+            .await
+            .expect("the page answers in time");
     }
 
     #[tokio::test(flavor = "current_thread")]

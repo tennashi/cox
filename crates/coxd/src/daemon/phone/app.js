@@ -153,6 +153,131 @@ async function act(message) {
   }
 }
 
+// What the page measures of itself, for coxd to send with what it
+// measures of its own: how long a cold start and the opening of a chat
+// take, how long a draw takes and when the browser has painted it, how
+// long an event takes to parse, and how late the page's timers fire.
+// Only while coxd tells the page to, as `data-telemetry` on its <html>:
+// a page not told measures nothing and posts nothing.
+//
+// The page posts what it measured to /telemetry every few seconds, and
+// as it is put away, as `{"m": [[name, value, label], ...]}`: the name
+// coxd's table lists the instrument by for the page, the seconds, and
+// the value of its label, or "" for none. It uses only what Safari on an
+// iPhone has. It posts with `fetch`, kept alive past the page, since
+// coxd takes a POST only with the page's own header, which a beacon
+// cannot carry.
+const telemetry = (() => {
+  const on = document.documentElement.hasAttribute("data-telemetry");
+  // The most measurements kept until they are posted: fewer than coxd
+  // reads of one report.
+  const MOST = 400;
+  const EVERY = 5000;
+  let queue = [];
+  const record = (name, seconds, label = "") => {
+    if (queue.length < MOST) queue.push([name, seconds, label]);
+  };
+  // How late a timer of the page's thread fires: the most since the last
+  // report, while the page shows.
+  const TICK = 200;
+  let due = performance.now() + TICK;
+  let late = 0;
+  const send = () => {
+    if (document.visibilityState === "visible") record("lag", late / 1000);
+    late = 0;
+    if (!queue.length) return;
+    const body = JSON.stringify({ m: queue });
+    queue = [];
+    fetch("/telemetry", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Cox": "phone" },
+      body,
+      keepalive: true,
+    }).catch(() => {});
+  };
+  if (on) {
+    setInterval(() => {
+      const now = performance.now();
+      if (document.visibilityState === "visible") late = Math.max(late, now - due);
+      due = now + TICK;
+    }, TICK);
+    setInterval(send, EVERY);
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "hidden") send();
+    });
+    window.addEventListener("pagehide", send);
+    // The browser tells its first contentful paint after the frame, which
+    // may be after the first list is drawn, so the page waits to be told.
+    // A browser that does not time paints tells none.
+    try {
+      new PerformanceObserver((list) => {
+        for (const paint of list.getEntriesByName("first-contentful-paint")) record("cold", paint.startTime / 1000, "fcp");
+      }).observe({ type: "paint", buffered: true });
+    } catch (_) {}
+  }
+  // Calls `then`, with the time, once what was drawn now is on the
+  // screen: after the frame that paints it.
+  const painted = (then) => requestAnimationFrame(() => setTimeout(() => then(performance.now()), 0));
+  // When the first list of chats came, and whether the cold start it
+  // ends was told.
+  let listedAt = null;
+  let coldTold = false;
+  // The chat the human went to, until its conversation is drawn: when
+  // they did, and when the list and the conversation's first patch came.
+  let opening = null;
+  const tellColdStart = (drawnAt) => {
+    const [navigation] = performance.getEntriesByType("navigation");
+    if (navigation) {
+      record("cold", navigation.responseStart / 1000, "response");
+      if (navigation.domContentLoadedEventEnd > 0) record("cold", navigation.domContentLoadedEventEnd / 1000, "dom");
+      record("resource", (navigation.responseEnd - navigation.startTime) / 1000, "document");
+    }
+    record("cold", listedAt / 1000, "listing");
+    record("cold", drawnAt / 1000, "drawn");
+    for (const entry of performance.getEntriesByType("resource")) {
+      const file = new URL(entry.name).pathname.slice(1);
+      if (["app.js", "app.css", "theme.css"].includes(file)) record("resource", entry.duration / 1000, file);
+    }
+  };
+  return {
+    // What an event of the stream, `data`, says.
+    parsed(data) {
+      if (!on) return JSON.parse(data);
+      const from = performance.now();
+      const told = JSON.parse(data);
+      const now = performance.now();
+      const kind = told !== null && typeof told === "object" ? Object.keys(told)[0] : undefined;
+      record("sse_parse", (now - from) / 1000, String(kind).toLowerCase());
+      if (kind === "Listing" && listedAt === null) listedAt = now;
+      if (opening && kind === "Listing" && opening.listed === null) opening.listed = now;
+      if (opening && kind === "Patch" && opening.patched === null) opening.patched = now;
+      return told;
+    },
+    // The human went to a chat, or away from one, from within the page.
+    went(toChat) {
+      opening = on && toChat ? { at: performance.now(), listed: null, patched: null } : null;
+    },
+    // A draw of `view`, "home" or "chat", begun at `from`, is done;
+    // `came` says whether it drew the conversation of the chat shown.
+    drew(view, from, came) {
+      if (!on) return;
+      record("draw", (performance.now() - from) / 1000, view);
+      painted((now) => record("paint", (now - from) / 1000, view));
+      if (!coldTold && listedAt !== null) {
+        coldTold = true;
+        painted(tellColdStart);
+      }
+      if (opening && came && opening.patched !== null) {
+        const { at, listed, patched } = opening;
+        opening = null;
+        if (listed !== null) record("open", (listed - at) / 1000, "listing");
+        record("open", (patched - at) / 1000, "patch");
+        painted((now) => record("open", (now - at) / 1000, "drawn"));
+      }
+    },
+  };
+})();
+
 // The chat the address names by the number it is kept by, as `#kept/12`.
 function shownKept() {
   const match = /^#kept\/(\d+)$/.exec(location.hash);
@@ -191,7 +316,7 @@ function connect(again = false) {
     stream.close();
     setTimeout(() => { if (events === stream) connect(true); }, 3000);
   };
-  stream.onmessage = (message) => hear(JSON.parse(message.data));
+  stream.onmessage = (message) => hear(telemetry.parsed(message.data));
   draw();
 }
 
@@ -252,10 +377,12 @@ function redraw() {
 }
 
 function draw() {
+  const from = performance.now();
   drawPush();
   if (chat) drawChat();
   else drawHome();
   drawCommands();
+  telemetry.drew(chat ? "chat" : "home", from, chat !== null && chat.came);
 }
 
 // How a chat stands, as its dot and in words.
@@ -3012,6 +3139,7 @@ head.back.addEventListener("click", (event) => {
   location.hash = side === "chats" ? "#chats" : "";
 });
 window.addEventListener("hashchange", () => {
+  telemetry.went(shownKept() !== null);
   if (shownKept() === null) side = location.hash === "#chats" ? "chats" : "activity";
   const trying = document.getElementById("trial");
   if (trying) trying.remove();
