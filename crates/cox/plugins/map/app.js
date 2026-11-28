@@ -57,7 +57,8 @@ import { setDrift, show as showDrift } from "./drift.js";
 
 // Where the map's JSON is: on the stage, Cox's own address; elsewhere,
 // as on the phone, beside the page, asked with the page's own query,
-// which names the chat whose project it is, as `?kept=<n>`.
+// which names the project, as `?project=<n>`, or the chat whose folder's
+// map it is, as `?kept=<n>`.
 const onStage = location.protocol === "cox:";
 const SOURCE = onStage ? "cox://api/map" : new URL("api/map", location.href).href;
 const QUERY = onStage ? "" : location.search;
