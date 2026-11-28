@@ -10,6 +10,13 @@
     <link rel="stylesheet" href="./map.css" />
     <link rel="stylesheet" href="./theme.css" />
     <script type="module" src="./app.js"></script>
+    <!-- What app.js imports, and what those import, asked for at once
+         rather than one after another as each is read: the phone waits
+         for each in turn. -->
+    <link rel="modulepreload" href="./canvas.js" />
+    <link rel="modulepreload" href="./detail.js" />
+    <link rel="modulepreload" href="./drift.js" />
+    <link rel="modulepreload" href="./icons.js" />
   </head>
   <body>
     <header class="top" id="top">

@@ -70,6 +70,10 @@
 //! chat of a project, and from a project's shelf on the list of chats,
 //! which asks by one of the project's chats.
 //!
+//! What coxd answers the phone as text, as the page's files and the map,
+//! megabytes of JSON, it packs with gzip for a browser that reads it so
+//! (see [`packed`]): over the tailnet, the phone waits for each byte.
+//!
 //! The page asks, too, to be told of the chats that need the human while
 //! they are away from the Mac, with Web Push (see [`super::push`]): it
 //! reads coxd's key on `/push`, and posts where to push to it there, or
@@ -616,6 +620,7 @@ pub async fn serve(
             let service = hyper::service::service_fn(move |request: Request<Incoming>| {
                 let page = Rc::clone(&page);
                 async move {
+                    let packs = accepts_gzip(request.headers());
                     let answer = if request.method() == Method::POST {
                         page.posted(request).await
                     } else if request.uri().path() == "/content" {
@@ -639,6 +644,7 @@ pub async fn serve(
                     } else {
                         page.answer(&request)
                     };
+                    let answer = if packs { packed(answer).await } else { answer };
                     Ok::<_, Infallible>(answer)
                 }
             });
@@ -1727,6 +1733,72 @@ fn answer(status: StatusCode, kind: &'static str, text: impl Into<Bytes>) -> Res
         header::CONTENT_SECURITY_POLICY,
         HeaderValue::from_static(PAGE_POLICY),
     );
+    response
+}
+
+/// Whether the phone that sent `headers` reads an answer packed with
+/// gzip, as every browser does.
+fn accepts_gzip(headers: &header::HeaderMap) -> bool {
+    headers
+        .get_all(header::ACCEPT_ENCODING)
+        .iter()
+        .filter_map(|codings| codings.to_str().ok())
+        .flat_map(|codings| codings.split(','))
+        .any(|coding| {
+            let (name, weight) = coding.split_once(';').unwrap_or((coding, ""));
+            let refused = weight
+                .trim()
+                .strip_prefix("q=")
+                .and_then(|weight| weight.trim().parse::<f32>().ok())
+                == Some(0.0);
+            name.trim().eq_ignore_ascii_case("gzip") && !refused
+        })
+}
+
+/// The fewest bytes of an answer worth packing.
+const PACKED_FROM: usize = 1024;
+
+/// `response` packed with gzip, for a phone that reads it so (see
+/// [`accepts_gzip`]), when it is text whole, as a page's file or JSON:
+/// a map of megabytes, as Cox's own, is a tenth of itself packed, and
+/// the phone waits for each byte of it. A picture or a video, packed
+/// already, a part of one, and the stream of events go as they are.
+async fn packed(mut response: Response<Body>) -> Response<Body> {
+    let text = response
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .and_then(|kind| kind.to_str().ok())
+        .is_some_and(|kind| {
+            kind.starts_with("text/") || kind.contains("json") || kind == "image/svg+xml"
+        });
+    if !text
+        || response.status() != StatusCode::OK
+        || response.headers().contains_key(header::CONTENT_ENCODING)
+    {
+        return response;
+    }
+    let Body::Whole(Some(plain)) = response.body() else {
+        return response;
+    };
+    if plain.len() < PACKED_FROM {
+        return response;
+    }
+    let plain = plain.clone();
+    // Off the thread coxd answers every phone and window on: megabytes
+    // take a tenth of a second.
+    let gzip = tokio::task::spawn_blocking(move || {
+        use std::io::Write as _;
+        let mut gzip = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        gzip.write_all(&plain)?;
+        gzip.finish()
+    });
+    let Ok(Ok(gzip)) = gzip.await else {
+        return response;
+    };
+    *response.body_mut() = Body::Whole(Some(gzip.into()));
+    let headers = response.headers_mut();
+    headers.insert(header::CONTENT_ENCODING, HeaderValue::from_static("gzip"));
+    headers.insert(header::VARY, HeaderValue::from_static("Accept-Encoding"));
     response
 }
 
@@ -3173,6 +3245,102 @@ mod tests {
             assert!(gone.starts_with("HTTP/1.1 404"), "{gone}");
             let deeper = ask(port, &get("/map/api/map/a/b?kept=12", cookie), "").await;
             assert!(deeper.starts_with("HTTP/1.1 404"), "{deeper}");
+        });
+        tokio::time::timeout(Duration::from_secs(30), test)
+            .await
+            .expect("the page answers in time");
+    }
+
+    /// The head of what `request` is answered, and what it holds, as it
+    /// was sent.
+    async fn ask_bytes(port: u16, request: &str) -> (String, Vec<u8>) {
+        use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+        let mut stream = tokio::net::TcpStream::connect(("127.0.0.1", port))
+            .await
+            .unwrap();
+        stream.write_all(request.as_bytes()).await.unwrap();
+        let mut answer = Vec::new();
+        stream.read_to_end(&mut answer).await.unwrap();
+        let end = answer
+            .windows(4)
+            .position(|bytes| bytes == b"\r\n\r\n")
+            .expect("the answer has a head");
+        let head = String::from_utf8_lossy(&answer[..end]).into_owned();
+        (head, answer[end + 4..].to_vec())
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn packs_a_map_and_a_pages_file_for_a_phone_that_reads_gzip() {
+        let local = tokio::task::LocalSet::new();
+        let test = local.run_until(async {
+            let listener = listen(0).await.unwrap();
+            let port = listener.local_addr().unwrap().port();
+            let (internal, mut heard) = unbounded_channel();
+            tokio::task::spawn_local(serve(
+                listener,
+                Rc::new(Phones::new("secret".to_owned(), None)),
+                None,
+                internal,
+            ));
+            let get = |path: &str, accepts: &str| {
+                format!(
+                    "GET {path} HTTP/1.1\r\nHost: x\r\nCookie: cox_phone=secret\r\n\
+                     {accepts}Connection: close\r\n\r\n"
+                )
+            };
+            let unpacked = |bytes: &[u8]| {
+                let mut plain = Vec::new();
+                flate2::read::GzDecoder::new(bytes)
+                    .read_to_end(&mut plain)
+                    .expect("it is gzip");
+                plain
+            };
+            let gzip = "Accept-Encoding: gzip, deflate, br\r\n";
+
+            let map = format!(r#"{{"state":"ready","map":"{}"}}"#, "type ".repeat(4000));
+            let request = get("/map/api/map?kept=12", gzip);
+            let told = tokio::task::spawn_local(async move { ask_bytes(port, &request).await });
+            let Some(Internal::Key { number: 12, answer }) = heard.recv().await else {
+                panic!("coxd is not asked the key of the chat kept as 12");
+            };
+            answer.send(Some(7)).unwrap();
+            let Some(Internal::Map { answer, .. }) = heard.recv().await else {
+                panic!("coxd is not asked the map of the chat 7");
+            };
+            answer.send(Some(map.clone())).unwrap();
+            let (top, body) = told.await.unwrap();
+            assert!(top.starts_with("HTTP/1.1 200"), "{top}");
+            assert!(top.contains("content-encoding: gzip"), "{top}");
+            assert!(top.contains("vary: Accept-Encoding"), "{top}");
+            assert!(top.contains("content-type: application/json"), "{top}");
+            assert!(
+                body.len() * 10 < map.len(),
+                "{} bytes of {}",
+                body.len(),
+                map.len()
+            );
+            assert_eq!(unpacked(&body), map.as_bytes());
+
+            let (_, canvas) = crate::map::PAGE
+                .iter()
+                .find(|(file, _)| *file == "canvas.js")
+                .unwrap();
+            let (top, body) = ask_bytes(port, &get("/map/canvas.js", gzip)).await;
+            assert!(top.contains("content-encoding: gzip"), "{top}");
+            assert!(top.contains(FRAMED_POLICY), "{top}");
+            assert_eq!(unpacked(&body), *canvas);
+
+            // As it is: for a phone that does not read gzip, and what is
+            // too short to gain by it.
+            for accepts in ["", "Accept-Encoding: br, gzip;q=0\r\n"] {
+                let (top, body) = ask_bytes(port, &get("/map/canvas.js", accepts)).await;
+                assert!(!top.contains("content-encoding"), "{accepts}: {top}");
+                assert_eq!(body, *canvas);
+            }
+            let (top, body) = ask_bytes(port, &get("/map/plugin.json", gzip)).await;
+            assert!(top.starts_with("HTTP/1.1 200"), "{top}");
+            assert!(!top.contains("content-encoding"), "{top}");
+            assert!(body.len() < PACKED_FROM);
         });
         tokio::time::timeout(Duration::from_secs(30), test)
             .await
