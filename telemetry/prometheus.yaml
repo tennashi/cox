@@ -1,0 +1,6 @@
+# Prometheus scrapes nothing: coxd sends to its OTLP receiver.
+storage:
+  tsdb:
+    retention:
+      time: 30d
+      size: 512MiB

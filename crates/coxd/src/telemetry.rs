@@ -29,6 +29,8 @@ use opentelemetry_sdk::Resource;
 use opentelemetry_sdk::metrics::SdkMeterProvider;
 use serde_json::Value;
 
+#[cfg(test)]
+mod dashboard;
 pub mod instruments;
 
 pub use instruments::Instrument;
