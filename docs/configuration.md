@@ -96,12 +96,15 @@ the phone's page reports nothing.
 
 To turn it on:
 
-1. Run something that takes OTLP over HTTP on the Mac, such as an
-   OpenTelemetry Collector, or Grafana's `grafana/otel-lgtm` image.
-2. Name its endpoint in `settings.json`, without `/v1/metrics`:
+1. Run something that takes OTLP over HTTP on the Mac. The repository
+   holds a Prometheus and a Grafana for it: see
+   [Prometheus and Grafana on the Mac](#prometheus-and-grafana-on-the-mac).
+   An OpenTelemetry Collector does as well.
+2. Name its endpoint in `settings.json`, without `/v1/metrics`. For the
+   repository's Prometheus:
 
    ```json
-   {"telemetry": {"endpoint": "http://127.0.0.1:4318"}}
+   {"telemetry": {"endpoint": "http://127.0.0.1:19090/api/v1/otlp"}}
    ```
 
 `coxd` reads the setting when it starts, as it does `phone`, so it
@@ -142,6 +145,70 @@ file's name or anything typed.
 `/media/*`. `client` is `ios`, `android` or `other`, read from the
 browser's name. [`instruments.rs`](../crates/coxd/src/telemetry/instruments.rs)
 lists every label's values.
+
+#### Prometheus and Grafana on the Mac
+
+[`telemetry/compose.yaml`](../telemetry/compose.yaml) runs two
+containers that you can leave running: a Prometheus, which takes
+`coxd`'s metrics and keeps them, and a Grafana, which draws them. Both
+listen on `127.0.0.1` only. You need Docker, or a runtime that reads a
+compose file, such as [colima](https://github.com/abiosoft/colima).
+
+To start them, run this in the repository, then set
+`telemetry.endpoint` as above and start `coxd` again:
+
+```sh
+docker compose -f telemetry/compose.yaml up -d
+```
+
+| What | Address |
+| --- | --- |
+| The dashboard, "Cox: the phone's page" | `http://127.0.0.1:13000` |
+| Where `coxd` sends, for `telemetry.endpoint` | `http://127.0.0.1:19090/api/v1/otlp` |
+| PromQL, as Prometheus's [HTTP API](https://prometheus.io/docs/prometheus/latest/querying/api/) | `http://127.0.0.1:19090/api/v1/query` and `/api/v1/query_range` |
+
+The dashboard opens without a sign-in, to look only: Grafana lets no one
+sign in. Its top row tells how long a cold start of the page and the
+opening of a chat take until each phase, what `coxd` tells the phone in
+bytes a second, how busy `coxd`'s one thread is, and how long the page's
+draws take. The rows under it are folded, and hold every other
+instrument. **Phone** at the top chooses whose measurements the page's
+panels show: `ios`, `android` or `other`.
+
+Prometheus names what it keeps of an instrument by the instrument's
+name with `_` for each `.`, then `_seconds` for the unit `s`, `_bytes`
+for `By` and nothing for `1`, then `_bucket`, `_sum` or `_count`. To ask
+how long 95 of 100 cold starts of the last hour took to draw:
+
+```sh
+curl -s http://127.0.0.1:19090/api/v1/query --data-urlencode \
+  'query=histogram_quantile(0.95, sum by (le) (rate(cox_phone_page_cold_start_seconds_bucket{phase="drawn"}[1h])))'
+```
+
+The containers start again by themselves when Docker starts, as after
+the Mac starts again, until you stop them:
+
+```sh
+docker compose -f telemetry/compose.yaml down
+```
+
+That keeps what Prometheus holds, in the Docker volume
+`cox-telemetry_data`, which is all the two keep. Add `-v` to delete it
+too. Prometheus keeps a measurement for 30 days, and deletes the oldest
+sooner if what it holds would pass 512 MiB.
+
+The dashboard's file,
+[`cox-phone.json`](../telemetry/grafana/dashboards/cox-phone.json), is
+made from the table of instruments by
+[`dashboard.rs`](../crates/coxd/src/telemetry/dashboard.rs), and a test
+fails when the two differ. To change the dashboard, change
+`dashboard.rs`, write the file again, and start Grafana again, which
+reads the file as it starts:
+
+```sh
+COX_WRITE_DASHBOARD=1 cargo test -p coxd telemetry::dashboard
+docker compose -f telemetry/compose.yaml restart grafana
+```
 
 ### Vim's keys
 
