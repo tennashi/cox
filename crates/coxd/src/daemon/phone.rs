@@ -19,7 +19,9 @@
 //! The page is the files in `phone/`, built into Cox. It follows the
 //! chats on `/events`, a stream of server-sent events, each a
 //! [`FromDaemon`] as JSON: the [`FromDaemon::Listing`] of the projects
-//! and chats whenever it changes, the [`FromDaemon::Patch`]es of the
+//! and chats, of which it is told what it reads, whenever that changes,
+//! and not what it holds already, which it names by its tag,
+//! `&listed=<tag>` (see [`listed`]), the [`FromDaemon::Patch`]es of the
 //! chat named by `?kept=<number>`, all of it first, and the
 //! [`FromDaemon::News`] of the chats that come to wait for the human;
 //! but for what the conversation's tool calls show, which it asks for on
@@ -109,6 +111,7 @@ use hyper::{Method, Request, Response, StatusCode};
 use tokio::net::TcpListener;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
+mod listed;
 pub mod mocks;
 pub mod relay;
 pub(crate) mod tailnet;
@@ -1384,6 +1387,7 @@ impl Page {
             None => None,
         };
         let holds = number_asked(request, "from").unwrap_or(usize::MAX);
+        let listed = text_asked(request, "listed");
         let id = self.last.get() + 1;
         self.last.set(id);
         let (phone, told) = unbounded_channel();
@@ -1403,6 +1407,7 @@ impl Page {
             told,
             opened: false,
             holds,
+            listed,
             beat: tokio::time::interval(BEAT),
             id,
             internal: self.internal.clone(),
@@ -1951,6 +1956,9 @@ struct Events {
     /// it follows the chat again, from which it is told it, or
     /// `usize::MAX` when it holds none.
     holds: usize,
+    /// The tag of the list of projects and chats the page holds, as it
+    /// said as it came, or as it was last told here (see [`listed`]).
+    listed: Option<String>,
     beat: tokio::time::Interval,
     id: u64,
     internal: UnboundedSender<Internal>,
@@ -1961,41 +1969,62 @@ struct Events {
 
 impl Events {
     fn poll(&mut self, context: &mut Context<'_>) -> Poll<Option<Bytes>> {
-        if let Poll::Ready(told) = self.told.poll_recv(context) {
-            let opens = matches!(told, Some(FromDaemon::Patch { .. })) && !self.opened;
-            self.opened |= opens;
-            let opens = opens.then_some(self.holds);
-            return Poll::Ready(told.map(|told| self.told(told, opens)));
+        while let Poll::Ready(told) = self.told.poll_recv(context) {
+            let Some(told) = told else {
+                return Poll::Ready(None);
+            };
+            if let Some(event) = self.told(told) {
+                return Poll::Ready(Some(event));
+            }
         }
         if self.beat.poll_tick(context).is_ready() {
             return Poll::Ready(Some(Bytes::from_static(b": beat\n\n")));
         }
         Poll::Pending
     }
-}
 
-impl Events {
-    /// `told` as [`event`] has it, recording what telling it took.
-    fn told(&self, told: FromDaemon, opens: Option<usize>) -> Bytes {
-        if !self.telemetry.on() {
-            return event(told, opens);
-        }
-        let kind = match &told {
-            FromDaemon::Listing(..) => "listing",
-            FromDaemon::Patch { .. } if opens.is_some() => "patch_first",
-            FromDaemon::Patch { .. } => "patch",
-            FromDaemon::News { .. } => "news",
-            _ => instruments::OTHER,
-        };
-        self.telemetry
-            .count(Instrument::SseQueue, self.told.len(), &[]);
+    /// `told` as a server-sent event, a line of JSON, recording what
+    /// telling it took; or nothing for a list of the projects and chats
+    /// the page holds already, as it reads it (see [`listed`]): most of
+    /// the times the window's list changes, as with each thing an agent
+    /// spends, the page's does not.
+    fn told(&mut self, told: FromDaemon) -> Option<Bytes> {
         let since = Instant::now();
-        let bytes = event(told, opens);
+        let waiting = self.told.len();
+        let (kind, json) = match told {
+            FromDaemon::Listing(listing) => match listed::listed(&listing) {
+                Ok((_, tag)) if self.listed.as_ref() == Some(&tag) => return None,
+                Ok((json, tag)) => {
+                    self.listed = Some(tag);
+                    ("listing", Ok(format!(r#"{{"Listing":{json}}}"#)))
+                }
+                Err(error) => ("listing", Err(error)),
+            },
+            told => {
+                let opens = matches!(told, FromDaemon::Patch { .. }) && !self.opened;
+                self.opened |= opens;
+                let kind = match &told {
+                    FromDaemon::Patch { .. } if opens => "patch_first",
+                    FromDaemon::Patch { .. } => "patch",
+                    FromDaemon::News { .. } => "news",
+                    _ => instruments::OTHER,
+                };
+                let json = for_the_phone(told, opens.then_some(self.holds))
+                    .and_then(|told| serde_json::to_string(&told));
+                (kind, json)
+            }
+        };
+        let json = json.unwrap_or_else(|error| {
+            tracing::error!("the phone cannot be told: {error}");
+            "null".to_owned()
+        });
+        let bytes = Bytes::from(format!("data: {json}\n\n"));
+        self.telemetry.count(Instrument::SseQueue, waiting, &[]);
         self.telemetry
             .seconds(Instrument::SseEncodeDuration, since, &[kind]);
         self.telemetry
             .count(Instrument::SseEventSize, bytes.len(), &[kind]);
-        bytes
+        Some(bytes)
     }
 }
 
@@ -2003,18 +2032,6 @@ impl Drop for Events {
     fn drop(&mut self) {
         let _ = self.internal.send(Internal::Unview { id: self.id });
     }
-}
-
-/// `told` as a server-sent event: a line of JSON, as [`for_the_phone`]
-/// has it, of the conversation the phone `opens`, if it opens one.
-fn event(told: FromDaemon, opens: Option<usize>) -> Bytes {
-    let json = for_the_phone(told, opens)
-        .and_then(|told| serde_json::to_string(&told))
-        .unwrap_or_else(|error| {
-            tracing::error!("the phone cannot be told: {error}");
-            "null".to_owned()
-        });
-    Bytes::from(format!("data: {json}\n\n"))
 }
 
 /// `told` as the phone is told it: as the window is, but for what the
@@ -2390,7 +2407,7 @@ mod tests {
                 let told = events.await.unwrap();
                 assert!(told.contains("text/event-stream"), "{told}");
                 assert!(
-                    told.contains(r#"data: {"Listing":{"projects":[],"chats":[],"archived":[],"agents":{},"chosen":0}}"#),
+                    told.contains(r#"data: {"Listing":{"projects":[],"chats":[],"archived":[],"agents":{},"tag":""#),
                     "{told}"
                 );
                 assert!(
@@ -2415,6 +2432,81 @@ mod tests {
         tokio::time::timeout(Duration::from_secs(30), test)
             .await
             .expect("the page answers in time");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn tells_a_phone_the_chats_when_what_its_page_reads_of_them_changed() {
+        use super::super::wire::Listing;
+        let list = |name: &str, spent: bool| -> FromDaemon {
+            let mut row = serde_json::json!({
+                "key": 7, "project": 0, "kept": 12, "name": name, "named": "Human",
+                "open": true, "again": true, "state": "Busy", "unread": false, "goal": null,
+                "parent": null, "setup": { "context": "Keep to this." }, "ending": false,
+                "agent": "claude",
+            });
+            if spent {
+                row["spent"] = serde_json::json!({});
+                row["active"] = 1_800_000_000_000_i64.into();
+            }
+            let listing: Listing = serde_json::from_value(
+                serde_json::json!({ "projects": [], "chats": [row], "archived": [] }),
+            )
+            .unwrap();
+            FromDaemon::Listing(listing)
+        };
+        let local = tokio::task::LocalSet::new();
+        let test = local.run_until(async {
+            let (port, mut heard) = served(Telemetry::off()).await;
+            let came = async |heard: &mut UnboundedReceiver<Internal>| {
+                // The phone that followed before may be heard to go first.
+                let phone = loop {
+                    match heard.recv().await {
+                        Some(Internal::View { phone, .. }) => break phone,
+                        Some(Internal::Unview { .. }) => {}
+                        _ => panic!("the phone did not come"),
+                    }
+                };
+                assert!(matches!(
+                    heard.recv().await,
+                    Some(Internal::ViewChat { key: None, .. })
+                ));
+                phone
+            };
+            let lists = |told: &str| told.matches(r#"data: {"Listing":"#).count();
+            // What the phone is told on `/events` with `query`, up to `until`.
+            let follow = |query: String, until: &'static str| {
+                tokio::task::spawn_local(async move {
+                    let request = format!(
+                        "GET /events{query} HTTP/1.1\r\nHost: x\r\nCookie: cox_phone=secret\r\n\r\n"
+                    );
+                    ask(port, &request, until).await
+                })
+            };
+
+            let events = follow(String::new(), r#""name":"second""#);
+            let phone = came(&mut heard).await;
+            phone.send(list("first", false)).unwrap();
+            // What its agent spent is not on the page.
+            phone.send(list("first", true)).unwrap();
+            phone.send(list("second", true)).unwrap();
+            let told = events.await.unwrap();
+            assert_eq!(lists(&told), 2, "{told}");
+            assert!(!told.contains("Keep to this."), "{told}");
+            let tag = told.rsplit_once(r#""tag":""#).unwrap().1;
+            let tag = &tag[..tag.find('"').unwrap()];
+
+            // The page follows the chats again, as when it opens one.
+            let events = follow(format!("?listed={tag}"), r#""name":"third""#);
+            let phone = came(&mut heard).await;
+            phone.send(list("second", false)).unwrap();
+            phone.send(list("third", false)).unwrap();
+            let told = events.await.unwrap();
+            assert_eq!(lists(&told), 1, "{told}");
+            assert!(!told.contains(r#""name":"second""#), "{told}");
+        });
+        tokio::time::timeout(Duration::from_secs(30), test)
+            .await
+            .expect("the phone is told in time");
     }
 
     #[tokio::test(flavor = "current_thread")]
